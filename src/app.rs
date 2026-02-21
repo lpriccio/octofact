@@ -175,17 +175,17 @@ impl App {
 
     fn build_view_proj(&self, aspect: f32) -> glam::Mat4 {
         if self.first_person {
-            let cam_disk = self.view_mobius.apply(Complex::ZERO);
-            let bowl = crate::hyperbolic::embedding::disk_to_bowl(cam_disk);
+            // Camera sits at the bowl center; tiles are rendered in camera-relative
+            // space via inv_view, so the world slides under us as we move.
             let eye_height = 0.05_f32;
-            let eye = glam::Vec3::new(bowl[0], bowl[1] + eye_height, bowl[2]);
+            let eye = glam::Vec3::new(0.0, eye_height, 0.0);
 
             let h = self.heading as f32;
             let look_dist = 0.5_f32;
             let target = glam::Vec3::new(
-                eye.x - h.sin() * look_dist,
-                bowl[1] + 0.02,
-                eye.z - h.cos() * look_dist,
+                -h.sin() * look_dist,
+                0.02,
+                -h.cos() * look_dist,
             );
 
             let view = glam::Mat4::look_at_rh(eye, target, glam::Vec3::Y);

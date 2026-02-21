@@ -1,0 +1,183 @@
+use std::collections::{HashSet, VecDeque};
+
+use super::poincare::{Complex, Mobius, neighbor_transforms};
+
+/// A tile in the {8,3} tiling, identified by its canonical address.
+#[derive(Clone, Debug)]
+pub struct Tile {
+    /// Canonical address: sequence of direction indices (0-7) from origin.
+    /// Empty = origin tile.
+    pub address: Vec<u8>,
+    /// Mobius transform mapping the canonical octagon to this tile's position.
+    pub transform: Mobius,
+    /// BFS depth (= address length).
+    pub depth: usize,
+}
+
+/// Spatial dedup key: discretize Poincare disk position to grid.
+fn spatial_key(z: Complex) -> (i64, i64) {
+    ((z.re * 1e5).round() as i64, (z.im * 1e5).round() as i64)
+}
+
+/// BFS tiling state for incremental expansion of the {8,3} tiling.
+pub struct TilingState {
+    pub tiles: Vec<Tile>,
+    seen: HashSet<(i64, i64)>,
+    frontier: VecDeque<usize>,
+    neighbor_xforms: [Mobius; 8],
+}
+
+impl TilingState {
+    pub fn new() -> Self {
+        let origin = Tile {
+            address: vec![],
+            transform: Mobius::identity(),
+            depth: 0,
+        };
+        let key = spatial_key(Complex::ZERO);
+        let mut seen = HashSet::new();
+        seen.insert(key);
+
+        let mut frontier = VecDeque::new();
+        frontier.push_back(0);
+
+        Self {
+            tiles: vec![origin],
+            seen,
+            frontier,
+            neighbor_xforms: neighbor_transforms(),
+        }
+    }
+
+    /// Expand the tiling by `steps` BFS layers.
+    pub fn expand(&mut self, steps: usize) {
+        for _ in 0..steps {
+            let frontier_len = self.frontier.len();
+            if frontier_len == 0 {
+                break;
+            }
+            for _ in 0..frontier_len {
+                let parent_idx = self.frontier.pop_front().unwrap();
+                let parent_transform = self.tiles[parent_idx].transform;
+                let parent_address = self.tiles[parent_idx].address.clone();
+                let parent_depth = self.tiles[parent_idx].depth;
+
+                for dir in 0u8..8 {
+                    let child_transform = parent_transform.compose(&self.neighbor_xforms[dir as usize]);
+                    let center = child_transform.apply(Complex::ZERO);
+                    let key = spatial_key(center);
+
+                    if self.seen.contains(&key) {
+                        continue;
+                    }
+                    self.seen.insert(key);
+
+                    let mut child_address = parent_address.clone();
+                    child_address.push(dir);
+
+                    let child = Tile {
+                        address: child_address,
+                        transform: child_transform,
+                        depth: parent_depth + 1,
+                    };
+                    let child_idx = self.tiles.len();
+                    self.tiles.push(child);
+                    self.frontier.push_back(child_idx);
+                }
+            }
+        }
+    }
+
+    /// Rebase the tiling around a new viewpoint (Mobius transform).
+    /// Composes the rebase transform with all tile transforms.
+    pub fn rebase(&mut self, rebase_xform: &Mobius) {
+        self.seen.clear();
+        for tile in &mut self.tiles {
+            tile.transform = rebase_xform.compose(&tile.transform);
+            let center = tile.transform.apply(Complex::ZERO);
+            self.seen.insert(spatial_key(center));
+        }
+    }
+}
+
+/// Format a tile address for display.
+pub fn format_address(addr: &[u8]) -> String {
+    if addr.is_empty() {
+        "O".to_string()
+    } else {
+        addr.iter().map(|d| d.to_string()).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_origin_tile() {
+        let state = TilingState::new();
+        assert_eq!(state.tiles.len(), 1);
+        assert!(state.tiles[0].address.is_empty());
+        assert_eq!(state.tiles[0].depth, 0);
+    }
+
+    #[test]
+    fn test_expand_depth_1() {
+        let mut state = TilingState::new();
+        state.expand(1);
+        // Origin + 8 neighbors
+        assert_eq!(state.tiles.len(), 9);
+        for tile in &state.tiles[1..] {
+            assert_eq!(tile.depth, 1);
+            assert_eq!(tile.address.len(), 1);
+        }
+    }
+
+    #[test]
+    fn test_expand_depth_3() {
+        let mut state = TilingState::new();
+        state.expand(3);
+        // {8,3}: 1 + 8 + 8*7 + 8*7*7 should be around 57 (with dedup reducing it)
+        let count = state.tiles.len();
+        println!("depth-3 tile count: {count}");
+        assert!(count > 20, "too few tiles: {count}");
+        assert!(count < 500, "too many tiles: {count}");
+    }
+
+    #[test]
+    fn test_all_addresses_unique() {
+        let mut state = TilingState::new();
+        state.expand(2);
+        let mut addrs: HashSet<Vec<u8>> = HashSet::new();
+        for tile in &state.tiles {
+            assert!(
+                addrs.insert(tile.address.clone()),
+                "duplicate address: {:?}",
+                tile.address
+            );
+        }
+    }
+
+    #[test]
+    fn test_all_centers_inside_disk() {
+        let mut state = TilingState::new();
+        state.expand(3);
+        for tile in &state.tiles {
+            let c = tile.transform.apply(Complex::ZERO);
+            assert!(
+                c.abs() < 1.0,
+                "tile {:?} center outside disk: {}",
+                tile.address,
+                c.abs()
+            );
+        }
+    }
+
+    #[test]
+    fn test_format_address() {
+        assert_eq!(format_address(&[]), "O");
+        assert_eq!(format_address(&[0]), "0");
+        assert_eq!(format_address(&[0, 0, 0, 0, 2]), "00002");
+        assert_eq!(format_address(&[7, 3, 1]), "731");
+    }
+}

@@ -12,6 +12,10 @@ Encoded as direction moved at each step from a distinguished origin point along 
 
 Render the poincare disk representation of the tiling with the camera some distance above it.  
 
+## Subgoal:  world model and display are seprate
+
+Maintain a model of the poincare disk world, and **seperately** code up a render + camera + movement system to navigate it.
+
 ## Subgoal: graphical production values
 
 Make the tiling colorful.  Color map determined by distance to origin modulo 16 or so.

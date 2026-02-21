@@ -46,12 +46,20 @@ src/
 
 ## Math Constants
 
-{8,3} octagon Poincare disk radius: **~0.3646**
+For {p,q} = {8,3}:
+
+- Circumradius (center to vertex): `cosh(chi) = cot(pi/p) * cot(pi/q) = cot(pi/8) * cot(pi/3)`
+- Inradius (center to edge midpoint): `cosh(psi) = cos(pi/q) / sin(pi/p) = cos(pi/3) / sin(pi/8)`
+- Half-edge length: `cosh(phi) = cos(pi/p) / sin(pi/q) = cos(pi/8) / sin(pi/3)`
+
+{8,3} octagon Poincare disk circumradius: **~0.4056**
 
 ```
-cosh(R) = cos(pi/3) / sin(pi/8)
-r = tanh(R/2)
+cosh(chi) = cot(pi/8) * cot(pi/3) = 1.3938
+r_disk = tanh(chi/2) = 0.4056
 ```
+
+Center-to-center distance: `D = 2 * psi`, `cosh(D) = 2*cosh(psi)^2 - 1`
 
 ## Project Tracking
 

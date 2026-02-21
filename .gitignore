@@ -1,0 +1,7 @@
+/target
+.DS_Store
+*.swp
+*.swo
+*~
+.claude/settings.local.json
+.claude/*.local.*

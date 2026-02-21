@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(PATH=\"$HOME/.cargo/bin:$PATH\" cargo *)",
+      "Bash(PATH=\"$HOME/.cargo/bin:$PATH\" rustup *)",
+      "Bash(git *)",
+      "Bash(ls *)"
+    ],
+    "deny": [
+      "Edit(./.env*)"
+    ]
+  }
+}

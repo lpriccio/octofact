@@ -165,6 +165,25 @@ pub fn octagon_disk_radius() -> f64 {
     (chi / 2.0).tanh()
 }
 
+/// Hyperbolic distance between two points on the Poincare disk.
+/// d(z1,z2) = 2 * atanh(|z1-z2| / |1 - conj(z1)*z2|)
+pub fn poincare_distance(z1: Complex, z2: Complex) -> f64 {
+    let num = (z1 - z2).abs();
+    let den = (Complex::ONE - z1.conj() * z2).abs();
+    if den < 1e-15 {
+        return f64::MAX;
+    }
+    let ratio = (num / den).min(0.99999); // clamp for numerical safety
+    2.0 * ratio.atanh()
+}
+
+/// Center-to-center hyperbolic distance between adjacent tiles in {8,3}.
+pub fn center_to_center_distance() -> f64 {
+    let cosh_psi = (PI / 3.0).cos() / (PI / 8.0).sin();
+    let cosh_d = 2.0 * cosh_psi * cosh_psi - 1.0;
+    cosh_d.acosh()
+}
+
 /// Returns the 8 Mobius transforms that map the origin tile to each neighbor in {8,3}.
 /// Uses the inradius to compute center-to-center distance D = 2*psi.
 pub fn neighbor_transforms() -> [Mobius; 8] {

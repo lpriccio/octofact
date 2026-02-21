@@ -224,9 +224,14 @@ impl App {
                     let rebase = self.view_mobius.inverse();
                     tiling.rebase(&rebase);
                     self.view_mobius = Mobius::identity();
-                    tiling.expand(2);
                 }
             }
+        }
+
+        // Ensure 3 layers of tiles around camera position
+        if let Some(tiling) = &mut self.tiling {
+            let cam_pos = self.view_mobius.apply(Complex::ZERO);
+            tiling.ensure_coverage(cam_pos, 3);
         }
     }
 
@@ -246,11 +251,26 @@ impl App {
         let width = gpu.config.width as f32;
         let height = gpu.config.height as f32;
 
-        let tile_count = tiling.tiles.len().min(crate::render::pipeline::MAX_TILES);
         let inv_view = self.view_mobius.inverse();
 
-        // Upload all tile uniforms
-        for (i, tile) in tiling.tiles.iter().enumerate().take(tile_count) {
+        // Collect visible tile indices: only tiles whose disk center is within 0.98
+        let visible: Vec<usize> = tiling
+            .tiles
+            .iter()
+            .enumerate()
+            .filter(|(_, tile)| {
+                let combined = inv_view.compose(&tile.transform);
+                let center = combined.apply(crate::hyperbolic::poincare::Complex::ZERO);
+                center.abs() < 0.98
+            })
+            .map(|(i, _)| i)
+            .take(crate::render::pipeline::MAX_TILES)
+            .collect();
+        let tile_count = visible.len();
+
+        // Upload uniforms only for visible tiles
+        for (slot, &tile_idx) in visible.iter().enumerate() {
+            let tile = &tiling.tiles[tile_idx];
             let combined = inv_view.compose(&tile.transform);
             let uniforms = Uniforms {
                 view_proj: view_proj.to_cols_array_2d(),
@@ -259,7 +279,7 @@ impl App {
                 disk_params: [tile.depth as f32, 0.0, 0.0, 0.0],
                 ..Default::default()
             };
-            render.write_tile_uniforms(&gpu.queue, i, &uniforms);
+            render.write_tile_uniforms(&gpu.queue, slot, &uniforms);
         }
 
         // Prepare label text if enabled
@@ -279,7 +299,8 @@ impl App {
 
             let metrics = glyphon::Metrics::new(28.0, 32.0);
 
-            for tile in tiling.tiles.iter().take(tile_count) {
+            for &tile_idx in &visible {
+                let tile = &tiling.tiles[tile_idx];
                 let combined = inv_view.compose(&tile.transform);
                 let disk_center = combined.apply(Complex::ZERO);
 
@@ -425,7 +446,7 @@ impl ApplicationHandler for App {
         let labels = LabelState::new(&gpu.device, &gpu.queue, gpu.config.format);
 
         let mut tiling = TilingState::new();
-        tiling.expand(4);
+        tiling.ensure_coverage(Complex::ZERO, 3);
 
         self.gpu = Some(gpu);
         self.render = Some(render);

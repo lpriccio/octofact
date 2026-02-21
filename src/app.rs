@@ -146,6 +146,8 @@ pub struct App {
     mesh_indices: Vec<u16>,
     camera_height: f32,
     view_mobius: Mobius,
+    first_person: bool,
+    heading: f64,
     keys_held: std::collections::HashSet<winit::keyboard::KeyCode>,
     last_frame: Option<std::time::Instant>,
 }
@@ -164,18 +166,39 @@ impl App {
             mesh_indices: indices,
             camera_height: 2.0,
             view_mobius: Mobius::identity(),
+            first_person: false,
+            heading: 0.0,
             keys_held: std::collections::HashSet::new(),
             last_frame: None,
         }
     }
 
     fn build_view_proj(&self, aspect: f32) -> glam::Mat4 {
-        let eye = glam::Vec3::new(0.0, self.camera_height, 0.0);
-        let center = glam::Vec3::new(0.0, 0.0, 0.0);
-        let up = glam::Vec3::new(0.0, 0.0, -1.0);
-        let view = glam::Mat4::look_at_rh(eye, center, up);
-        let proj = glam::Mat4::perspective_rh(60.0_f32.to_radians(), aspect, 0.1, 100.0);
-        proj * view
+        if self.first_person {
+            let cam_disk = self.view_mobius.apply(Complex::ZERO);
+            let bowl = crate::hyperbolic::embedding::disk_to_bowl(cam_disk);
+            let eye_height = 0.05_f32;
+            let eye = glam::Vec3::new(bowl[0], bowl[1] + eye_height, bowl[2]);
+
+            let h = self.heading as f32;
+            let look_dist = 0.5_f32;
+            let target = glam::Vec3::new(
+                eye.x - h.sin() * look_dist,
+                bowl[1] + 0.02,
+                eye.z - h.cos() * look_dist,
+            );
+
+            let view = glam::Mat4::look_at_rh(eye, target, glam::Vec3::Y);
+            let proj = glam::Mat4::perspective_rh(90.0_f32.to_radians(), aspect, 0.005, 100.0);
+            proj * view
+        } else {
+            let eye = glam::Vec3::new(0.0, self.camera_height, 0.0);
+            let center = glam::Vec3::ZERO;
+            let up = glam::Vec3::new(0.0, 0.0, -1.0);
+            let view = glam::Mat4::look_at_rh(eye, center, up);
+            let proj = glam::Mat4::perspective_rh(60.0_f32.to_radians(), aspect, 0.1, 100.0);
+            proj * view
+        }
     }
 
     fn process_movement(&mut self, dt: f64) {
@@ -185,17 +208,40 @@ impl App {
         let mut dx = 0.0_f64;
         let mut dy = 0.0_f64;
 
-        if self.keys_held.contains(&KeyCode::KeyW) {
-            dy -= move_speed;
-        }
-        if self.keys_held.contains(&KeyCode::KeyS) {
-            dy += move_speed;
-        }
-        if self.keys_held.contains(&KeyCode::KeyA) {
-            dx -= move_speed;
-        }
-        if self.keys_held.contains(&KeyCode::KeyD) {
-            dx += move_speed;
+        if self.first_person {
+            // First-person: A/D rotate heading, W/S move along heading
+            let rotate_speed = 1.8 * dt;
+            if self.keys_held.contains(&KeyCode::KeyA) {
+                self.heading -= rotate_speed;
+            }
+            if self.keys_held.contains(&KeyCode::KeyD) {
+                self.heading += rotate_speed;
+            }
+            let mut forward = 0.0_f64;
+            if self.keys_held.contains(&KeyCode::KeyW) {
+                forward += move_speed;
+            }
+            if self.keys_held.contains(&KeyCode::KeyS) {
+                forward -= move_speed;
+            }
+            if forward != 0.0 {
+                dx = -self.heading.sin() * forward;
+                dy = -self.heading.cos() * forward;
+            }
+        } else {
+            // Top-down: WASD maps directly to disk axes
+            if self.keys_held.contains(&KeyCode::KeyW) {
+                dy -= move_speed;
+            }
+            if self.keys_held.contains(&KeyCode::KeyS) {
+                dy += move_speed;
+            }
+            if self.keys_held.contains(&KeyCode::KeyA) {
+                dx -= move_speed;
+            }
+            if self.keys_held.contains(&KeyCode::KeyD) {
+                dx += move_speed;
+            }
         }
         if self.keys_held.contains(&KeyCode::KeyQ) {
             self.camera_height = (self.camera_height + 2.0 * dt as f32).min(20.0);
@@ -477,6 +523,10 @@ impl ApplicationHandler for App {
                                     labels.enabled = !labels.enabled;
                                     log::info!("labels: {}", if labels.enabled { "ON" } else { "OFF" });
                                 }
+                            }
+                            KeyCode::Backquote => {
+                                self.first_person = !self.first_person;
+                                log::info!("view: {}", if self.first_person { "first-person" } else { "top-down" });
                             }
                             _ => {}
                         }

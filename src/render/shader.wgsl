@@ -121,15 +121,12 @@ fn hsv2rgb(h: f32, s: f32, v: f32) -> vec3<f32> {
     return rgb + vec3<f32>(m, m, m);
 }
 
-// Eldritch palette: cycling hue with depth, shifted saturation
+// Rainbow palette: 8 saturated colors cycling with depth
 fn eldritch_palette(depth: f32) -> vec3<f32> {
-    let cycle = 16.0;
+    let cycle = 8.0;
     let t = (depth % cycle) / cycle;
-    // Rotate through hue space with a purple/teal bias
-    let hue = fract(t * 1.0 + 0.75);
-    let sat = 0.6 + 0.3 * sin(t * 6.283);
-    let val = 0.5 + 0.35 * cos(t * 3.14159 * 2.0 + 1.0);
-    return hsv2rgb(hue, sat, val);
+    let hue = fract(t);
+    return hsv2rgb(hue, 0.85, 0.85);
 }
 
 @fragment

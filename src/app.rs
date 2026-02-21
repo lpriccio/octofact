@@ -277,7 +277,7 @@ impl App {
                 },
             );
 
-            let metrics = glyphon::Metrics::new(14.0, 16.0);
+            let metrics = glyphon::Metrics::new(28.0, 32.0);
 
             for tile in tiling.tiles.iter().take(tile_count) {
                 let combined = inv_view.compose(&tile.transform);

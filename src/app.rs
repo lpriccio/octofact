@@ -179,8 +179,7 @@ impl App {
         if self.first_person {
             // Camera sits at the bowl center; tiles are rendered in camera-relative
             // space via inv_view, so the world slides under us as we move.
-            let eye_height = 0.05_f32;
-            let eye = glam::Vec3::new(0.0, eye_height, 0.0);
+            let eye = glam::Vec3::new(0.0, self.camera_height, 0.0);
 
             let h = self.heading as f32;
             let look_dist = 0.5_f32;
@@ -249,7 +248,8 @@ impl App {
             self.camera_height = (self.camera_height + 2.0 * dt as f32).min(20.0);
         }
         if self.keys_held.contains(&KeyCode::KeyE) {
-            self.camera_height = (self.camera_height - 2.0 * dt as f32).max(1.5);
+            let min_height = if self.first_person { 0.02 } else { 1.5 };
+            self.camera_height = (self.camera_height - 2.0 * dt as f32).max(min_height);
         }
 
         if dx != 0.0 || dy != 0.0 {
@@ -569,6 +569,7 @@ impl ApplicationHandler for App {
                             }
                             KeyCode::Backquote => {
                                 self.first_person = !self.first_person;
+                                self.camera_height = if self.first_person { 0.05 } else { 2.0 };
                                 log::info!("view: {}", if self.first_person { "first-person" } else { "top-down" });
                             }
                             _ => {}

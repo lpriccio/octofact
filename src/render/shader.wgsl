@@ -61,6 +61,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
 
     let z = vec2<f32>(in.position.x, in.position.z);
+    let vert_type = in.uv.x; // 0 = top face, 1 = side wall top, -1 = side wall bottom
 
     // Mobius transform: T(z) = (a*z + b) / (conj(b)*z + conj(a))
     let a = u.mobius_a.xy;
@@ -69,27 +70,46 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     let den = cmul(cconj(b), z) + cconj(a);
     let w = cdiv(num, den);
 
-    var world = disk_to_bowl(w);
-    world.y += u.disk_params.y;
     let disk_r = length(w);
+    var world: vec3<f32>;
+    var normal: vec3<f32>;
 
-    // Compute tangent-space normal via finite differences
-    let eps = 0.001;
-    let z_dx = z + vec2<f32>(eps, 0.0);
-    let z_dy = z + vec2<f32>(0.0, eps);
-    let num_dx = cmul(a, z_dx) + b;
-    let den_dx = cmul(cconj(b), z_dx) + cconj(a);
-    let w_dx = cdiv(num_dx, den_dx);
-    let num_dy = cmul(a, z_dy) + b;
-    let den_dy = cmul(cconj(b), z_dy) + cconj(a);
-    let w_dy = cdiv(num_dy, den_dy);
-    let world_dx = disk_to_bowl(w_dx);
-    let world_dy = disk_to_bowl(w_dy);
-    let tangent_x = world_dx - world;
-    let tangent_y = world_dy - world;
-    let normal = normalize(cross(tangent_x, tangent_y));
+    if vert_type > 0.5 {
+        // Side wall top: bowl + elevation, horizontal outward normal
+        world = disk_to_bowl(w);
+        world.y += u.disk_params.y;
+        let outward = normalize(vec2<f32>(w.x, w.y));
+        normal = normalize(vec3<f32>(outward.x, 0.0, outward.y));
+    } else if vert_type < -0.5 {
+        // Side wall bottom: bowl only (no elevation), horizontal outward normal
+        world = disk_to_bowl(w);
+        let outward = normalize(vec2<f32>(w.x, w.y));
+        normal = normalize(vec3<f32>(outward.x, 0.0, outward.y));
+    } else {
+        // Top face: bowl + elevation, normal via finite differences
+        world = disk_to_bowl(w);
+        world.y += u.disk_params.y;
+
+        let eps = 0.001;
+        let z_dx = z + vec2<f32>(eps, 0.0);
+        let z_dy = z + vec2<f32>(0.0, eps);
+        let num_dx = cmul(a, z_dx) + b;
+        let den_dx = cmul(cconj(b), z_dx) + cconj(a);
+        let w_dx = cdiv(num_dx, den_dx);
+        let num_dy = cmul(a, z_dy) + b;
+        let den_dy = cmul(cconj(b), z_dy) + cconj(a);
+        let w_dy = cdiv(num_dy, den_dy);
+        var world_dx = disk_to_bowl(w_dx);
+        world_dx.y += u.disk_params.y;
+        var world_dy = disk_to_bowl(w_dy);
+        world_dy.y += u.disk_params.y;
+        let tangent_x = world_dx - world;
+        let tangent_y = world_dy - world;
+        normal = normalize(cross(tangent_x, tangent_y));
+    }
 
     out.clip_position = u.view_proj * vec4<f32>(world, 1.0);
+    out.clip_position.z += u.disk_params.z;
     out.world_normal = normal;
     out.uv = in.uv;
     out.depth_val = u.disk_params.x;

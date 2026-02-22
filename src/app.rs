@@ -121,7 +121,13 @@ impl LabelState {
             &mut atlas,
             device,
             wgpu::MultisampleState::default(),
-            None,
+            Some(wgpu::DepthStencilState {
+                format: crate::render::pipeline::DEPTH_FORMAT,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
         );
         let viewport = glyphon::Viewport::new(device, &cache);
 
@@ -365,7 +371,7 @@ impl App {
                 view_proj: view_proj.to_cols_array_2d(),
                 mobius_a: [combined.a.re as f32, combined.a.im as f32, 0.0, 0.0],
                 mobius_b: [combined.b.re as f32, combined.b.im as f32, 0.0, 0.0],
-                disk_params: [tile.depth as f32, elevation, 0.0, 0.0],
+                disk_params: [tile.depth as f32, elevation, slot as f32 * 1e-6, 0.0],
                 ..Default::default()
             };
             render.write_tile_uniforms(&gpu.queue, slot, &uniforms);
@@ -473,7 +479,14 @@ impl App {
                     },
                     depth_slice: None,
                 })],
-                depth_stencil_attachment: None,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &render.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
                 multiview_mask: None,
@@ -528,6 +541,8 @@ impl ApplicationHandler for App {
         let render = RenderState::new(
             &gpu.device,
             gpu.config.format,
+            gpu.config.width,
+            gpu.config.height,
             &self.mesh_verts,
             &self.mesh_indices,
         );
@@ -553,6 +568,9 @@ impl ApplicationHandler for App {
             WindowEvent::Resized(new_size) => {
                 if let Some(gpu) = &mut self.gpu {
                     gpu.resize(new_size.width, new_size.height);
+                    if let Some(render) = &mut self.render {
+                        render.resize_depth(&gpu.device, new_size.width, new_size.height);
+                    }
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {

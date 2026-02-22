@@ -28,6 +28,8 @@ pub const UNIFORM_ALIGN: u64 = 256;
 /// Max tiles we can draw per frame.
 pub const MAX_TILES: usize = 1024;
 
+pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+
 pub struct RenderState {
     pub pipeline: wgpu::RenderPipeline,
     pub uniform_buffer: wgpu::Buffer,
@@ -35,10 +37,11 @@ pub struct RenderState {
     pub vertex_buffer: wgpu::Buffer,
     pub index_buffer: wgpu::Buffer,
     pub num_indices: u32,
+    pub depth_view: wgpu::TextureView,
 }
 
 impl RenderState {
-    pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat, vertices: &[Vertex], indices: &[u16]) -> Self {
+    pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat, width: u32, height: u32, vertices: &[Vertex], indices: &[u16]) -> Self {
         use wgpu::util::DeviceExt;
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -115,7 +118,13 @@ impl RenderState {
                 unclipped_depth: false,
                 conservative: false,
             },
-            depth_stencil: None,
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState {
                 count: 1,
                 mask: !0,
@@ -137,6 +146,8 @@ impl RenderState {
             usage: wgpu::BufferUsages::INDEX,
         });
 
+        let depth_view = Self::create_depth_view(device, width, height);
+
         Self {
             pipeline,
             uniform_buffer,
@@ -144,7 +155,30 @@ impl RenderState {
             vertex_buffer,
             index_buffer,
             num_indices: indices.len() as u32,
+            depth_view,
         }
+    }
+
+    fn create_depth_view(device: &wgpu::Device, width: u32, height: u32) -> wgpu::TextureView {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("depth texture"),
+            size: wgpu::Extent3d {
+                width: width.max(1),
+                height: height.max(1),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: DEPTH_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        texture.create_view(&wgpu::TextureViewDescriptor::default())
+    }
+
+    pub fn resize_depth(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+        self.depth_view = Self::create_depth_view(device, width, height);
     }
 
     /// Write uniforms for tile `index` into the dynamic buffer.

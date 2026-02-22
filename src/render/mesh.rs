@@ -110,6 +110,51 @@ pub fn build_octagon_mesh(vertices: &[Complex; 8]) -> (Vec<Vertex>, Vec<u16>) {
         }
     }
 
+    // Side wall geometry: duplicate outermost ring for top and bottom of prism walls.
+    // uv.x flags: 0.0 = top face, 1.0 = side wall top, -1.0 = side wall bottom.
+    let outer_ring_start = 1 + (num_rings - 1) as u16 * verts_per_ring;
+    let wall_top_start = verts.len() as u16;
+
+    // Side wall top vertices (same positions as outermost ring)
+    for i in 0..verts_per_ring {
+        let src = &verts[(outer_ring_start + i) as usize];
+        verts.push(Vertex {
+            position: src.position,
+            normal: [0.0, 0.0, 0.0], // shader computes actual normal
+            uv: [1.0, 1.0],          // uv.x=1.0 flags side wall top, uv.y=1.0 for edge darkening
+        });
+    }
+
+    let wall_bot_start = verts.len() as u16;
+
+    // Side wall bottom vertices (same positions, shader places at bowl height without elevation)
+    for i in 0..verts_per_ring {
+        let src = &verts[(outer_ring_start + i) as usize];
+        verts.push(Vertex {
+            position: src.position,
+            normal: [0.0, 0.0, 0.0],
+            uv: [-1.0, 1.0],         // uv.x=-1.0 flags side wall bottom
+        });
+    }
+
+    // Side wall quads: connect adjacent (top_i, top_next, bot_next, bot_i)
+    for i in 0..verts_per_ring {
+        let next = (i + 1) % verts_per_ring;
+        let ti = wall_top_start + i;
+        let tn = wall_top_start + next;
+        let bi = wall_bot_start + i;
+        let bn = wall_bot_start + next;
+
+        // Two triangles per quad, wound CCW when viewed from outside
+        indices.push(ti);
+        indices.push(bi);
+        indices.push(bn);
+
+        indices.push(ti);
+        indices.push(bn);
+        indices.push(tn);
+    }
+
     (verts, indices)
 }
 

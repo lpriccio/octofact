@@ -213,6 +213,9 @@ fn compute_transform_from_address(address: &[u8], neighbor_xforms: &[Mobius; 8])
 pub fn format_address(addr: &[u8]) -> String {
     if addr.is_empty() {
         "O".to_string()
+    } else if addr.len() > 5 {
+        let tail: String = addr[addr.len() - 5..].iter().map(|d| d.to_string()).collect();
+        format!("..{tail}")
     } else {
         addr.iter().map(|d| d.to_string()).collect()
     }
@@ -288,5 +291,6 @@ mod tests {
         assert_eq!(format_address(&[0]), "0");
         assert_eq!(format_address(&[0, 0, 0, 0, 2]), "00002");
         assert_eq!(format_address(&[7, 3, 1]), "731");
+        assert_eq!(format_address(&[1, 2, 3, 4, 5, 6, 7, 0]), "..45670");
     }
 }

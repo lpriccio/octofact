@@ -263,14 +263,9 @@ impl App {
                 a: Complex::new(a_val, 0.0),
                 b: Complex::from_polar(b_mag, theta),
             };
-            if self.first_person {
-                // Right-compose: movement in camera's body frame, so W is always "forward"
-                // relative to facing direction. Invariant under cell frame changes.
-                self.camera_local = self.camera_local.compose(&translation);
-            } else {
-                // Left-compose: movement in cell's global frame, so WASD stays screen-aligned.
-                self.camera_local = translation.compose(&self.camera_local);
-            }
+            // Right-compose: movement in camera's body frame, invariant under
+            // cell frame changes from recenter_on.
+            self.camera_local = self.camera_local.compose(&translation);
 
             // Cell transition: check if camera is closer to a neighbor center
             if let Some(tiling) = &mut self.tiling {

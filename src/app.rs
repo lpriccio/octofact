@@ -212,10 +212,10 @@ impl App {
             // First-person: A/D rotate heading, W/S move along heading
             let rotate_speed = 1.8 * dt;
             if self.keys_held.contains(&KeyCode::KeyA) {
-                self.heading -= rotate_speed;
+                self.heading += rotate_speed;
             }
             if self.keys_held.contains(&KeyCode::KeyD) {
-                self.heading += rotate_speed;
+                self.heading -= rotate_speed;
             }
             let mut forward = 0.0_f64;
             if self.keys_held.contains(&KeyCode::KeyW) {

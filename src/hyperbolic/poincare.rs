@@ -177,21 +177,23 @@ pub fn poincare_distance(z1: Complex, z2: Complex) -> f64 {
     2.0 * ratio.atanh()
 }
 
-/// Center-to-center hyperbolic distance between adjacent tiles in {8,3}.
-pub fn center_to_center_distance() -> f64 {
+/// Center-to-center hyperbolic distance D = 2*psi for adjacent tiles in {8,3}.
+/// Inradius: cosh(psi) = cos(pi/q) / sin(pi/p) = cos(pi/3) / sin(pi/8).
+fn half_edge_distance() -> f64 {
     let cosh_psi = (PI / 3.0).cos() / (PI / 8.0).sin();
     let cosh_d = 2.0 * cosh_psi * cosh_psi - 1.0;
     cosh_d.acosh()
 }
 
+/// Center-to-center hyperbolic distance between adjacent tiles in {8,3}.
+pub fn center_to_center_distance() -> f64 {
+    half_edge_distance()
+}
+
 /// Returns the 8 Mobius transforms that map the origin tile to each neighbor in {8,3}.
 /// Uses the inradius to compute center-to-center distance D = 2*psi.
 pub fn neighbor_transforms() -> [Mobius; 8] {
-    // Inradius of the {8,3} octagon: cosh(psi) = cos(pi/q) / sin(pi/p) = cos(pi/3) / sin(pi/8)
-    let cosh_psi = (PI / 3.0).cos() / (PI / 8.0).sin();
-    // Center-to-center distance D = 2*psi: cosh(D) = 2*cosh(psi)^2 - 1
-    let cosh_d = 2.0 * cosh_psi * cosh_psi - 1.0;
-    let d = cosh_d.acosh();
+    let d = half_edge_distance();
 
     let a = (d / 2.0).cosh();
     let sinh_half_d = (d / 2.0).sinh();

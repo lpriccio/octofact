@@ -8,7 +8,7 @@ use winit::{
 
 use crate::hyperbolic::poincare::{canonical_octagon, Complex, Mobius};
 use crate::hyperbolic::tiling::{format_address, TilingState};
-use crate::render::mesh::{build_octagon_mesh, Vertex};
+use crate::render::mesh::build_octagon_mesh;
 use crate::render::pipeline::{RenderState, Uniforms};
 
 fn project_to_screen(world_pos: glam::Vec3, view_proj: &glam::Mat4, width: f32, height: f32) -> Option<(f32, f32)> {
@@ -100,56 +100,15 @@ impl GpuState {
     }
 }
 
-pub struct LabelState {
-    pub font_system: glyphon::FontSystem,
-    pub swash_cache: glyphon::SwashCache,
-    #[allow(dead_code)] // kept alive for glyphon shared resources
-    pub cache: glyphon::Cache,
-    pub atlas: glyphon::TextAtlas,
-    pub renderer: glyphon::TextRenderer,
-    pub viewport: glyphon::Viewport,
-    pub enabled: bool,
-}
-
-impl LabelState {
-    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
-        let font_system = glyphon::FontSystem::new();
-        let swash_cache = glyphon::SwashCache::new();
-        let cache = glyphon::Cache::new(device);
-        let mut atlas = glyphon::TextAtlas::new(device, queue, &cache, format);
-        let renderer = glyphon::TextRenderer::new(
-            &mut atlas,
-            device,
-            wgpu::MultisampleState::default(),
-            Some(wgpu::DepthStencilState {
-                format: crate::render::pipeline::DEPTH_FORMAT,
-                depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::Always,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-        );
-        let viewport = glyphon::Viewport::new(device, &cache);
-
-        Self {
-            font_system,
-            swash_cache,
-            cache,
-            atlas,
-            renderer,
-            viewport,
-            enabled: false,
-        }
-    }
+struct RunningState {
+    gpu: GpuState,
+    render: RenderState,
+    tiling: TilingState,
+    extra_elevation: std::collections::HashMap<usize, f32>,
 }
 
 pub struct App {
-    gpu: Option<GpuState>,
-    render: Option<RenderState>,
-    labels: Option<LabelState>,
-    tiling: Option<TilingState>,
-    mesh_verts: Vec<Vertex>,
-    mesh_indices: Vec<u16>,
+    running: Option<RunningState>,
     camera_height: f32,
     camera_tile: usize,
     camera_local: Mobius,
@@ -162,16 +121,8 @@ pub struct App {
 
 impl App {
     pub fn new() -> Self {
-        let octagon = canonical_octagon();
-        let (verts, indices) = build_octagon_mesh(&octagon);
-
         Self {
-            gpu: None,
-            render: None,
-            labels: None,
-            tiling: None,
-            mesh_verts: verts,
-            mesh_indices: indices,
+            running: None,
             camera_height: 2.0,
             camera_tile: 0,
             camera_local: Mobius::identity(),
@@ -276,7 +227,8 @@ impl App {
             self.camera_local = self.camera_local.compose(&translation);
 
             // Cell transition: check if camera is closer to a neighbor center
-            if let Some(tiling) = &mut self.tiling {
+            if let Some(running) = &mut self.running {
+                let tiling = &mut running.tiling;
                 let camera_pos = self.camera_local.apply(Complex::ZERO);
                 let dist_to_origin = camera_pos.abs(); // hyperbolic dist approx for small values
 
@@ -298,17 +250,7 @@ impl App {
                     let neighbor_abs = current_tile_xform.compose(&tiling.neighbor_xforms[dir]);
                     let neighbor_center = neighbor_abs.apply(Complex::ZERO);
 
-                    // O(N) scan — only happens on cell transitions (infrequent)
-                    let mut found_idx = None;
-                    for (idx, tile) in tiling.tiles.iter().enumerate() {
-                        let tc = tile.transform.apply(Complex::ZERO);
-                        if (tc - neighbor_center).abs() < 0.01 {
-                            found_idx = Some(idx);
-                            break;
-                        }
-                    }
-
-                    if let Some(new_tile_idx) = found_idx {
+                    if let Some(new_tile_idx) = tiling.find_tile_near(neighbor_center) {
                         // Transition: adjust camera_local so world position is unchanged
                         let new_tile_xform = tiling.tiles[new_tile_idx].transform;
                         let inv_new = new_tile_xform.inverse();
@@ -324,30 +266,26 @@ impl App {
         }
 
         // Ensure 3 layers of tiles around camera position
-        if let Some(tiling) = &mut self.tiling {
+        if let Some(running) = &mut self.running {
             let cam_pos = self.camera_local.apply(Complex::ZERO);
-            tiling.ensure_coverage(cam_pos, 3);
+            running.tiling.ensure_coverage(cam_pos, 3);
         }
     }
 
 
     fn handle_click(&mut self, sx: f64, sy: f64) {
-        let gpu = match self.gpu.as_ref() {
-            Some(g) => g,
+        let running = match self.running.as_ref() {
+            Some(r) => r,
             None => return,
         };
-        if self.tiling.is_none() {
-            return;
-        }
 
-        let width = gpu.config.width as f32;
-        let height = gpu.config.height as f32;
+        let width = running.gpu.config.width as f32;
+        let height = running.gpu.config.height as f32;
         let aspect = width / height;
         let view_proj = self.build_view_proj(aspect);
         let inv_view = self.camera_local.inverse();
 
-        let tiling = self.tiling.as_mut().unwrap();
-
+        let running = self.running.as_ref().unwrap();
         let click_sx = sx as f32;
         let click_sy = sy as f32;
 
@@ -355,7 +293,7 @@ impl App {
         // exact same transform chain as rendering, then pick the closest to click.
         let mut best_idx: Option<usize> = None;
         let mut best_dist_sq = f32::MAX;
-        for (i, tile) in tiling.tiles.iter().enumerate() {
+        for (i, tile) in running.tiling.tiles.iter().enumerate() {
             let combined = inv_view.compose(&tile.transform);
             let disk_center = combined.apply(Complex::ZERO);
             if disk_center.abs() > 0.98 {
@@ -368,7 +306,8 @@ impl App {
             // Elevation (replicate render_frame logic)
             let digit_sum: u32 = tile.address.iter().map(|&d| d as u32).sum();
             let base_elevation = if !tile.address.is_empty() && digit_sum % 10 == 9 { 0.04_f32 } else { 0.0 };
-            let elevation = base_elevation + tile.extra_elevation;
+            let extra = running.extra_elevation.get(&i).copied().unwrap_or(0.0);
+            let elevation = base_elevation + extra;
 
             let world_pos = glam::Vec3::new(bowl[0], bowl[1] + elevation, bowl[2]);
 
@@ -384,49 +323,50 @@ impl App {
         }
 
         if let Some(idx) = best_idx {
-            tiling.tiles[idx].extra_elevation += 0.04;
+            *self.running.as_mut().unwrap().extra_elevation.entry(idx).or_insert(0.0) += 0.04;
         }
     }
 
     fn render_frame(&mut self) -> Result<(), wgpu::SurfaceError> {
-        let gpu = self.gpu.as_ref().unwrap();
-        let render = self.render.as_ref().unwrap();
-        let tiling = self.tiling.as_ref().unwrap();
+        let aspect = {
+            let gpu = &self.running.as_ref().unwrap().gpu;
+            gpu.config.width as f32 / gpu.config.height as f32
+        };
+        let view_proj = self.build_view_proj(aspect);
 
-        let output = gpu.surface.get_current_texture()?;
+        let running = self.running.as_mut().unwrap();
+
+        let output = running.gpu.surface.get_current_texture()?;
         let view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        let aspect = gpu.config.width as f32 / gpu.config.height as f32;
-        let view_proj = self.build_view_proj(aspect);
-        let width = gpu.config.width as f32;
-        let height = gpu.config.height as f32;
+        let width = running.gpu.config.width as f32;
+        let height = running.gpu.config.height as f32;
 
         let inv_view = self.camera_local.inverse();
 
-        // Collect visible tile indices: only tiles whose disk center is within 0.98
-        let visible: Vec<usize> = tiling
+        // Collect visible tile indices with cached Mobius composition
+        let visible: Vec<(usize, Mobius)> = running.tiling
             .tiles
             .iter()
             .enumerate()
-            .filter(|(_, tile)| {
+            .filter_map(|(i, tile)| {
                 let combined = inv_view.compose(&tile.transform);
-                let center = combined.apply(crate::hyperbolic::poincare::Complex::ZERO);
-                center.abs() < 0.98
+                let center = combined.apply(Complex::ZERO);
+                if center.abs() < 0.98 { Some((i, combined)) } else { None }
             })
-            .map(|(i, _)| i)
             .take(crate::render::pipeline::MAX_TILES)
             .collect();
         let tile_count = visible.len();
 
         // Upload uniforms only for visible tiles
-        for (slot, &tile_idx) in visible.iter().enumerate() {
-            let tile = &tiling.tiles[tile_idx];
-            let combined = inv_view.compose(&tile.transform);
+        for (slot, &(tile_idx, combined)) in visible.iter().enumerate() {
+            let tile = &running.tiling.tiles[tile_idx];
             let digit_sum: u32 = tile.address.iter().map(|&d| d as u32).sum();
             let base_elevation = if !tile.address.is_empty() && digit_sum % 10 == 9 { 0.04_f32 } else { 0.0 };
-            let elevation = base_elevation + tile.extra_elevation;
+            let extra = running.extra_elevation.get(&tile_idx).copied().unwrap_or(0.0);
+            let elevation = base_elevation + extra;
             let uniforms = Uniforms {
                 view_proj: view_proj.to_cols_array_2d(),
                 mobius_a: [combined.a.re as f32, combined.a.im as f32, 0.0, 0.0],
@@ -434,29 +374,27 @@ impl App {
                 disk_params: [tile.depth as f32, elevation, slot as f32 * 1e-6, 0.0],
                 ..Default::default()
             };
-            render.write_tile_uniforms(&gpu.queue, slot, &uniforms);
+            running.render.write_tile_uniforms(&running.gpu.queue, slot, &uniforms);
         }
 
         // Prepare label text if enabled
-        let labels_enabled = self.labels.as_ref().is_some_and(|l| l.enabled);
+        let labels_enabled = running.render.labels_enabled;
         let mut label_buffers: Vec<glyphon::Buffer> = Vec::new();
         let mut label_positions: Vec<(f32, f32)> = Vec::new();
 
         if labels_enabled {
-            let labels = self.labels.as_mut().unwrap();
-            labels.viewport.update(
-                &gpu.queue,
+            running.render.viewport.update(
+                &running.gpu.queue,
                 glyphon::Resolution {
-                    width: gpu.config.width,
-                    height: gpu.config.height,
+                    width: running.gpu.config.width,
+                    height: running.gpu.config.height,
                 },
             );
 
             let metrics = glyphon::Metrics::new(28.0, 32.0);
 
-            for &tile_idx in &visible {
-                let tile = &tiling.tiles[tile_idx];
-                let combined = inv_view.compose(&tile.transform);
+            for &(tile_idx, combined) in &visible {
+                let tile = &running.tiling.tiles[tile_idx];
                 let disk_center = combined.apply(Complex::ZERO);
 
                 // Skip tiles near the disk boundary to avoid atlas overflow
@@ -470,16 +408,16 @@ impl App {
 
                 if let Some((sx, sy)) = project_to_screen(world_pos, &view_proj, width, height) {
                     let text = format_address(&tile.address);
-                    let mut buffer = glyphon::Buffer::new(&mut labels.font_system, metrics);
-                    buffer.set_size(&mut labels.font_system, Some(100.0), Some(20.0));
+                    let mut buffer = glyphon::Buffer::new(&mut running.render.font_system, metrics);
+                    buffer.set_size(&mut running.render.font_system, Some(100.0), Some(20.0));
                     buffer.set_text(
-                        &mut labels.font_system,
+                        &mut running.render.font_system,
                         &text,
                         &glyphon::cosmic_text::Attrs::new(),
                         glyphon::cosmic_text::Shaping::Advanced,
                         None,
                     );
-                    buffer.shape_until_scroll(&mut labels.font_system, false);
+                    buffer.shape_until_scroll(&mut running.render.font_system, false);
 
                     label_buffers.push(buffer);
                     label_positions.push((sx, sy));
@@ -497,26 +435,26 @@ impl App {
                     bounds: glyphon::TextBounds {
                         left: 0,
                         top: 0,
-                        right: gpu.config.width as i32,
-                        bottom: gpu.config.height as i32,
+                        right: running.gpu.config.width as i32,
+                        bottom: running.gpu.config.height as i32,
                     },
                     default_color: glyphon::Color::rgb(255, 255, 255),
                     custom_glyphs: &[],
                 })
                 .collect();
 
-            let _ = labels.renderer.prepare(
-                &gpu.device,
-                &gpu.queue,
-                &mut labels.font_system,
-                &mut labels.atlas,
-                &labels.viewport,
+            let _ = running.render.text_renderer.prepare(
+                &running.gpu.device,
+                &running.gpu.queue,
+                &mut running.render.font_system,
+                &mut running.render.atlas,
+                &running.render.viewport,
                 text_areas,
-                &mut labels.swash_cache,
+                &mut running.render.swash_cache,
             );
         }
 
-        let mut encoder = gpu
+        let mut encoder = running.gpu
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("render encoder"),
@@ -540,7 +478,7 @@ impl App {
                     depth_slice: None,
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &render.depth_view,
+                    view: &running.render.depth_view,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
                         store: wgpu::StoreOp::Store,
@@ -553,29 +491,27 @@ impl App {
             });
 
             // Draw tiles
-            pass.set_pipeline(&render.pipeline);
-            pass.set_vertex_buffer(0, render.vertex_buffer.slice(..));
-            pass.set_index_buffer(render.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+            pass.set_pipeline(&running.render.pipeline);
+            pass.set_vertex_buffer(0, running.render.vertex_buffer.slice(..));
+            pass.set_index_buffer(running.render.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
 
             for i in 0..tile_count {
                 let offset = RenderState::dynamic_offset(i);
-                pass.set_bind_group(0, &render.bind_group, &[offset]);
-                pass.draw_indexed(0..render.num_indices, 0, 0..1);
+                pass.set_bind_group(0, &running.render.bind_group, &[offset]);
+                pass.draw_indexed(0..running.render.num_indices, 0, 0..1);
             }
 
             // Draw labels overlay
             if labels_enabled {
-                let labels = self.labels.as_ref().unwrap();
-                let _ = labels.renderer.render(&labels.atlas, &labels.viewport, &mut pass);
+                let _ = running.render.text_renderer.render(&running.render.atlas, &running.render.viewport, &mut pass);
             }
         }
 
-        gpu.queue.submit(std::iter::once(encoder.finish()));
+        running.gpu.queue.submit(std::iter::once(encoder.finish()));
 
         // Trim atlas after present
         if labels_enabled {
-            let labels = self.labels.as_mut().unwrap();
-            labels.atlas.trim();
+            running.render.atlas.trim();
         }
 
         output.present();
@@ -585,7 +521,7 @@ impl App {
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.gpu.is_some() {
+        if self.running.is_some() {
             return;
         }
         let window_attrs = Window::default_attributes()
@@ -598,24 +534,28 @@ impl ApplicationHandler for App {
         );
         let gpu = GpuState::new(window);
 
+        let octagon = canonical_octagon();
+        let (verts, indices) = build_octagon_mesh(&octagon);
+
         let render = RenderState::new(
             &gpu.device,
+            &gpu.queue,
             gpu.config.format,
             gpu.config.width,
             gpu.config.height,
-            &self.mesh_verts,
-            &self.mesh_indices,
+            &verts,
+            &indices,
         );
-
-        let labels = LabelState::new(&gpu.device, &gpu.queue, gpu.config.format);
 
         let mut tiling = TilingState::new();
         tiling.ensure_coverage(Complex::ZERO, 3);
 
-        self.gpu = Some(gpu);
-        self.render = Some(render);
-        self.labels = Some(labels);
-        self.tiling = Some(tiling);
+        self.running = Some(RunningState {
+            gpu,
+            render,
+            tiling,
+            extra_elevation: std::collections::HashMap::new(),
+        });
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
@@ -626,11 +566,9 @@ impl ApplicationHandler for App {
                 event_loop.exit();
             }
             WindowEvent::Resized(new_size) => {
-                if let Some(gpu) = &mut self.gpu {
-                    gpu.resize(new_size.width, new_size.height);
-                    if let Some(render) = &mut self.render {
-                        render.resize_depth(&gpu.device, new_size.width, new_size.height);
-                    }
+                if let Some(running) = &mut self.running {
+                    running.gpu.resize(new_size.width, new_size.height);
+                    running.render.resize_depth(&running.gpu.device, new_size.width, new_size.height);
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {
@@ -640,9 +578,9 @@ impl ApplicationHandler for App {
                         match code {
                             KeyCode::Escape => event_loop.exit(),
                             KeyCode::KeyL => {
-                                if let Some(labels) = &mut self.labels {
-                                    labels.enabled = !labels.enabled;
-                                    log::info!("labels: {}", if labels.enabled { "ON" } else { "OFF" });
+                                if let Some(running) = &mut self.running {
+                                    running.render.labels_enabled = !running.render.labels_enabled;
+                                    log::info!("labels: {}", if running.render.labels_enabled { "ON" } else { "OFF" });
                                 }
                             }
                             KeyCode::Backquote => {
@@ -670,11 +608,11 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::RedrawRequested => {
-                if self.gpu.is_some() && self.render.is_some() && self.tiling.is_some() {
+                if self.running.is_some() {
                     match self.render_frame() {
                         Ok(_) => {}
                         Err(wgpu::SurfaceError::Lost) => {
-                            let gpu = self.gpu.as_ref().unwrap();
+                            let gpu = &self.running.as_ref().unwrap().gpu;
                             gpu.surface.configure(&gpu.device, &gpu.config);
                         }
                         Err(wgpu::SurfaceError::OutOfMemory) => event_loop.exit(),
@@ -694,8 +632,8 @@ impl ApplicationHandler for App {
         }
         self.last_frame = Some(now);
 
-        if let Some(gpu) = &self.gpu {
-            gpu.window.request_redraw();
+        if let Some(running) = &self.running {
+            running.gpu.window.request_redraw();
         }
     }
 }

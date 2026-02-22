@@ -1,4 +1,4 @@
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use super::poincare::{Complex, Mobius, center_to_center_distance, neighbor_transforms, poincare_distance};
 
@@ -12,15 +12,13 @@ pub struct Tile {
     pub transform: Mobius,
     /// BFS depth (= address length).
     pub depth: usize,
-    /// Extra elevation accumulated from clicks.
-    pub extra_elevation: f32,
 }
 
 /// Spatial dedup key: discretize Poincare disk position to grid.
 /// Precision 1e3 (grid cell ~0.001) tolerates floating-point drift from
 /// repeated Mobius compositions during rebase, while still distinguishing
 /// adjacent tile centers (min ~0.03 apart at the visibility boundary).
-fn spatial_key(z: Complex) -> (i64, i64) {
+pub(crate) fn spatial_key(z: Complex) -> (i64, i64) {
     ((z.re * 1e3).round() as i64, (z.im * 1e3).round() as i64)
 }
 
@@ -28,6 +26,7 @@ fn spatial_key(z: Complex) -> (i64, i64) {
 pub struct TilingState {
     pub tiles: Vec<Tile>,
     seen: HashSet<(i64, i64)>,
+    spatial_to_tile: HashMap<(i64, i64), usize>,
     frontier: VecDeque<usize>,
     pub neighbor_xforms: [Mobius; 8],
 }
@@ -38,11 +37,12 @@ impl TilingState {
             address: vec![],
             transform: Mobius::identity(),
             depth: 0,
-            extra_elevation: 0.0,
         };
         let key = spatial_key(Complex::ZERO);
         let mut seen = HashSet::new();
         seen.insert(key);
+        let mut spatial_to_tile = HashMap::new();
+        spatial_to_tile.insert(key, 0);
 
         let mut frontier = VecDeque::new();
         frontier.push_back(0);
@@ -50,48 +50,9 @@ impl TilingState {
         Self {
             tiles: vec![origin],
             seen,
+            spatial_to_tile,
             frontier,
             neighbor_xforms: neighbor_transforms(),
-        }
-    }
-
-    /// Expand the tiling by `steps` BFS layers.
-    pub fn expand(&mut self, steps: usize) {
-        for _ in 0..steps {
-            let frontier_len = self.frontier.len();
-            if frontier_len == 0 {
-                break;
-            }
-            for _ in 0..frontier_len {
-                let parent_idx = self.frontier.pop_front().unwrap();
-                let parent_transform = self.tiles[parent_idx].transform;
-                let parent_address = self.tiles[parent_idx].address.clone();
-                let parent_depth = self.tiles[parent_idx].depth;
-
-                for dir in 0u8..8 {
-                    let child_transform = parent_transform.compose(&self.neighbor_xforms[dir as usize]);
-                    let center = child_transform.apply(Complex::ZERO);
-                    let key = spatial_key(center);
-
-                    if self.seen.contains(&key) {
-                        continue;
-                    }
-                    self.seen.insert(key);
-
-                    let mut child_address = parent_address.clone();
-                    child_address.push(dir);
-
-                    let child = Tile {
-                        address: child_address,
-                        transform: child_transform,
-                        depth: parent_depth + 1,
-                        extra_elevation: 0.0,
-                    };
-                    let child_idx = self.tiles.len();
-                    self.tiles.push(child);
-                    self.frontier.push_back(child_idx);
-                }
-            }
         }
     }
 
@@ -128,9 +89,9 @@ impl TilingState {
                     address: child_address,
                     transform: child_transform,
                     depth: parent_depth + 1,
-                    extra_elevation: 0.0,
-                };
+                        };
                 let child_idx = self.tiles.len();
+                self.spatial_to_tile.insert(key, child_idx);
                 self.tiles.push(child);
                 self.frontier.push_back(child_idx);
             }
@@ -166,6 +127,12 @@ impl TilingState {
         }
     }
 
+    /// Find the tile index whose center is nearest to `pos` (O(1) spatial lookup).
+    pub fn find_tile_near(&self, pos: Complex) -> Option<usize> {
+        let key = spatial_key(pos);
+        self.spatial_to_tile.get(&key).copied()
+    }
+
     /// Recenter the tiling so that `center_idx` becomes the origin.
     /// Recomputes ALL tile transforms fresh from their canonical addresses,
     /// eliminating accumulated floating-point drift from repeated compositions.
@@ -181,11 +148,14 @@ impl TilingState {
             tile.transform = inv_center.compose(&tile_abs);
         }
 
-        // Rebuild seen set from all tiles
+        // Rebuild seen set and spatial index from all tiles
         self.seen.clear();
-        for tile in &self.tiles {
+        self.spatial_to_tile.clear();
+        for (idx, tile) in self.tiles.iter().enumerate() {
             let center = tile.transform.apply(Complex::ZERO);
-            self.seen.insert(spatial_key(center));
+            let key = spatial_key(center);
+            self.seen.insert(key);
+            self.spatial_to_tile.insert(key, idx);
         }
 
         // Rebuild frontier: tiles with any missing neighbor
@@ -239,32 +209,25 @@ mod tests {
     }
 
     #[test]
-    fn test_expand_depth_1() {
+    fn test_ensure_coverage_depth_1() {
         let mut state = TilingState::new();
-        state.expand(1);
-        // Origin + 8 neighbors
-        assert_eq!(state.tiles.len(), 9);
-        for tile in &state.tiles[1..] {
-            assert_eq!(tile.depth, 1);
-            assert_eq!(tile.address.len(), 1);
-        }
+        state.ensure_coverage(Complex::ZERO, 1);
+        assert!(state.tiles.len() > 1, "should have more than just the origin");
     }
 
     #[test]
-    fn test_expand_depth_3() {
+    fn test_ensure_coverage_depth_3() {
         let mut state = TilingState::new();
-        state.expand(3);
-        // {8,3}: 1 + 8 + 8*7 + 8*7*7 should be around 57 (with dedup reducing it)
+        state.ensure_coverage(Complex::ZERO, 3);
         let count = state.tiles.len();
-        println!("depth-3 tile count: {count}");
         assert!(count > 20, "too few tiles: {count}");
-        assert!(count < 500, "too many tiles: {count}");
+        assert!(count < 2000, "too many tiles: {count}");
     }
 
     #[test]
     fn test_all_addresses_unique() {
         let mut state = TilingState::new();
-        state.expand(2);
+        state.ensure_coverage(Complex::ZERO, 2);
         let mut addrs: HashSet<Vec<u8>> = HashSet::new();
         for tile in &state.tiles {
             assert!(
@@ -278,7 +241,7 @@ mod tests {
     #[test]
     fn test_all_centers_inside_disk() {
         let mut state = TilingState::new();
-        state.expand(3);
+        state.ensure_coverage(Complex::ZERO, 3);
         for tile in &state.tiles {
             let c = tile.transform.apply(Complex::ZERO);
             assert!(

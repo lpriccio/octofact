@@ -6,9 +6,9 @@ use winit::{
     window::{Window, WindowId},
 };
 
-use crate::hyperbolic::poincare::{canonical_octagon, Complex, Mobius};
+use crate::hyperbolic::poincare::{canonical_polygon, Complex, Mobius, TilingConfig};
 use crate::hyperbolic::tiling::{format_address, TilingState};
-use crate::render::mesh::build_octagon_mesh;
+use crate::render::mesh::build_polygon_mesh;
 use crate::render::pipeline::{RenderState, Uniforms};
 
 fn project_to_screen(world_pos: glam::Vec3, view_proj: &glam::Mat4, width: f32, height: f32) -> Option<(f32, f32)> {
@@ -108,6 +108,7 @@ struct RunningState {
 }
 
 pub struct App {
+    cfg: TilingConfig,
     running: Option<RunningState>,
     camera_height: f32,
     camera_tile: usize,
@@ -120,8 +121,9 @@ pub struct App {
 }
 
 impl App {
-    pub fn new() -> Self {
+    pub fn new(cfg: TilingConfig) -> Self {
         Self {
+            cfg,
             running: None,
             camera_height: 2.0,
             camera_tile: 0,
@@ -232,10 +234,12 @@ impl App {
                 let camera_pos = self.camera_local.apply(Complex::ZERO);
                 let dist_to_origin = camera_pos.abs(); // hyperbolic dist approx for small values
 
+                let cam_parity = tiling.tiles[self.camera_tile].parity as usize;
+                let xforms = &tiling.neighbor_xforms[cam_parity];
                 let mut best_dir: Option<usize> = None;
                 let mut best_dist = dist_to_origin;
-                for dir in 0..8usize {
-                    let neighbor_center = tiling.neighbor_xforms[dir].apply(Complex::ZERO);
+                for (dir, xform) in xforms.iter().enumerate() {
+                    let neighbor_center = xform.apply(Complex::ZERO);
                     let d = (camera_pos - neighbor_center).abs();
                     // Use Euclidean distance in disk as proxy (fine near center)
                     if d < best_dist {
@@ -247,7 +251,7 @@ impl App {
                 if let Some(dir) = best_dir {
                     // Find the tile at that neighbor position
                     let current_tile_xform = tiling.tiles[self.camera_tile].transform;
-                    let neighbor_abs = current_tile_xform.compose(&tiling.neighbor_xforms[dir]);
+                    let neighbor_abs = current_tile_xform.compose(&xforms[dir]);
                     let neighbor_center = neighbor_abs.apply(Complex::ZERO);
 
                     if let Some(new_tile_idx) = tiling.find_tile_near(neighbor_center) {
@@ -371,7 +375,7 @@ impl App {
                 view_proj: view_proj.to_cols_array_2d(),
                 mobius_a: [combined.a.re as f32, combined.a.im as f32, 0.0, 0.0],
                 mobius_b: [combined.b.re as f32, combined.b.im as f32, 0.0, 0.0],
-                disk_params: [tile.depth as f32, elevation, slot as f32 * 1e-6, 0.0],
+                disk_params: [tile.depth as f32, elevation, slot as f32 * 1e-6, self.cfg.p as f32],
                 ..Default::default()
             };
             running.render.write_tile_uniforms(&running.gpu.queue, slot, &uniforms);
@@ -525,7 +529,7 @@ impl ApplicationHandler for App {
             return;
         }
         let window_attrs = Window::default_attributes()
-            .with_title("Octofact — {8,3} Hyperbolic Plane")
+            .with_title(format!("Octofact — {{{},{}}} Hyperbolic Plane", self.cfg.p, self.cfg.q))
             .with_inner_size(winit::dpi::LogicalSize::new(1280, 800));
         let window = Arc::new(
             event_loop
@@ -534,8 +538,8 @@ impl ApplicationHandler for App {
         );
         let gpu = GpuState::new(window);
 
-        let octagon = canonical_octagon();
-        let (verts, indices) = build_octagon_mesh(&octagon);
+        let polygon = canonical_polygon(&self.cfg);
+        let (verts, indices) = build_polygon_mesh(&polygon);
 
         let render = RenderState::new(
             &gpu.device,
@@ -547,7 +551,7 @@ impl ApplicationHandler for App {
             &indices,
         );
 
-        let mut tiling = TilingState::new();
+        let mut tiling = TilingState::new(self.cfg);
         tiling.ensure_coverage(Complex::ZERO, 3);
 
         self.running = Some(RunningState {

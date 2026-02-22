@@ -144,7 +144,7 @@ fn hsv2rgb(h: f32, s: f32, v: f32) -> vec3<f32> {
 
 // Rainbow palette: 8 saturated colors cycling with depth
 fn eldritch_palette(depth: f32) -> vec3<f32> {
-    let cycle = 8.0;
+    let cycle = u.disk_params.w;
     let t = (depth % cycle) / cycle;
     let hue = fract(t);
     return hsv2rgb(hue, 0.85, 0.85);

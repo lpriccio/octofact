@@ -1,17 +1,20 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use super::poincare::{Complex, Mobius, center_to_center_distance, neighbor_transforms, poincare_distance};
+use super::poincare::{Complex, Mobius, TilingConfig, center_to_center_distance, neighbor_transforms, poincare_distance};
 
-/// A tile in the {8,3} tiling, identified by its canonical address.
+/// A tile in the {p,q} tiling, identified by its canonical address.
 #[derive(Clone, Debug)]
 pub struct Tile {
-    /// Canonical address: sequence of direction indices (0-7) from origin.
+    /// Canonical address: sequence of direction indices (0..p-1) from origin.
     /// Empty = origin tile.
     pub address: Vec<u8>,
-    /// Mobius transform mapping the canonical octagon to this tile's position.
+    /// Mobius transform mapping the canonical polygon to this tile's position.
     pub transform: Mobius,
     /// BFS depth (= address length).
     pub depth: usize,
+    /// Parity: false = even (same orientation as origin), true = odd (flipped).
+    /// For even-p tilings this is unused but tracked for consistency.
+    pub parity: bool,
 }
 
 /// Spatial dedup key: discretize Poincare disk position to grid.
@@ -22,21 +25,24 @@ pub(crate) fn spatial_key(z: Complex) -> (i64, i64) {
     ((z.re * 1e3).round() as i64, (z.im * 1e3).round() as i64)
 }
 
-/// BFS tiling state for incremental expansion of the {8,3} tiling.
+/// BFS tiling state for incremental expansion of a {p,q} tiling.
 pub struct TilingState {
+    pub cfg: TilingConfig,
     pub tiles: Vec<Tile>,
     seen: HashSet<(i64, i64)>,
     spatial_to_tile: HashMap<(i64, i64), usize>,
     frontier: VecDeque<usize>,
-    pub neighbor_xforms: [Mobius; 8],
+    /// `[0]` = transforms for even-parity tiles, `[1]` = for odd-parity tiles.
+    pub neighbor_xforms: [Vec<Mobius>; 2],
 }
 
 impl TilingState {
-    pub fn new() -> Self {
+    pub fn new(cfg: TilingConfig) -> Self {
         let origin = Tile {
             address: vec![],
             transform: Mobius::identity(),
             depth: 0,
+            parity: false,
         };
         let key = spatial_key(Complex::ZERO);
         let mut seen = HashSet::new();
@@ -48,11 +54,12 @@ impl TilingState {
         frontier.push_back(0);
 
         Self {
+            cfg,
             tiles: vec![origin],
             seen,
             spatial_to_tile,
             frontier,
-            neighbor_xforms: neighbor_transforms(),
+            neighbor_xforms: neighbor_transforms(&cfg),
         }
     }
 
@@ -74,9 +81,11 @@ impl TilingState {
             let parent_transform = self.tiles[parent_idx].transform;
             let parent_address = self.tiles[parent_idx].address.clone();
             let parent_depth = self.tiles[parent_idx].depth;
-            for dir in 0u8..8 {
+            let parent_parity = self.tiles[parent_idx].parity;
+            let xforms = &self.neighbor_xforms[parent_parity as usize];
+            for dir in 0..self.cfg.p as u8 {
                 let child_transform =
-                    parent_transform.compose(&self.neighbor_xforms[dir as usize]);
+                    parent_transform.compose(&xforms[dir as usize]);
                 let center = child_transform.apply(Complex::ZERO);
                 let key = spatial_key(center);
                 if self.seen.contains(&key) {
@@ -89,7 +98,8 @@ impl TilingState {
                     address: child_address,
                     transform: child_transform,
                     depth: parent_depth + 1,
-                        };
+                    parity: !parent_parity,
+                };
                 let child_idx = self.tiles.len();
                 self.spatial_to_tile.insert(key, child_idx);
                 self.tiles.push(child);
@@ -106,7 +116,7 @@ impl TilingState {
     /// (in center-to-center distance) away from `target`.
     /// Since this grows the existing BFS from origin, addresses stay canonical.
     pub fn ensure_coverage(&mut self, target: Complex, min_layers: usize) {
-        let d = center_to_center_distance();
+        let d = center_to_center_distance(&self.cfg);
         // We need the frontier pushed out beyond min_layers * D from target.
         // Add 0.5 buffer to ensure full coverage of the outermost ring.
         let required_dist = (min_layers as f64 + 0.5) * d;
@@ -161,8 +171,10 @@ impl TilingState {
         // Rebuild frontier: tiles with any missing neighbor
         self.frontier.clear();
         for (idx, tile) in self.tiles.iter().enumerate() {
-            let is_boundary = (0u8..8).any(|dir| {
-                let neighbor = tile.transform.compose(&self.neighbor_xforms[dir as usize]);
+            let parity = tile.parity;
+            let xforms = &self.neighbor_xforms[parity as usize];
+            let is_boundary = (0..self.cfg.p as u8).any(|dir| {
+                let neighbor = tile.transform.compose(&xforms[dir as usize]);
                 let center = neighbor.apply(Complex::ZERO);
                 !self.seen.contains(&spatial_key(center))
             });
@@ -174,12 +186,13 @@ impl TilingState {
 }
 
 /// Recompute a tile's absolute Mobius transform from its canonical address.
-/// Each step composes the corresponding neighbor transform, so the result
-/// depends only on the immutable address — no accumulated drift.
-fn compute_transform_from_address(address: &[u8], neighbor_xforms: &[Mobius; 8]) -> Mobius {
+/// Each step composes the corresponding neighbor transform, alternating parity.
+fn compute_transform_from_address(address: &[u8], neighbor_xforms: &[Vec<Mobius>; 2]) -> Mobius {
     let mut t = Mobius::identity();
+    let mut parity = 0usize; // origin is even
     for &dir in address {
-        t = t.compose(&neighbor_xforms[dir as usize]);
+        t = t.compose(&neighbor_xforms[parity][dir as usize]);
+        parity ^= 1;
     }
     t
 }
@@ -200,9 +213,13 @@ pub fn format_address(addr: &[u8]) -> String {
 mod tests {
     use super::*;
 
+    fn cfg83() -> TilingConfig {
+        TilingConfig::new(8, 3)
+    }
+
     #[test]
     fn test_origin_tile() {
-        let state = TilingState::new();
+        let state = TilingState::new(cfg83());
         assert_eq!(state.tiles.len(), 1);
         assert!(state.tiles[0].address.is_empty());
         assert_eq!(state.tiles[0].depth, 0);
@@ -210,14 +227,14 @@ mod tests {
 
     #[test]
     fn test_ensure_coverage_depth_1() {
-        let mut state = TilingState::new();
+        let mut state = TilingState::new(cfg83());
         state.ensure_coverage(Complex::ZERO, 1);
         assert!(state.tiles.len() > 1, "should have more than just the origin");
     }
 
     #[test]
     fn test_ensure_coverage_depth_3() {
-        let mut state = TilingState::new();
+        let mut state = TilingState::new(cfg83());
         state.ensure_coverage(Complex::ZERO, 3);
         let count = state.tiles.len();
         assert!(count > 20, "too few tiles: {count}");
@@ -226,7 +243,7 @@ mod tests {
 
     #[test]
     fn test_all_addresses_unique() {
-        let mut state = TilingState::new();
+        let mut state = TilingState::new(cfg83());
         state.ensure_coverage(Complex::ZERO, 2);
         let mut addrs: HashSet<Vec<u8>> = HashSet::new();
         for tile in &state.tiles {
@@ -240,7 +257,22 @@ mod tests {
 
     #[test]
     fn test_all_centers_inside_disk() {
-        let mut state = TilingState::new();
+        let mut state = TilingState::new(cfg83());
+        state.ensure_coverage(Complex::ZERO, 3);
+        for tile in &state.tiles {
+            let c = tile.transform.apply(Complex::ZERO);
+            assert!(
+                c.abs() < 1.0,
+                "tile {:?} center outside disk: {}",
+                tile.address,
+                c.abs()
+            );
+        }
+    }
+
+    #[test]
+    fn test_73_centers_inside_disk() {
+        let mut state = TilingState::new(TilingConfig::new(7, 3));
         state.ensure_coverage(Complex::ZERO, 3);
         for tile in &state.tiles {
             let c = tile.transform.apply(Complex::ZERO);

@@ -1,6 +1,38 @@
 use std::f64::consts::PI;
 use std::ops::{Add, Div, Mul, Neg, Sub};
 
+/// Configuration for a {p,q} hyperbolic tiling.
+/// p = sides per polygon, q = polygons meeting at each vertex.
+/// Requires (p-2)(q-2) > 4 for hyperbolicity.
+#[derive(Clone, Copy, Debug)]
+pub struct TilingConfig {
+    pub p: u32,
+    pub q: u32,
+}
+
+impl TilingConfig {
+    pub fn new(p: u32, q: u32) -> Self {
+        assert!(
+            (p - 2) * (q - 2) > 4,
+            "{{p,q}} = {{{p},{q}}} is not hyperbolic: (p-2)(q-2) = {} <= 4",
+            (p - 2) * (q - 2)
+        );
+        Self { p, q }
+    }
+
+    pub fn num_sides(&self) -> usize {
+        self.p as usize
+    }
+
+    pub fn vertex_angle_step(&self) -> f64 {
+        2.0 * PI / self.p as f64
+    }
+
+    pub fn vertex_angle_offset(&self) -> f64 {
+        PI / self.p as f64
+    }
+}
+
 /// Complex number with f64 precision for hyperbolic geometry.
 #[derive(Clone, Copy, Debug)]
 pub struct Complex {
@@ -145,22 +177,22 @@ impl Mobius {
     }
 }
 
-/// Returns the 8 vertices of the canonical {8,3} octagon on the Poincare disk.
-/// Vertices at r_disk * exp(i * (pi/8 + k*pi/4)) for k = 0..7.
-pub fn canonical_octagon() -> [Complex; 8] {
-    let r_disk = octagon_disk_radius();
-    let mut verts = [Complex::ZERO; 8];
-    for (k, vert) in verts.iter_mut().enumerate() {
-        let angle = PI / 8.0 + k as f64 * PI / 4.0;
-        *vert = Complex::from_polar(r_disk, angle);
-    }
-    verts
+/// Returns the p vertices of the canonical {p,q} polygon on the Poincare disk.
+/// Vertices at r_disk * exp(i * (pi/p + k*2*pi/p)) for k = 0..p-1.
+pub fn canonical_polygon(cfg: &TilingConfig) -> Vec<Complex> {
+    let r_disk = polygon_disk_radius(cfg);
+    (0..cfg.p)
+        .map(|k| {
+            let angle = cfg.vertex_angle_offset() + k as f64 * cfg.vertex_angle_step();
+            Complex::from_polar(r_disk, angle)
+        })
+        .collect()
 }
 
-/// Disk radius of the {8,3} octagon (circumradius: center to vertex).
-/// cosh(chi) = cot(pi/p) * cot(pi/q) = cot(pi/8) * cot(pi/3), r = tanh(chi/2)
-pub fn octagon_disk_radius() -> f64 {
-    let cosh_chi = 1.0 / (PI / 8.0).tan() * 1.0 / (PI / 3.0).tan();
+/// Disk radius of the {p,q} polygon (circumradius: center to vertex).
+/// cosh(chi) = cot(pi/p) * cot(pi/q), r = tanh(chi/2)
+pub fn polygon_disk_radius(cfg: &TilingConfig) -> f64 {
+    let cosh_chi = 1.0 / (PI / cfg.p as f64).tan() * 1.0 / (PI / cfg.q as f64).tan();
     let chi = cosh_chi.acosh();
     (chi / 2.0).tanh()
 }
@@ -177,36 +209,95 @@ pub fn poincare_distance(z1: Complex, z2: Complex) -> f64 {
     2.0 * ratio.atanh()
 }
 
-/// Center-to-center hyperbolic distance D = 2*psi for adjacent tiles in {8,3}.
-/// Inradius: cosh(psi) = cos(pi/q) / sin(pi/p) = cos(pi/3) / sin(pi/8).
-fn half_edge_distance() -> f64 {
-    let cosh_psi = (PI / 3.0).cos() / (PI / 8.0).sin();
+/// Center-to-center hyperbolic distance D = 2*psi for adjacent tiles in {p,q}.
+/// Inradius: cosh(psi) = cos(pi/q) / sin(pi/p).
+pub fn half_edge_distance(cfg: &TilingConfig) -> f64 {
+    let cosh_psi = (PI / cfg.q as f64).cos() / (PI / cfg.p as f64).sin();
     let cosh_d = 2.0 * cosh_psi * cosh_psi - 1.0;
     cosh_d.acosh()
 }
 
-/// Center-to-center hyperbolic distance between adjacent tiles in {8,3}.
-pub fn center_to_center_distance() -> f64 {
-    half_edge_distance()
+/// Center-to-center hyperbolic distance between adjacent tiles in {p,q}.
+pub fn center_to_center_distance(cfg: &TilingConfig) -> f64 {
+    half_edge_distance(cfg)
 }
 
-/// Returns the 8 Mobius transforms that map the origin tile to each neighbor in {8,3}.
-/// Uses the inradius to compute center-to-center distance D = 2*psi.
-pub fn neighbor_transforms() -> [Mobius; 8] {
-    let d = half_edge_distance();
+/// Returns two sets of p Mobius transforms for even/odd parity tiles.
+/// For even p, both sets are identical (pure translations).
+/// For odd p, each set includes a ±π/p rotation to align edges correctly.
+///
+/// `[0]` = transforms for even-parity tiles (origin, grandchildren, ...)
+/// `[1]` = transforms for odd-parity tiles (children, great-grandchildren, ...)
+pub fn neighbor_transforms(cfg: &TilingConfig) -> [Vec<Mobius>; 2] {
+    let d = half_edge_distance(cfg);
+    let cosh_half = (d / 2.0).cosh();
+    let sinh_half = (d / 2.0).sinh();
+    let step = cfg.vertex_angle_step();
 
-    let a = (d / 2.0).cosh();
-    let sinh_half_d = (d / 2.0).sinh();
+    if cfg.p.is_multiple_of(2) {
+        // Even p: pure translations, both parity sets identical
+        let xforms: Vec<Mobius> = (0..cfg.p)
+            .map(|k| {
+                let angle = k as f64 * step;
+                Mobius {
+                    a: Complex::new(cosh_half, 0.0),
+                    b: Complex::from_polar(sinh_half, angle),
+                }
+            })
+            .collect();
+        [xforms.clone(), xforms]
+    } else {
+        // Odd p: compose translation with rotation(±π/p).
+        // T_k ∘ R(α): a = cosh(D/2) * e^(iα/2), b = sinh(D/2) * e^(i(θ_k - α/2))
+        let alpha = PI / cfg.p as f64;
+        let half_alpha = alpha / 2.0;
 
-    let a_c = Complex::new(a, 0.0);
+        let even_xforms: Vec<Mobius> = (0..cfg.p)
+            .map(|k| {
+                let theta_k = k as f64 * step;
+                Mobius {
+                    a: Complex::from_polar(cosh_half, half_alpha),
+                    b: Complex::from_polar(sinh_half, theta_k - half_alpha),
+                }
+            })
+            .collect();
 
-    let mut transforms = [Mobius::identity(); 8];
-    for (k, xform) in transforms.iter_mut().enumerate() {
-        let angle = k as f64 * PI / 4.0;
-        let b_c = Complex::from_polar(sinh_half_d, angle);
-        *xform = Mobius { a: a_c, b: b_c };
+        let odd_xforms: Vec<Mobius> = (0..cfg.p)
+            .map(|k| {
+                let theta_k = k as f64 * step;
+                Mobius {
+                    a: Complex::from_polar(cosh_half, -half_alpha),
+                    b: Complex::from_polar(sinh_half, theta_k + half_alpha),
+                }
+            })
+            .collect();
+
+        [even_xforms, odd_xforms]
     }
-    transforms
+}
+
+/// Interpolate along the Poincaré disk geodesic between z1 and z2.
+/// t=0 gives z1, t=1 gives z2. Maps z1 to origin (where geodesics are
+/// straight lines), interpolates along the diameter, then maps back.
+pub fn geodesic_lerp(z1: Complex, z2: Complex, t: f64) -> Complex {
+    if (z1 - z2).norm_sq() < 1e-30 {
+        return z1;
+    }
+
+    // M(z) = (z - z1) / (1 - conj(z1)*z) sends z1 to origin
+    let w = (z2 - z1) / (Complex::ONE - z1.conj() * z2);
+    let w_abs = w.abs();
+
+    if w_abs < 1e-15 {
+        return z1;
+    }
+
+    // Along the diameter through w: tanh(t * atanh(|w|)) in direction of w
+    let r_t = (t * w_abs.atanh()).tanh();
+    let w_t = w * (r_t / w_abs);
+
+    // M^(-1)(z) = (z + z1) / (1 + conj(z1)*z)
+    (w_t + z1) / (Complex::ONE + z1.conj() * w_t)
 }
 
 #[cfg(test)]
@@ -315,7 +406,8 @@ mod tests {
 
     #[test]
     fn test_octagon_disk_radius() {
-        let r = octagon_disk_radius();
+        let cfg = TilingConfig::new(8, 3);
+        let r = polygon_disk_radius(&cfg);
         assert!(
             (r - 0.4056).abs() < 0.001,
             "octagon disk radius {r} should be ~0.4056"
@@ -323,9 +415,11 @@ mod tests {
     }
 
     #[test]
-    fn test_canonical_octagon_vertices() {
-        let verts = canonical_octagon();
-        let r = octagon_disk_radius();
+    fn test_canonical_polygon_vertices_83() {
+        let cfg = TilingConfig::new(8, 3);
+        let verts = canonical_polygon(&cfg);
+        let r = polygon_disk_radius(&cfg);
+        assert_eq!(verts.len(), 8);
         for (i, v) in verts.iter().enumerate() {
             assert!(
                 (v.abs() - r).abs() < EPS,
@@ -346,9 +440,46 @@ mod tests {
     }
 
     #[test]
+    fn test_canonical_polygon_vertices_37() {
+        let cfg = TilingConfig::new(3, 7);
+        let verts = canonical_polygon(&cfg);
+        assert_eq!(verts.len(), 3);
+        let r = polygon_disk_radius(&cfg);
+        for (i, v) in verts.iter().enumerate() {
+            assert!(
+                (v.abs() - r).abs() < EPS,
+                "vertex {i} radius {} != {r}",
+                v.abs()
+            );
+        }
+    }
+
+    #[test]
+    fn test_canonical_polygon_vertices_54() {
+        let cfg = TilingConfig::new(5, 4);
+        let verts = canonical_polygon(&cfg);
+        assert_eq!(verts.len(), 5);
+        let r = polygon_disk_radius(&cfg);
+        for (i, v) in verts.iter().enumerate() {
+            assert!(
+                (v.abs() - r).abs() < EPS,
+                "vertex {i} radius {} != {r}",
+                v.abs()
+            );
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "not hyperbolic")]
+    fn test_non_hyperbolic_44_panics() {
+        TilingConfig::new(4, 4);
+    }
+
+    #[test]
     fn test_neighbor_transforms_distinct() {
-        let transforms = neighbor_transforms();
-        let centers: Vec<Complex> = transforms.iter().map(|t| t.apply(Complex::ZERO)).collect();
+        let cfg = TilingConfig::new(8, 3);
+        let [even_xforms, _] = neighbor_transforms(&cfg);
+        let centers: Vec<Complex> = even_xforms.iter().map(|t| t.apply(Complex::ZERO)).collect();
 
         // All 8 centers should be distinct
         for i in 0..8 {
@@ -376,14 +507,11 @@ mod tests {
 
     #[test]
     fn test_neighbor_center_distance() {
-        let transforms = neighbor_transforms();
-        let c0 = transforms[0].apply(Complex::ZERO);
-        // The center should be at the expected hyperbolic distance
-        // In the Poincare disk, |c| = tanh(d/2) where d is the hyperbolic distance
+        let cfg = TilingConfig::new(8, 3);
+        let [even_xforms, _] = neighbor_transforms(&cfg);
+        let c0 = even_xforms[0].apply(Complex::ZERO);
         let r = c0.abs();
         let hyp_dist = 2.0 * r.atanh();
-        // Expected: D = 2*psi, cosh(D) = 2*cosh(psi)^2 - 1
-        // Inradius: cosh(psi) = cos(pi/q) / sin(pi/p) = cos(pi/3) / sin(pi/8)
         let cosh_psi = (PI / 3.0).cos() / (PI / 8.0).sin();
         let expected_cosh_d = 2.0 * cosh_psi * cosh_psi - 1.0;
         let expected_d = expected_cosh_d.acosh();
@@ -391,5 +519,73 @@ mod tests {
             (hyp_dist - expected_d).abs() < 1e-6,
             "neighbor distance {hyp_dist} != expected {expected_d}"
         );
+    }
+
+    #[test]
+    fn test_geodesic_lerp_endpoints() {
+        let z1 = Complex::new(0.2, 0.1);
+        let z2 = Complex::new(-0.1, 0.3);
+        assert!(complex_approx_eq(geodesic_lerp(z1, z2, 0.0), z1));
+        assert!(complex_approx_eq(geodesic_lerp(z1, z2, 1.0), z2));
+    }
+
+    #[test]
+    fn test_geodesic_lerp_degenerate() {
+        let z = Complex::new(0.15, -0.2);
+        assert!(complex_approx_eq(geodesic_lerp(z, z, 0.5), z));
+    }
+
+    #[test]
+    fn test_geodesic_lerp_midpoint_closer_to_origin() {
+        // Geodesic midpoint should be closer to origin than chord midpoint
+        let z1 = Complex::new(0.3, 0.1);
+        let z2 = Complex::new(-0.1, 0.35);
+        let geo_mid = geodesic_lerp(z1, z2, 0.5);
+        let chord_mid = Complex::new((z1.re + z2.re) / 2.0, (z1.im + z2.im) / 2.0);
+        assert!(
+            geo_mid.abs() < chord_mid.abs(),
+            "geodesic midpoint {} should be closer to origin than chord midpoint {}",
+            geo_mid.abs(),
+            chord_mid.abs()
+        );
+    }
+
+    #[test]
+    fn test_geodesic_lerp_mobius_invariance() {
+        let z1 = Complex::new(0.2, 0.1);
+        let z2 = Complex::new(-0.1, 0.3);
+        let m = Mobius {
+            a: Complex::new(1.2, 0.3),
+            b: Complex::new(0.1, 0.4),
+        }
+        .normalized();
+
+        for &t in &[0.0, 0.25, 0.5, 0.75, 1.0] {
+            let lhs = m.apply(geodesic_lerp(z1, z2, t));
+            let rhs = geodesic_lerp(m.apply(z1), m.apply(z2), t);
+            assert!(
+                complex_approx_eq(lhs, rhs),
+                "Möbius invariance failed at t={t}: ({}, {}) vs ({}, {})",
+                lhs.re, lhs.im, rhs.re, rhs.im
+            );
+        }
+    }
+
+    #[test]
+    fn test_geodesic_lerp_on_geodesic() {
+        // All interpolated points should lie on the geodesic (equal hyperbolic distance ratios)
+        let z1 = Complex::new(0.25, 0.1);
+        let z2 = Complex::new(-0.15, 0.3);
+        let total_d = poincare_distance(z1, z2);
+        for i in 0..=4 {
+            let t = i as f64 / 4.0;
+            let p = geodesic_lerp(z1, z2, t);
+            let d = poincare_distance(z1, p);
+            assert!(
+                (d - t * total_d).abs() < 1e-8,
+                "at t={t}: d(z1,p)={d} != t*D={}",
+                t * total_d
+            );
+        }
     }
 }

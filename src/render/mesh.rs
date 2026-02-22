@@ -1,4 +1,4 @@
-use crate::hyperbolic::poincare::Complex;
+use crate::hyperbolic::poincare::{geodesic_lerp, Complex};
 
 /// 32-byte vertex: position (12), normal (12), uv (8).
 #[repr(C)]
@@ -38,18 +38,18 @@ impl Vertex {
     }
 }
 
-/// Build a subdivided octagon mesh from 8 Poincare disk vertices.
-/// Uses concentric ring subdivision: 4 rings, 3 segments per octagon side.
+/// Build a subdivided polygon mesh from Poincare disk vertices.
+/// Uses concentric ring subdivision: 8 rings, 4 segments per side.
 ///
 /// Vertices stored in Poincare disk coords as [x, 0, z] — the shader handles
 /// Mobius transform + hyperboloid embedding.
 ///
 /// `uv.x` encodes fractional depth (set per-tile at draw time via uniform),
 /// `uv.y` encodes distance from center (0 at center, 1 at edge) for edge darkening.
-pub fn build_octagon_mesh(vertices: &[Complex; 8]) -> (Vec<Vertex>, Vec<u16>) {
+pub fn build_polygon_mesh(vertices: &[Complex]) -> (Vec<Vertex>, Vec<u16>) {
     let num_rings = 8u32;
     let segs_per_side = 4u32;
-    let num_sides = 8u32;
+    let num_sides = vertices.len() as u32;
 
     let center = Complex::ZERO;
     let mut verts = Vec::new();
@@ -71,7 +71,7 @@ pub fn build_octagon_mesh(vertices: &[Complex; 8]) -> (Vec<Vertex>, Vec<u16>) {
             for seg in 0..segs_per_side {
                 let t_seg = seg as f64 / segs_per_side as f64;
                 // Interpolate along the edge at this ring's fraction
-                let edge_point = lerp_complex(v0, v1, t_seg);
+                let edge_point = geodesic_lerp(v0, v1, t_seg);
                 let point = lerp_complex(center, edge_point, t_ring);
 
                 verts.push(Vertex {

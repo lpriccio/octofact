@@ -15,8 +15,11 @@ pub struct Tile {
 }
 
 /// Spatial dedup key: discretize Poincare disk position to grid.
+/// Precision 1e3 (grid cell ~0.001) tolerates floating-point drift from
+/// repeated Mobius compositions during rebase, while still distinguishing
+/// adjacent tile centers (min ~0.03 apart at the visibility boundary).
 fn spatial_key(z: Complex) -> (i64, i64) {
-    ((z.re * 1e5).round() as i64, (z.im * 1e5).round() as i64)
+    ((z.re * 1e3).round() as i64, (z.im * 1e3).round() as i64)
 }
 
 /// BFS tiling state for incremental expansion of the {8,3} tiling.

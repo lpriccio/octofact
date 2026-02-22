@@ -273,7 +273,7 @@ impl App {
     }
 
 
-    fn handle_click(&mut self, sx: f64, sy: f64) {
+    fn handle_click(&mut self, sx: f64, sy: f64, delta: f32) {
         let running = match self.running.as_ref() {
             Some(r) => r,
             None => return,
@@ -323,7 +323,7 @@ impl App {
         }
 
         if let Some(idx) = best_idx {
-            *self.running.as_mut().unwrap().extra_elevation.entry(idx).or_insert(0.0) += 0.04;
+            *self.running.as_mut().unwrap().extra_elevation.entry(idx).or_insert(0.0) += delta;
         }
     }
 
@@ -599,11 +599,14 @@ impl ApplicationHandler for App {
                 self.cursor_pos = Some(position);
             }
             WindowEvent::MouseInput { state, button, .. } => {
-                if button == winit::event::MouseButton::Left
-                    && state == winit::event::ElementState::Pressed
-                {
-                    if let Some(pos) = self.cursor_pos {
-                        self.handle_click(pos.x, pos.y);
+                if state == winit::event::ElementState::Pressed {
+                    let delta = match button {
+                        winit::event::MouseButton::Left => Some(0.04),
+                        winit::event::MouseButton::Right => Some(-0.04),
+                        _ => None,
+                    };
+                    if let (Some(delta), Some(pos)) = (delta, self.cursor_pos) {
+                        self.handle_click(pos.x, pos.y, delta);
                     }
                 }
             }

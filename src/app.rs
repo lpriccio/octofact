@@ -145,7 +145,8 @@ pub struct App {
     mesh_verts: Vec<Vertex>,
     mesh_indices: Vec<u16>,
     camera_height: f32,
-    view_mobius: Mobius,
+    camera_tile: usize,
+    camera_local: Mobius,
     first_person: bool,
     heading: f64,
     keys_held: std::collections::HashSet<winit::keyboard::KeyCode>,
@@ -165,7 +166,8 @@ impl App {
             mesh_verts: verts,
             mesh_indices: indices,
             camera_height: 2.0,
-            view_mobius: Mobius::identity(),
+            camera_tile: 0,
+            camera_local: Mobius::identity(),
             first_person: false,
             heading: 0.0,
             keys_held: std::collections::HashSet::new(),
@@ -261,22 +263,66 @@ impl App {
                 a: Complex::new(a_val, 0.0),
                 b: Complex::from_polar(b_mag, theta),
             };
-            self.view_mobius = translation.compose(&self.view_mobius);
+            if self.first_person {
+                // Right-compose: movement in camera's body frame, so W is always "forward"
+                // relative to facing direction. Invariant under cell frame changes.
+                self.camera_local = self.camera_local.compose(&translation);
+            } else {
+                // Left-compose: movement in cell's global frame, so WASD stays screen-aligned.
+                self.camera_local = translation.compose(&self.camera_local);
+            }
 
-            // Rebase check
-            let origin_pos = self.view_mobius.apply(Complex::ZERO);
-            if origin_pos.abs() > 0.5 {
-                if let Some(tiling) = &mut self.tiling {
-                    let rebase = self.view_mobius.inverse();
-                    tiling.rebase(&rebase);
-                    self.view_mobius = Mobius::identity();
+            // Cell transition: check if camera is closer to a neighbor center
+            if let Some(tiling) = &mut self.tiling {
+                let camera_pos = self.camera_local.apply(Complex::ZERO);
+                let dist_to_origin = camera_pos.abs(); // hyperbolic dist approx for small values
+
+                let mut best_dir: Option<usize> = None;
+                let mut best_dist = dist_to_origin;
+                for dir in 0..8usize {
+                    let neighbor_center = tiling.neighbor_xforms[dir].apply(Complex::ZERO);
+                    let d = (camera_pos - neighbor_center).abs();
+                    // Use Euclidean distance in disk as proxy (fine near center)
+                    if d < best_dist {
+                        best_dist = d;
+                        best_dir = Some(dir);
+                    }
+                }
+
+                if let Some(dir) = best_dir {
+                    // Find the tile at that neighbor position
+                    let current_tile_xform = tiling.tiles[self.camera_tile].transform;
+                    let neighbor_abs = current_tile_xform.compose(&tiling.neighbor_xforms[dir]);
+                    let neighbor_center = neighbor_abs.apply(Complex::ZERO);
+
+                    // O(N) scan — only happens on cell transitions (infrequent)
+                    let mut found_idx = None;
+                    for (idx, tile) in tiling.tiles.iter().enumerate() {
+                        let tc = tile.transform.apply(Complex::ZERO);
+                        if (tc - neighbor_center).abs() < 0.01 {
+                            found_idx = Some(idx);
+                            break;
+                        }
+                    }
+
+                    if let Some(new_tile_idx) = found_idx {
+                        // Transition: adjust camera_local so world position is unchanged
+                        let new_tile_xform = tiling.tiles[new_tile_idx].transform;
+                        let inv_new = new_tile_xform.inverse();
+                        // camera_local was relative to current tile's frame;
+                        // new_local = inv(new_tile) . current_tile . old_local
+                        self.camera_local =
+                            inv_new.compose(&current_tile_xform.compose(&self.camera_local));
+                        self.camera_tile = new_tile_idx;
+                        tiling.recenter_on(new_tile_idx);
+                    }
                 }
             }
         }
 
         // Ensure 3 layers of tiles around camera position
         if let Some(tiling) = &mut self.tiling {
-            let cam_pos = self.view_mobius.apply(Complex::ZERO);
+            let cam_pos = self.camera_local.apply(Complex::ZERO);
             tiling.ensure_coverage(cam_pos, 3);
         }
     }
@@ -297,7 +343,7 @@ impl App {
         let width = gpu.config.width as f32;
         let height = gpu.config.height as f32;
 
-        let inv_view = self.view_mobius.inverse();
+        let inv_view = self.camera_local.inverse();
 
         // Collect visible tile indices: only tiles whose disk center is within 0.98
         let visible: Vec<usize> = tiling

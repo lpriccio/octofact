@@ -27,7 +27,7 @@ pub struct TilingState {
     pub tiles: Vec<Tile>,
     seen: HashSet<(i64, i64)>,
     frontier: VecDeque<usize>,
-    neighbor_xforms: [Mobius; 8],
+    pub neighbor_xforms: [Mobius; 8],
 }
 
 impl TilingState {
@@ -161,13 +161,19 @@ impl TilingState {
         }
     }
 
-    /// Rebase the tiling around a new viewpoint (Mobius transform).
-    /// Composes the rebase transform with all tile transforms, then rebuilds
-    /// seen set and frontier. Tiles are never pruned so addresses stay canonical.
-    pub fn rebase(&mut self, rebase_xform: &Mobius) {
-        // Transform all tiles
+    /// Recenter the tiling so that `center_idx` becomes the origin.
+    /// Recomputes ALL tile transforms fresh from their canonical addresses,
+    /// eliminating accumulated floating-point drift from repeated compositions.
+    pub fn recenter_on(&mut self, center_idx: usize) {
+        let center_abs = compute_transform_from_address(
+            &self.tiles[center_idx].address,
+            &self.neighbor_xforms,
+        );
+        let inv_center = center_abs.inverse();
         for tile in &mut self.tiles {
-            tile.transform = rebase_xform.compose(&tile.transform);
+            let tile_abs =
+                compute_transform_from_address(&tile.address, &self.neighbor_xforms);
+            tile.transform = inv_center.compose(&tile_abs);
         }
 
         // Rebuild seen set from all tiles
@@ -190,6 +196,17 @@ impl TilingState {
             }
         }
     }
+}
+
+/// Recompute a tile's absolute Mobius transform from its canonical address.
+/// Each step composes the corresponding neighbor transform, so the result
+/// depends only on the immutable address — no accumulated drift.
+fn compute_transform_from_address(address: &[u8], neighbor_xforms: &[Mobius; 8]) -> Mobius {
+    let mut t = Mobius::identity();
+    for &dir in address {
+        t = t.compose(&neighbor_xforms[dir as usize]);
+    }
+    t
 }
 
 /// Format a tile address for display.

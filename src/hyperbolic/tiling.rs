@@ -12,6 +12,8 @@ pub struct Tile {
     pub transform: Mobius,
     /// BFS depth (= address length).
     pub depth: usize,
+    /// Extra elevation accumulated from clicks.
+    pub extra_elevation: f32,
 }
 
 /// Spatial dedup key: discretize Poincare disk position to grid.
@@ -36,6 +38,7 @@ impl TilingState {
             address: vec![],
             transform: Mobius::identity(),
             depth: 0,
+            extra_elevation: 0.0,
         };
         let key = spatial_key(Complex::ZERO);
         let mut seen = HashSet::new();
@@ -82,6 +85,7 @@ impl TilingState {
                         address: child_address,
                         transform: child_transform,
                         depth: parent_depth + 1,
+                        extra_elevation: 0.0,
                     };
                     let child_idx = self.tiles.len();
                     self.tiles.push(child);
@@ -124,6 +128,7 @@ impl TilingState {
                     address: child_address,
                     transform: child_transform,
                     depth: parent_depth + 1,
+                    extra_elevation: 0.0,
                 };
                 let child_idx = self.tiles.len();
                 self.tiles.push(child);

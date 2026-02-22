@@ -157,6 +157,7 @@ pub struct App {
     heading: f64,
     keys_held: std::collections::HashSet<winit::keyboard::KeyCode>,
     last_frame: Option<std::time::Instant>,
+    cursor_pos: Option<winit::dpi::PhysicalPosition<f64>>,
 }
 
 impl App {
@@ -178,6 +179,7 @@ impl App {
             heading: 0.0,
             keys_held: std::collections::HashSet::new(),
             last_frame: None,
+            cursor_pos: None,
         }
     }
 
@@ -329,6 +331,63 @@ impl App {
     }
 
 
+    fn handle_click(&mut self, sx: f64, sy: f64) {
+        let gpu = match self.gpu.as_ref() {
+            Some(g) => g,
+            None => return,
+        };
+        if self.tiling.is_none() {
+            return;
+        }
+
+        let width = gpu.config.width as f32;
+        let height = gpu.config.height as f32;
+        let aspect = width / height;
+        let view_proj = self.build_view_proj(aspect);
+        let inv_view = self.camera_local.inverse();
+
+        let tiling = self.tiling.as_mut().unwrap();
+
+        let click_sx = sx as f32;
+        let click_sy = sy as f32;
+
+        // Screen-space projection picking: project each tile center through the
+        // exact same transform chain as rendering, then pick the closest to click.
+        let mut best_idx: Option<usize> = None;
+        let mut best_dist_sq = f32::MAX;
+        for (i, tile) in tiling.tiles.iter().enumerate() {
+            let combined = inv_view.compose(&tile.transform);
+            let disk_center = combined.apply(Complex::ZERO);
+            if disk_center.abs() > 0.98 {
+                continue;
+            }
+
+            // Bowl coords (same as shader/render_frame)
+            let bowl = crate::hyperbolic::embedding::disk_to_bowl(disk_center);
+
+            // Elevation (replicate render_frame logic)
+            let digit_sum: u32 = tile.address.iter().map(|&d| d as u32).sum();
+            let base_elevation = if !tile.address.is_empty() && digit_sum % 10 == 9 { 0.04_f32 } else { 0.0 };
+            let elevation = base_elevation + tile.extra_elevation;
+
+            let world_pos = glam::Vec3::new(bowl[0], bowl[1] + elevation, bowl[2]);
+
+            if let Some((proj_sx, proj_sy)) = project_to_screen(world_pos, &view_proj, width, height) {
+                let dx = proj_sx - click_sx;
+                let dy = proj_sy - click_sy;
+                let dist_sq = dx * dx + dy * dy;
+                if dist_sq < best_dist_sq {
+                    best_dist_sq = dist_sq;
+                    best_idx = Some(i);
+                }
+            }
+        }
+
+        if let Some(idx) = best_idx {
+            tiling.tiles[idx].extra_elevation += 0.04;
+        }
+    }
+
     fn render_frame(&mut self) -> Result<(), wgpu::SurfaceError> {
         let gpu = self.gpu.as_ref().unwrap();
         let render = self.render.as_ref().unwrap();
@@ -366,7 +425,8 @@ impl App {
             let tile = &tiling.tiles[tile_idx];
             let combined = inv_view.compose(&tile.transform);
             let digit_sum: u32 = tile.address.iter().map(|&d| d as u32).sum();
-            let elevation = if !tile.address.is_empty() && digit_sum % 10 == 9 { 0.04_f32 } else { 0.0 };
+            let base_elevation = if !tile.address.is_empty() && digit_sum % 10 == 9 { 0.04_f32 } else { 0.0 };
+            let elevation = base_elevation + tile.extra_elevation;
             let uniforms = Uniforms {
                 view_proj: view_proj.to_cols_array_2d(),
                 mobius_a: [combined.a.re as f32, combined.a.im as f32, 0.0, 0.0],
@@ -594,6 +654,18 @@ impl ApplicationHandler for App {
                         }
                     } else {
                         self.keys_held.remove(&code);
+                    }
+                }
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                self.cursor_pos = Some(position);
+            }
+            WindowEvent::MouseInput { state, button, .. } => {
+                if button == winit::event::MouseButton::Left
+                    && state == winit::event::ElementState::Pressed
+                {
+                    if let Some(pos) = self.cursor_pos {
+                        self.handle_click(pos.x, pos.y);
                     }
                 }
             }

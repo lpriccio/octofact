@@ -359,11 +359,13 @@ impl App {
         for (slot, &tile_idx) in visible.iter().enumerate() {
             let tile = &tiling.tiles[tile_idx];
             let combined = inv_view.compose(&tile.transform);
+            let digit_sum: u32 = tile.address.iter().map(|&d| d as u32).sum();
+            let elevation = if !tile.address.is_empty() && digit_sum % 10 == 9 { 0.04_f32 } else { 0.0 };
             let uniforms = Uniforms {
                 view_proj: view_proj.to_cols_array_2d(),
                 mobius_a: [combined.a.re as f32, combined.a.im as f32, 0.0, 0.0],
                 mobius_b: [combined.b.re as f32, combined.b.im as f32, 0.0, 0.0],
-                disk_params: [tile.depth as f32, 0.0, 0.0, 0.0],
+                disk_params: [tile.depth as f32, elevation, 0.0, 0.0],
                 ..Default::default()
             };
             render.write_tile_uniforms(&gpu.queue, slot, &uniforms);

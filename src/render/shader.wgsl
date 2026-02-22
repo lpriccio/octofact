@@ -69,7 +69,8 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     let den = cmul(cconj(b), z) + cconj(a);
     let w = cdiv(num, den);
 
-    let world = disk_to_bowl(w);
+    var world = disk_to_bowl(w);
+    world.y += u.disk_params.y;
     let disk_r = length(w);
 
     // Compute tangent-space normal via finite differences

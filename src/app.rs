@@ -387,10 +387,7 @@ impl App {
             }
 
             let bowl = crate::hyperbolic::embedding::disk_to_bowl(disk_center);
-            let digit_sum: u32 = tile.address.iter().map(|&d| d as u32).sum();
-            let base_elevation = if !tile.address.is_empty() && digit_sum % 10 == 9 { 0.04_f32 } else { 0.0 };
-            let extra = running.extra_elevation.get(&i).copied().unwrap_or(0.0);
-            let elevation = base_elevation + extra;
+            let elevation = running.extra_elevation.get(&i).copied().unwrap_or(0.0);
 
             let world_pos = glam::Vec3::new(bowl[0], bowl[1] + elevation, bowl[2]);
 
@@ -501,10 +498,7 @@ impl App {
         // Upload uniforms only for visible tiles
         for (slot, &(tile_idx, combined)) in visible.iter().enumerate() {
             let tile = &running.tiling.tiles[tile_idx];
-            let digit_sum: u32 = tile.address.iter().map(|&d| d as u32).sum();
-            let base_elevation = if !tile.address.is_empty() && digit_sum % 10 == 9 { 0.04_f32 } else { 0.0 };
-            let extra = running.extra_elevation.get(&tile_idx).copied().unwrap_or(0.0);
-            let elevation = base_elevation + extra;
+            let elevation = running.extra_elevation.get(&tile_idx).copied().unwrap_or(0.0);
             let uniforms = Uniforms {
                 view_proj: view_proj.to_cols_array_2d(),
                 mobius_a: [combined.a.re as f32, combined.a.im as f32, 0.0, 0.0],
@@ -538,10 +532,7 @@ impl App {
                     if disk_center.abs() > 0.9 {
                         continue;
                     }
-                    let digit_sum: u32 = tile.address.iter().map(|&d| d as u32).sum();
-                    let base_elevation = if !tile.address.is_empty() && digit_sum % 10 == 9 { 0.04_f32 } else { 0.0 };
-                    let extra = running.extra_elevation.get(&tile_idx).copied().unwrap_or(0.0);
-                    let elevation = base_elevation + extra;
+                    let elevation = running.extra_elevation.get(&tile_idx).copied().unwrap_or(0.0);
                     let hyp = crate::hyperbolic::embedding::disk_to_bowl(disk_center);
                     let world_pos = glam::Vec3::new(hyp[0], hyp[1] + elevation, hyp[2]);
                     if let Some((sx, sy)) = project_to_screen(world_pos, &view_proj, width, height) {

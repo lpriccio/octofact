@@ -721,11 +721,25 @@ impl ApplicationHandler for App {
         // Handle game toggle keys BEFORE egui so Tab/Esc aren't consumed
         if let WindowEvent::KeyboardInput { ref event, .. } = event {
             if let PhysicalKey::Code(code) = event.physical_key {
+                // Track shift state before rebinding check
+                if code == winit::keyboard::KeyCode::ShiftLeft || code == winit::keyboard::KeyCode::ShiftRight {
+                    self.input_state.shift_held = event.state.is_pressed();
+                }
+
                 // Handle rebinding mode
                 if let Some(action) = self.rebinding {
                     if event.state.is_pressed() {
-                        self.input_state.rebind(action, code);
-                        self.config.key_bindings.insert(action, crate::game::input::KeyBind::new(code));
+                        // Don't bind bare modifier keys
+                        if code == winit::keyboard::KeyCode::ShiftLeft || code == winit::keyboard::KeyCode::ShiftRight {
+                            return;
+                        }
+                        let bind = if self.input_state.shift_held {
+                            crate::game::input::KeyBind::with_shift(code)
+                        } else {
+                            crate::game::input::KeyBind::new(code)
+                        };
+                        self.input_state.rebind(action, bind);
+                        self.config.key_bindings.insert(action, bind);
                         self.config.save();
                         self.rebinding = None;
                     }
@@ -757,6 +771,16 @@ impl ApplicationHandler for App {
                         self.grid_enabled = !self.grid_enabled;
                         log::info!("grid: {}", if self.grid_enabled { "ON" } else { "OFF" });
                     }
+                    if self.input_state.just_pressed(GameAction::RaiseTerrain) {
+                        if let Some(pos) = self.cursor_pos {
+                            self.handle_click(pos.x, pos.y, 0.04);
+                        }
+                    }
+                    if self.input_state.just_pressed(GameAction::LowerTerrain) {
+                        if let Some(pos) = self.cursor_pos {
+                            self.handle_click(pos.x, pos.y, -0.04);
+                        }
+                    }
                 }
             }
         }
@@ -782,24 +806,7 @@ impl ApplicationHandler for App {
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor_pos = Some(position);
             }
-            WindowEvent::MouseInput { state, button, .. } => {
-                // Don't handle clicks when egui wants pointer
-                if let Some(running) = &self.running {
-                    if running.egui.wants_pointer_input() {
-                        return;
-                    }
-                }
-                if state == winit::event::ElementState::Pressed {
-                    let delta = match button {
-                        winit::event::MouseButton::Left => Some(0.04),
-                        winit::event::MouseButton::Right => Some(-0.04),
-                        _ => None,
-                    };
-                    if let (Some(delta), Some(pos)) = (delta, self.cursor_pos) {
-                        self.handle_click(pos.x, pos.y, delta);
-                    }
-                }
-            }
+            WindowEvent::MouseInput { .. } => {}
             WindowEvent::RedrawRequested => {
                 if self.running.is_some() {
                     match self.render_frame() {

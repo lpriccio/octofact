@@ -14,8 +14,8 @@ pub enum GameAction {
     OpenSettings,
     OpenInventory,
     ToggleViewMode,
-    PlaceStructure,
-    RemoveStructure,
+    RaiseTerrain,
+    LowerTerrain,
     RotateStructure,
     ToggleGrid,
 }
@@ -33,8 +33,8 @@ impl GameAction {
             Self::OpenSettings => "Settings",
             Self::OpenInventory => "Inventory",
             Self::ToggleViewMode => "Toggle View",
-            Self::PlaceStructure => "Place Structure",
-            Self::RemoveStructure => "Remove Structure",
+            Self::RaiseTerrain => "Raise Terrain",
+            Self::LowerTerrain => "Lower Terrain",
             Self::RotateStructure => "Rotate Structure",
             Self::ToggleGrid => "Toggle Grid",
         }
@@ -45,8 +45,8 @@ impl GameAction {
         &[
             MoveForward, MoveBackward, StrafeLeft, StrafeRight,
             CameraUp, CameraDown, ToggleLabels, OpenSettings,
-            OpenInventory, ToggleViewMode, PlaceStructure,
-            RemoveStructure, RotateStructure, ToggleGrid,
+            OpenInventory, ToggleViewMode, RaiseTerrain,
+            LowerTerrain, RotateStructure, ToggleGrid,
         ]
     }
 }
@@ -54,31 +54,49 @@ impl GameAction {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct KeyBind {
     pub code: KeyCode,
+    pub shift: bool,
 }
 
 impl KeyBind {
     pub fn new(code: KeyCode) -> Self {
-        Self { code }
+        Self { code, shift: false }
+    }
+
+    pub fn with_shift(code: KeyCode) -> Self {
+        Self { code, shift: true }
     }
 
     pub fn display_name(&self) -> String {
-        format!("{:?}", self.code)
+        if self.shift {
+            format!("Shift+{:?}", self.code)
+        } else {
+            format!("{:?}", self.code)
+        }
     }
 }
 
 impl Serialize for KeyBind {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(&format!("{:?}", self.code))
+        if self.shift {
+            serializer.serialize_str(&format!("Shift+{:?}", self.code))
+        } else {
+            serializer.serialize_str(&format!("{:?}", self.code))
+        }
     }
 }
 
 impl<'de> Deserialize<'de> for KeyBind {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let s = String::deserialize(deserializer)?;
-        let code = keycode_from_str(&s).ok_or_else(|| {
-            serde::de::Error::custom(format!("Unknown key code: {s}"))
+        let (shift, key_str) = if let Some(rest) = s.strip_prefix("Shift+") {
+            (true, rest)
+        } else {
+            (false, s.as_str())
+        };
+        let code = keycode_from_str(key_str).ok_or_else(|| {
+            serde::de::Error::custom(format!("Unknown key code: {key_str}"))
         })?;
-        Ok(KeyBind { code })
+        Ok(KeyBind { code, shift })
     }
 }
 
@@ -168,6 +186,8 @@ pub fn default_bindings() -> HashMap<GameAction, KeyBind> {
         (ToggleViewMode, KeyBind::new(KeyCode::Backquote)),
         (RotateStructure, KeyBind::new(KeyCode::KeyR)),
         (ToggleGrid, KeyBind::new(KeyCode::KeyG)),
+        (RaiseTerrain, KeyBind::with_shift(KeyCode::ArrowUp)),
+        (LowerTerrain, KeyBind::with_shift(KeyCode::ArrowDown)),
     ])
 }
 
@@ -176,6 +196,7 @@ pub struct InputState {
     reverse_map: HashMap<KeyCode, Vec<GameAction>>,
     active_actions: HashSet<GameAction>,
     just_pressed_actions: HashSet<GameAction>,
+    pub shift_held: bool,
 }
 
 impl InputState {
@@ -186,6 +207,7 @@ impl InputState {
             reverse_map,
             active_actions: HashSet::new(),
             just_pressed_actions: HashSet::new(),
+            shift_held: false,
         }
     }
 
@@ -194,12 +216,23 @@ impl InputState {
     }
 
     pub fn on_key_event(&mut self, code: KeyCode, pressed: bool) {
+        // Track shift modifier state
+        if code == KeyCode::ShiftLeft || code == KeyCode::ShiftRight {
+            self.shift_held = pressed;
+        }
+
         if let Some(actions) = self.reverse_map.get(&code) {
             for &action in actions {
                 if pressed {
+                    // On press: require modifier match
+                    let wants_shift = self.bindings.get(&action).map(|b| b.shift).unwrap_or(false);
+                    if wants_shift != self.shift_held {
+                        continue;
+                    }
                     self.active_actions.insert(action);
                     self.just_pressed_actions.insert(action);
                 } else {
+                    // On release: always deactivate to prevent stuck actions
                     self.active_actions.remove(&action);
                 }
             }
@@ -218,8 +251,8 @@ impl InputState {
         self.just_pressed_actions.clear();
     }
 
-    pub fn rebind(&mut self, action: GameAction, code: KeyCode) {
-        self.bindings.insert(action, KeyBind::new(code));
+    pub fn rebind(&mut self, action: GameAction, bind: KeyBind) {
+        self.bindings.insert(action, bind);
         self.reverse_map = build_reverse_map(&self.bindings);
     }
 }
@@ -265,13 +298,42 @@ mod tests {
     #[test]
     fn test_rebinding() {
         let mut state = InputState::with_defaults();
-        state.rebind(GameAction::MoveForward, KeyCode::ArrowUp);
+        state.rebind(GameAction::MoveForward, KeyBind::new(KeyCode::ArrowUp));
 
         state.on_key_event(KeyCode::KeyW, true);
         assert!(!state.is_active(GameAction::MoveForward));
 
         state.on_key_event(KeyCode::ArrowUp, true);
         assert!(state.is_active(GameAction::MoveForward));
+    }
+
+    #[test]
+    fn test_shift_modifier() {
+        let mut state = InputState::with_defaults();
+        // ArrowUp without shift should NOT activate RaiseTerrain
+        state.on_key_event(KeyCode::ArrowUp, true);
+        assert!(!state.is_active(GameAction::RaiseTerrain));
+        state.on_key_event(KeyCode::ArrowUp, false);
+
+        // Shift+ArrowUp should activate RaiseTerrain
+        state.on_key_event(KeyCode::ShiftLeft, true);
+        state.on_key_event(KeyCode::ArrowUp, true);
+        assert!(state.is_active(GameAction::RaiseTerrain));
+        assert!(state.just_pressed(GameAction::RaiseTerrain));
+    }
+
+    #[test]
+    fn test_keybind_shift_serialization() {
+        // Wrap in a HashMap since TOML requires top-level tables
+        let mut map = HashMap::new();
+        map.insert("key", KeyBind::with_shift(KeyCode::ArrowUp));
+        let s = toml::to_string(&map).unwrap();
+        assert!(s.contains("Shift+ArrowUp"));
+
+        let mut map2 = HashMap::new();
+        map2.insert("key", KeyBind::new(KeyCode::KeyW));
+        let s2 = toml::to_string(&map2).unwrap();
+        assert!(!s2.contains("Shift+"));
     }
 
     #[test]

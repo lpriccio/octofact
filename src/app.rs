@@ -427,7 +427,7 @@ impl App {
         Some(ClickResult { tile_idx, grid_xy, local_disk })
     }
 
-    fn handle_click(&mut self, sx: f64, sy: f64, delta: f32) {
+    fn handle_debug_click(&mut self, sx: f64, sy: f64) {
         let result = match self.find_clicked_tile(sx, sy) {
             Some(r) => r,
             None => return,
@@ -444,13 +444,20 @@ impl App {
                 result.local_disk.re,
                 result.local_disk.im,
             );
-
-            // Set flash at click screen position
-            let running = self.running.as_ref().unwrap();
-            let scale = running.gpu.window.scale_factor() as f32;
-            self.flash_screen_pos = Some((sx as f32 / scale, sy as f32 / scale));
-            self.flash_timer = 0.4;
         }
+
+        // Flash at click screen position
+        let running = self.running.as_ref().unwrap();
+        let scale = running.gpu.window.scale_factor() as f32;
+        self.flash_screen_pos = Some((sx as f32 / scale, sy as f32 / scale));
+        self.flash_timer = 0.4;
+    }
+
+    fn modify_terrain(&mut self, sx: f64, sy: f64, delta: f32) {
+        let result = match self.find_clicked_tile(sx, sy) {
+            Some(r) => r,
+            None => return,
+        };
 
         *self.running.as_mut().unwrap().extra_elevation.entry(result.tile_idx).or_insert(0.0) += delta;
     }
@@ -773,12 +780,12 @@ impl ApplicationHandler for App {
                     }
                     if self.input_state.just_pressed(GameAction::RaiseTerrain) {
                         if let Some(pos) = self.cursor_pos {
-                            self.handle_click(pos.x, pos.y, 0.04);
+                            self.modify_terrain(pos.x, pos.y, 0.04);
                         }
                     }
                     if self.input_state.just_pressed(GameAction::LowerTerrain) {
                         if let Some(pos) = self.cursor_pos {
-                            self.handle_click(pos.x, pos.y, -0.04);
+                            self.modify_terrain(pos.x, pos.y, -0.04);
                         }
                     }
                 }
@@ -806,7 +813,16 @@ impl ApplicationHandler for App {
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor_pos = Some(position);
             }
-            WindowEvent::MouseInput { .. } => {}
+            WindowEvent::MouseInput { state, button, .. } => {
+                if state == winit::event::ElementState::Pressed
+                    && button == winit::event::MouseButton::Left
+                    && !self.ui_is_open()
+                {
+                    if let Some(pos) = self.cursor_pos {
+                        self.handle_debug_click(pos.x, pos.y);
+                    }
+                }
+            }
             WindowEvent::RedrawRequested => {
                 if self.running.is_some() {
                     match self.render_frame() {

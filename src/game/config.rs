@@ -8,6 +8,8 @@ pub struct GameConfig {
     pub key_bindings: HashMap<GameAction, KeyBind>,
     pub graphics: GraphicsConfig,
     pub gameplay: GameplayConfig,
+    #[serde(default)]
+    pub debug: DebugConfig,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -21,6 +23,11 @@ pub struct GameplayConfig {
     pub tiling_n: u32,
 }
 
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct DebugConfig {
+    pub log_clicks: bool,
+}
+
 impl Default for GameConfig {
     fn default() -> Self {
         Self {
@@ -32,6 +39,7 @@ impl Default for GameConfig {
             gameplay: GameplayConfig {
                 tiling_n: 5,
             },
+            debug: DebugConfig::default(),
         }
     }
 }

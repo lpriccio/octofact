@@ -1,4 +1,7 @@
-# Goal: Simluation of walking, video-game style, on the {8,3} octagonal tiling of the hyperbolic plane, generating new terrrain as necessary
+# Goal: Factory game on the {4,n} square tiling of the hyperbolic plane
+
+Originally {8,3} octagonal tiling; now locked to {4,n} square cells for grid-based gameplay.
+Default {4,5}. See GAME.md for full design.
 
 ## Stack: Rust on Apple Metal
 
@@ -6,7 +9,7 @@
 
 ## Subgoal: canonize a combinatorial representation
 
-Encoded as direction moved at each step from a distinguished origin point along a shortest path, of each cell in the {8,3} tiling.  E.g. the point "00002" would be moving four times in the same direction and then once turning right by two sides of an octagon before moving.  Methods for reducing abritary paths to canonical form, so we can keep track of the geometry.  Feel free to use web search for this.
+Encoded as direction moved at each step from a distinguished origin point along a shortest path, of each cell in the tiling.  E.g. the point "00002" would be moving four times in the same direction and then once turning right by two sides of a polygon before moving.  Methods for reducing abritary paths to canonical form, so we can keep track of the geometry.  Feel free to use web search for this.
 
 ## Subgoal:  Poincare disk
 

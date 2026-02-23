@@ -1,6 +1,6 @@
 # Octofact
 
-{8,3} hyperbolic plane walking simulator — Rust + wgpu 28 on Apple Metal.
+{4,n} hyperbolic plane factory game — Rust + wgpu 28 on Apple Metal. Default {4,5}.
 
 ## Build & Run
 
@@ -34,29 +34,39 @@ These differ from older wgpu tutorials/examples:
 src/
   app.rs                    # GpuState + App (ApplicationHandler), WASD, per-frame rebase
   hyperbolic/
-    poincare.rs             # Complex, Mobius, canonical_octagon, neighbor_transforms
+    poincare.rs             # Complex, Mobius, canonical_polygon, neighbor_transforms
     tiling.rs               # Tile (canonical Vec<u8> address), TilingState (BFS + spatial dedup)
     embedding.rs            # disk_to_hyperboloid (Y-up)
   render/
-    mesh.rs                 # Vertex (32 bytes), concentric ring subdivision (4 rings, 3 segs/side)
+    mesh.rs                 # Vertex (32 bytes), concentric ring subdivision (8 rings, 4 segs/side)
     pipeline.rs             # Uniforms (view_proj + mobius_a_b + disk_params), RenderPipeline
     camera.rs               # First-person Camera with view_mobius, rebase support
     shader.wgsl             # Mobius + hyperboloid in vertex, eldritch palette + lighting in fragment
 ```
 
+## Tiling
+
+Locked to **{4,n}** (square cells). The parameter n is configurable (default 5) and
+controls curvature / difficulty. Cells are hyperbolic squares with a 64x64 internal grid.
+Grid overlay uses the Klein model where geodesics are straight lines, so grid lines
+are geodesics parallel to cell edges.
+
 ## Math Constants
 
-For {p,q} = {8,3}:
+For a generic {p,q} tiling:
 
-- Circumradius (center to vertex): `cosh(chi) = cot(pi/p) * cot(pi/q) = cot(pi/8) * cot(pi/3)`
-- Inradius (center to edge midpoint): `cosh(psi) = cos(pi/q) / sin(pi/p) = cos(pi/3) / sin(pi/8)`
-- Half-edge length: `cosh(phi) = cos(pi/p) / sin(pi/q) = cos(pi/8) / sin(pi/3)`
+- Circumradius (center to vertex): `cosh(chi) = cot(pi/p) * cot(pi/q)`
+- Inradius (center to edge midpoint): `cosh(psi) = cos(pi/q) / sin(pi/p)`
+- Half-edge length: `cosh(phi) = cos(pi/p) / sin(pi/q)`
+- Poincare disk radius: `r_disk = tanh(chi/2)`
+- Klein disk radius: `r_klein = 2*r_disk / (1 + r_disk^2)`
+- Klein half-side ({4,n} square): `r_klein / sqrt(2)`
 
-{8,3} octagon Poincare disk circumradius: **~0.4056**
+{4,5} square Poincare disk circumradius: **~0.3846**
 
 ```
-cosh(chi) = cot(pi/8) * cot(pi/3) = 1.3938
-r_disk = tanh(chi/2) = 0.4056
+cosh(chi) = cot(pi/4) * cot(pi/5) = 1.3764
+r_disk = tanh(chi/2) = 0.3846
 ```
 
 Center-to-center distance: `D = 2 * psi`, `cosh(D) = 2*cosh(psi)^2 - 1`

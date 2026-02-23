@@ -27,6 +27,7 @@ pub fn settings_menu(
                 ui.selectable_value(&mut tab, SettingsTab::KeyBindings, "Key Bindings");
                 ui.selectable_value(&mut tab, SettingsTab::Graphics, "Graphics");
                 ui.selectable_value(&mut tab, SettingsTab::Gameplay, "Gameplay");
+                ui.selectable_value(&mut tab, SettingsTab::Debug, "Debug");
             });
 
             ui.data_mut(|d| d.insert_temp(tab_id, tab));
@@ -80,6 +81,9 @@ pub fn settings_menu(
                             .weak(),
                     );
                 }
+                SettingsTab::Debug => {
+                    ui.checkbox(&mut config.debug.log_clicks, "Log click interactions to console");
+                }
             }
 
             ui.separator();
@@ -96,4 +100,5 @@ enum SettingsTab {
     KeyBindings,
     Graphics,
     Gameplay,
+    Debug,
 }

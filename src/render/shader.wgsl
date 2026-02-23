@@ -1,11 +1,13 @@
 // Octofact shader: Mobius transform + gentle bowl embedding in vertex,
-// eldritch palette + lighting in fragment.
+// eldritch palette + Klein-model grid + lighting in fragment.
+// Grid assumes {4,n} square cells (edges axis-aligned in Klein disk).
 
 struct Uniforms {
     view_proj: mat4x4<f32>,
     mobius_a: vec4<f32>,
     mobius_b: vec4<f32>,
     disk_params: vec4<f32>,
+    grid_params: vec4<f32>,
 };
 
 @group(0) @binding(0)
@@ -173,7 +175,37 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     // Subtle rim highlight at tile edges for separation
     let rim = smoothstep(0.75, 1.0, edge) * 0.06;
-    let final_color = color + vec3<f32>(rim * 0.4, rim * 0.3, rim * 0.7);
+    var final_color = color + vec3<f32>(rim * 0.4, rim * 0.3, rim * 0.7);
+
+    // Grid overlay (top face only, {4,n} square cells)
+    // Uses Klein model where geodesics are straight lines, so grid lines
+    // in Klein coords are geodesics parallel to cell edges.
+    if u.grid_params.x > 0.5 && in.uv.x > -0.5 && in.uv.x < 0.5 {
+        // Reconstruct pre-Mobius local position via inverse Mobius on world_pos.xz
+        let w = vec2<f32>(in.world_pos.x, in.world_pos.z);
+        let a = u.mobius_a.xy;
+        let b = u.mobius_b.xy;
+        let inv_num = cmul(cconj(a), w) - b;
+        let inv_den = a - cmul(cconj(b), w);
+        let local_p = cdiv(inv_num, inv_den);
+
+        // Poincare disk -> Klein disk: K = 2P / (1 + |P|^2)
+        let r2 = dot(local_p, local_p);
+        let local_k = 2.0 * local_p / (1.0 + r2);
+
+        // Normalize by Klein half-side so edges map to ±0.5
+        // grid_params.w = klein_half_side (r_klein / sqrt(2) for {4,n})
+        let norm = local_k / (2.0 * u.grid_params.w);
+
+        // Grid at N divisions (grid_params.y)
+        let gp = norm * u.grid_params.y;
+        let fx = fract(gp.x);
+        let fy = fract(gp.y);
+        let nearest = min(min(fx, 1.0 - fx), min(fy, 1.0 - fy));
+        let lw = u.grid_params.z;
+        let t = smoothstep(0.0, lw, nearest);
+        final_color = mix(vec3<f32>(0.06, 0.06, 0.10), final_color, t);
+    }
 
     return vec4<f32>(final_color, 1.0);
 }

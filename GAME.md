@@ -116,19 +116,19 @@ The world has two scales of structure:
 
 **Macro: the hyperbolic tiling.** {4, n} squares connected by the curvature of the Surface. This is the scale of the Poincare disk, Mobius transforms, and canonical addresses. Each square is a *cell* — a distinct region of the Surface.
 
-**Micro: the internal grid.** Each cell contains a 128x128 Euclidean grid. This is where you actually build. Structures, belts, pipes, and rail are placed on grid squares within a cell. Inside a single cell, the geometry is flat — a normal factory grid. The hyperbolic curvature only matters at the cell boundaries, where neighboring cells meet at angles that don't add up to 360 degrees.
+**Micro: the internal grid.** Each cell contains a 64x64 Euclidean grid. This is where you actually build. Structures, belts, pipes, and rail are placed on grid squares within a cell. Inside a single cell, the geometry is flat — a normal factory grid. The hyperbolic curvature only matters at the cell boundaries, where neighboring cells meet at angles that don't add up to 360 degrees.
 
-128x128 = 16,384 build slots per cell. That's enough to hold a starter factory in the origin cell, or a major processing hub, or a dense rail junction. It is *not* enough to hold an entire late-game production chain. You will outgrow your first cell. You will outgrow your first several cells. The Surface makes sure of that.
+64x64 = 4,096 build slots per cell. That's enough to hold a starter factory in the origin cell, or a major processing hub, or a dense rail junction. It is *not* enough to hold an entire late-game production chain. You will outgrow your first cell. You will outgrow your first several cells. The Surface makes sure of that.
 
 ### Cell Boundaries
 
-When a belt, pipe, or rail reaches the edge of a cell, it can connect to the corresponding edge of the neighboring cell. Each cell has 4 edges (it's a square), and each edge is 128 grid units long. The connection points at cell boundaries are where the Euclidean interior meets the hyperbolic exterior — this is where logistics gets interesting.
+When a belt, pipe, or rail reaches the edge of a cell, it can connect to the corresponding edge of the neighboring cell. Each cell has 4 edges (it's a square), and each edge is 64 grid units long. The connection points at cell boundaries are where the Euclidean interior meets the hyperbolic exterior — this is where logistics gets interesting.
 
 **Cell corners are dead zones.** At a vertex of the hyperbolic tiling, n cells meet (not 4, as in flat space). The geometry at these corners is ambiguous — which cell does a grid square at the corner belong to? Rather than solve this, building is banned in a small exclusion zone around each corner (a few grid squares). Nothing can be placed there: no belts, no pipes, no structures. The corners are where the hyperbolic curvature concentrates, and the game makes that visible by leaving them empty. Transport crosses cell boundaries only along edges, not through corners.
 
 ### Building
 
-Structures are placed on the 128x128 internal grid of a cell. Sizes below are in grid squares.
+Structures are placed on the 64x64 internal grid of a cell. Sizes below are in grid squares.
 
 | Structure | Size | Function |
 |-----------|------|----------|
@@ -162,9 +162,9 @@ Splitters can also filter by item type on each port — set a port to only accep
 
 ### Expansion
 
-You start in the origin cell with 128x128 grid squares, a handful of starter Composers, and nothing else. Early game happens entirely within this one cell — mine Null Sets and Points, compose your first Line Segments, build Belts, bootstrap more Composers. It feels like a normal factory game.
+You start in the origin cell with 64x64 grid squares, a handful of starter Composers, and nothing else. Early game happens entirely within this one cell — mine Null Sets and Points, compose your first Line Segments, build Belts, bootstrap more Composers. It feels like a normal factory game.
 
-Then you run out of room, or you need a resource that doesn't spawn in the origin cell, and you step across a cell boundary for the first time. The neighboring cell is another 128x128 grid, but getting materials back to your origin hub now requires belts or rail that cross the boundary. And the cell after that is another boundary crossing. And there are more neighbors than you expected, because n > 4 cells meet at each vertex.
+Then you run out of room, or you need a resource that doesn't spawn in the origin cell, and you step across a cell boundary for the first time. The neighboring cell is another 64x64 grid, but getting materials back to your origin hub now requires belts or rail that cross the boundary. And the cell after that is another boundary crossing. And there are more neighbors than you expected, because n > 4 cells meet at each vertex.
 
 The visible tiling grows outward via BFS from the player's current neighborhood. Explored cells persist — buildings stay where you put them — but the rendered region is bounded. The rebase compass is your lifeline: it tells you the canonical direction back to origin (or to any beacon you've placed), because in hyperbolic space, getting lost is geometrically easy. Every direction looks the same, and there are exponentially many ways to go wrong.
 
@@ -214,15 +214,15 @@ Each cell has 4 edges and 4 corners, just like a flat square. But at each corner
 
 - **Cell-boundary junctions are more complex.** Where belt or rail lines exit a cell corner, there are n-1 possible destination cells instead of 3. Junction design at these vertices is a unique puzzle.
 - **More neighbors means more routes.** Each cell borders 4 edge-neighbors and shares vertices with additional cells beyond those. The network topology is denser than flat space.
-- **But path-counting is harder.** The branching factor of the cell graph is higher, so finding optimal routes between distant cells is computationally and cognitively more difficult. Within a cell, the 128x128 grid is Euclidean and familiar. The hyperbolic complexity lives at the boundaries.
+- **But path-counting is harder.** The branching factor of the cell graph is higher, so finding optimal routes between distant cells is computationally and cognitively more difficult. Within a cell, the 64x64 grid is Euclidean and familiar. The hyperbolic complexity lives at the boundaries.
 
 ### The center is precious
 
-The origin cell — 128x128 grid squares, where you first arrived — is the one distinguished location on the Surface. Everything else is defined relative to it. And because all transport is physical, the origin cell naturally becomes the hub.
+The origin cell — 64x64 grid squares, where you first arrived — is the one distinguished location on the Surface. Everything else is defined relative to it. And because all transport is physical, the origin cell naturally becomes the hub.
 
 In hyperbolic space, the shortest path between two frontier cells almost always passes through (or near) the center. Two mining outposts at canonical depth 15 in different directions are astronomically far from each other, but both are only 15 cell hops from origin. This makes the origin cell the natural location for your main processing complex, your train junction, your pipeline manifold. Raw materials flow inward from frontier mines along spoke routes; finished goods flow outward to extraction beacons.
 
-The tension: 128x128 is a lot of space, but it's finite. Every spoke route from the frontier enters the origin cell through one of its 4 edges, and each edge is only 128 grid units wide. As your factory scales, the origin cell becomes a dense tangle of belts, pipes, and rail — a logistics knot that you're constantly redesigning to fit one more trunk line through. You can offload processing to neighboring cells, but those cells are also transit corridors for deeper spokes. The center has the best logistics and the worst congestion, and you can never quite solve it, only push the bottleneck around.
+The tension: 64x64 is a lot of space, but it's finite. Every spoke route from the frontier enters the origin cell through one of its 4 edges, and each edge is only 64 grid units wide. As your factory scales, the origin cell becomes a dense tangle of belts, pipes, and rail — a logistics knot that you're constantly redesigning to fit one more trunk line through. You can offload processing to neighboring cells, but those cells are also transit corridors for deeper spokes. The center has the best logistics and the worst congestion, and you can never quite solve it, only push the bottleneck around.
 
 ---
 
@@ -334,4 +334,4 @@ Config is separate from save data. A fresh install with an existing config file 
 
 **Single-player.** Multiplayer is out of scope. The isolation is thematically load-bearing. (The Surface is theoretically large enough to share — two players could build toward each other across exponential space — but this is a someday-maybe, not a design target.)
 
-**Persistence.** Save only actually discovered cells, not everything within a radius. There might be 3 billion cells within 20 hops of origin, but the player will only visit a thin tree of paths through that space. Undiscovered cells don't exist in the save file — they're generated on first visit from a deterministic seed keyed to their canonical address. Discovered cells persist their 128x128 grid state (structures, belt contents, resource depletion). This keeps save files proportional to the player's actual footprint, not the exponential volume of the space they've nominally "reached."
+**Persistence.** Save only actually discovered cells, not everything within a radius. There might be 3 billion cells within 20 hops of origin, but the player will only visit a thin tree of paths through that space. Undiscovered cells don't exist in the save file — they're generated on first visit from a deterministic seed keyed to their canonical address. Discovered cells persist their 64x64 grid state (structures, belt contents, resource depletion). This keeps save files proportional to the player's actual footprint, not the exponential volume of the space they've nominally "reached."

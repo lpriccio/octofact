@@ -18,7 +18,7 @@ fn main() {
             args[2].parse().expect("q must be a positive integer"),
         )
     } else {
-        (8, 3)
+        (4, 5)
     };
 
     let event_loop = EventLoop::new().expect("failed to create event loop");

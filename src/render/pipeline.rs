@@ -8,7 +8,8 @@ pub struct Uniforms {
     pub mobius_a: [f32; 4],
     pub mobius_b: [f32; 4],
     pub disk_params: [f32; 4],
-    pub _pad: [[f32; 4]; 9], // pad to 256 bytes for alignment
+    pub grid_params: [f32; 4],
+    pub _pad: [[f32; 4]; 8], // pad to 256 bytes for alignment
 }
 
 impl Default for Uniforms {
@@ -18,7 +19,8 @@ impl Default for Uniforms {
             mobius_a: [1.0, 0.0, 0.0, 0.0],
             mobius_b: [0.0, 0.0, 0.0, 0.0],
             disk_params: [0.0, 0.0, 0.0, 0.0],
-            _pad: [[0.0; 4]; 9],
+            grid_params: [0.0, 64.0, 0.03, 0.3],
+            _pad: [[0.0; 4]; 8],
         }
     }
 }

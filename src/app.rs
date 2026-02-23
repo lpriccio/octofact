@@ -10,13 +10,19 @@ use crate::game::config::GameConfig;
 use crate::game::input::{GameAction, InputState};
 use crate::game::inventory::Inventory;
 use crate::game::recipes::RecipeIndex;
-use crate::hyperbolic::poincare::{canonical_polygon, Complex, Mobius, TilingConfig};
+use crate::hyperbolic::poincare::{canonical_polygon, polygon_disk_radius, Complex, Mobius, TilingConfig};
 use crate::hyperbolic::tiling::{format_address, TilingState};
 use crate::render::mesh::build_polygon_mesh;
 use crate::render::pipeline::{RenderState, Uniforms};
 use crate::ui::icons::IconAtlas;
 use crate::ui::integration::EguiIntegration;
 use crate::ui::style::apply_octofact_style;
+
+struct ClickResult {
+    tile_idx: usize,
+    grid_xy: (i32, i32),
+    local_disk: Complex,
+}
 
 fn project_to_screen(world_pos: glam::Vec3, view_proj: &glam::Mat4, width: f32, height: f32) -> Option<(f32, f32)> {
     let clip = *view_proj * glam::Vec4::new(world_pos.x, world_pos.y, world_pos.z, 1.0);
@@ -160,6 +166,10 @@ pub struct App {
     settings_open: bool,
     inventory_open: bool,
     rebinding: Option<GameAction>,
+    grid_enabled: bool,
+    klein_half_side: f64,
+    flash_screen_pos: Option<(f32, f32)>,
+    flash_timer: f32,
 }
 
 impl App {
@@ -183,6 +193,16 @@ impl App {
             settings_open: false,
             inventory_open: false,
             rebinding: None,
+            grid_enabled: false,
+            klein_half_side: {
+                // For {4,n} squares: Klein half-side = r_klein / sqrt(2)
+                // where r_klein = 2*r_poincare / (1 + r_poincare^2)
+                let r_p = polygon_disk_radius(&cfg);
+                let r_k = 2.0 * r_p / (1.0 + r_p * r_p);
+                r_k / std::f64::consts::SQRT_2
+            },
+            flash_screen_pos: None,
+            flash_timer: 0.0,
         }
     }
 
@@ -319,19 +339,41 @@ impl App {
         }
     }
 
-    fn handle_click(&mut self, sx: f64, sy: f64, delta: f32) {
-        let running = match self.running.as_ref() {
-            Some(r) => r,
-            None => return,
-        };
+    fn unproject_to_disk(&self, sx: f64, sy: f64) -> Option<Complex> {
+        let running = self.running.as_ref()?;
+        let width = running.gpu.config.width as f32;
+        let height = running.gpu.config.height as f32;
+        let aspect = width / height;
+        let view_proj = self.build_view_proj(aspect);
+        let inv_vp = view_proj.inverse();
 
+        let ndc_x = 2.0 * (sx as f32 / width) - 1.0;
+        let ndc_y = 1.0 - 2.0 * (sy as f32 / height);
+
+        let near = inv_vp * glam::Vec4::new(ndc_x, ndc_y, -1.0, 1.0);
+        let far = inv_vp * glam::Vec4::new(ndc_x, ndc_y, 1.0, 1.0);
+        let near = glam::Vec3::new(near.x / near.w, near.y / near.w, near.z / near.w);
+        let far = glam::Vec3::new(far.x / far.w, far.y / far.w, far.z / far.w);
+
+        let dir = far - near;
+        if dir.y.abs() < 1e-8 {
+            return None;
+        }
+        let t = -near.y / dir.y;
+        if t < 0.0 {
+            return None;
+        }
+        let hit = near + dir * t;
+        Some(Complex::new(hit.x as f64, hit.z as f64))
+    }
+
+    fn find_clicked_tile(&self, sx: f64, sy: f64) -> Option<ClickResult> {
+        let running = self.running.as_ref()?;
         let width = running.gpu.config.width as f32;
         let height = running.gpu.config.height as f32;
         let aspect = width / height;
         let view_proj = self.build_view_proj(aspect);
         let inv_view = self.camera_local.inverse();
-
-        let running = self.running.as_ref().unwrap();
         let click_sx = sx as f32;
         let click_sy = sy as f32;
 
@@ -363,9 +405,54 @@ impl App {
             }
         }
 
-        if let Some(idx) = best_idx {
-            *self.running.as_mut().unwrap().extra_elevation.entry(idx).or_insert(0.0) += delta;
+        let tile_idx = best_idx?;
+
+        // Compute grid-snapped local position
+        let grid_scale = 32.0_f64;
+        let click_disk = self.unproject_to_disk(sx, sy);
+        let tile_xform = running.tiling.tiles[tile_idx].transform;
+        let combined = inv_view.compose(&tile_xform);
+        let inv_combined = combined.inverse();
+
+        let (grid_xy, local_disk) = if let Some(disk_pos) = click_disk {
+            let local = inv_combined.apply(disk_pos);
+            let gx = (local.re * grid_scale).round() as i32;
+            let gy = (local.im * grid_scale).round() as i32;
+            let snapped = Complex::new(gx as f64 / grid_scale, gy as f64 / grid_scale);
+            ((gx, gy), snapped)
+        } else {
+            ((0, 0), Complex::ZERO)
+        };
+
+        Some(ClickResult { tile_idx, grid_xy, local_disk })
+    }
+
+    fn handle_click(&mut self, sx: f64, sy: f64, delta: f32) {
+        let result = match self.find_clicked_tile(sx, sy) {
+            Some(r) => r,
+            None => return,
+        };
+
+        if self.config.debug.log_clicks {
+            let tile = &self.running.as_ref().unwrap().tiling.tiles[result.tile_idx];
+            log::info!(
+                "Click: tile[{}] addr={} grid=({},{}) local=({:.4},{:.4})",
+                result.tile_idx,
+                format_address(&tile.address),
+                result.grid_xy.0,
+                result.grid_xy.1,
+                result.local_disk.re,
+                result.local_disk.im,
+            );
+
+            // Set flash at click screen position
+            let running = self.running.as_ref().unwrap();
+            let scale = running.gpu.window.scale_factor() as f32;
+            self.flash_screen_pos = Some((sx as f32 / scale, sy as f32 / scale));
+            self.flash_timer = 0.4;
         }
+
+        *self.running.as_mut().unwrap().extra_elevation.entry(result.tile_idx).or_insert(0.0) += delta;
     }
 
     fn render_frame(&mut self) -> Result<(), wgpu::SurfaceError> {
@@ -416,6 +503,12 @@ impl App {
                 mobius_a: [combined.a.re as f32, combined.a.im as f32, 0.0, 0.0],
                 mobius_b: [combined.b.re as f32, combined.b.im as f32, 0.0, 0.0],
                 disk_params: [tile.depth as f32, elevation, slot as f32 * 1e-6, 13.0],
+                grid_params: [
+                    if self.grid_enabled { 1.0 } else { 0.0 },
+                    64.0,  // 64 grid divisions per cell edge
+                    0.03,  // line width in grid-cell units
+                    self.klein_half_side as f32,
+                ],
                 ..Default::default()
             };
             running.render.write_tile_uniforms(&running.gpu.queue, slot, &uniforms);
@@ -480,6 +573,27 @@ impl App {
             &running.icon_atlas,
             &self.recipes,
         );
+
+        // Debug click flash
+        if self.flash_timer > 0.0 {
+            if let Some((fx, fy)) = self.flash_screen_pos {
+                let alpha = (self.flash_timer / 0.4).clamp(0.0, 1.0);
+                let a = (alpha * 255.0) as u8;
+                let egui_ctx = running.egui.ctx.clone();
+                egui::Area::new(egui::Id::new("debug_flash"))
+                    .order(egui::Order::Foreground)
+                    .fixed_pos(egui::pos2(fx, fy))
+                    .interactable(false)
+                    .show(&egui_ctx, |ui| {
+                        let painter = ui.painter();
+                        painter.circle_filled(
+                            egui::pos2(fx, fy),
+                            6.0,
+                            egui::Color32::from_rgba_unmultiplied(255, 255, 255, a),
+                        );
+                    });
+            }
+        }
 
         let full_output = running.egui.end_frame(&window);
 
@@ -639,6 +753,10 @@ impl ApplicationHandler for App {
                         self.camera_height = if self.first_person { 0.05 } else { 2.0 };
                         log::info!("view: {}", if self.first_person { "first-person" } else { "top-down" });
                     }
+                    if self.input_state.just_pressed(GameAction::ToggleGrid) {
+                        self.grid_enabled = !self.grid_enabled;
+                        log::info!("grid: {}", if self.grid_enabled { "ON" } else { "OFF" });
+                    }
                 }
             }
         }
@@ -704,6 +822,9 @@ impl ApplicationHandler for App {
         if let Some(last) = self.last_frame {
             let dt = now.duration_since(last).as_secs_f64();
             self.process_movement(dt);
+            if self.flash_timer > 0.0 {
+                self.flash_timer = (self.flash_timer - dt as f32).max(0.0);
+            }
         }
         self.last_frame = Some(now);
         self.input_state.end_frame();

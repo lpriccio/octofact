@@ -17,6 +17,7 @@ pub enum GameAction {
     PlaceStructure,
     RemoveStructure,
     RotateStructure,
+    ToggleGrid,
 }
 
 impl GameAction {
@@ -35,6 +36,7 @@ impl GameAction {
             Self::PlaceStructure => "Place Structure",
             Self::RemoveStructure => "Remove Structure",
             Self::RotateStructure => "Rotate Structure",
+            Self::ToggleGrid => "Toggle Grid",
         }
     }
 
@@ -44,7 +46,7 @@ impl GameAction {
             MoveForward, MoveBackward, StrafeLeft, StrafeRight,
             CameraUp, CameraDown, ToggleLabels, OpenSettings,
             OpenInventory, ToggleViewMode, PlaceStructure,
-            RemoveStructure, RotateStructure,
+            RemoveStructure, RotateStructure, ToggleGrid,
         ]
     }
 }
@@ -165,6 +167,7 @@ pub fn default_bindings() -> HashMap<GameAction, KeyBind> {
         (OpenInventory, KeyBind::new(KeyCode::Tab)),
         (ToggleViewMode, KeyBind::new(KeyCode::Backquote)),
         (RotateStructure, KeyBind::new(KeyCode::KeyR)),
+        (ToggleGrid, KeyBind::new(KeyCode::KeyG)),
     ])
 }
 
@@ -273,6 +276,6 @@ mod tests {
 
     #[test]
     fn test_all_actions_listed() {
-        assert_eq!(GameAction::all().len(), 13);
+        assert_eq!(GameAction::all().len(), 14);
     }
 }

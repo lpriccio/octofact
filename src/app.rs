@@ -375,7 +375,7 @@ impl App {
                 view_proj: view_proj.to_cols_array_2d(),
                 mobius_a: [combined.a.re as f32, combined.a.im as f32, 0.0, 0.0],
                 mobius_b: [combined.b.re as f32, combined.b.im as f32, 0.0, 0.0],
-                disk_params: [tile.depth as f32, elevation, slot as f32 * 1e-6, self.cfg.p as f32],
+                disk_params: [tile.depth as f32, elevation, slot as f32 * 1e-6, 13.0],
                 ..Default::default()
             };
             running.render.write_tile_uniforms(&running.gpu.queue, slot, &uniforms);

@@ -192,6 +192,16 @@ Cosmic industrial solitude. You are running a factory on a surface that violates
 
 The horror is the geometry itself: infinite, proliferating, indifferent. You are a small operation on an incomprehensibly large surface, and every direction you expand reveals that there is always more.
 
+### Asset Pipeline
+
+No external modeling tools. The geometric/abstract aesthetic is a strength — everything can be expressed as math.
+
+**Phase 1: Procedural geometry.** All structures are Rust functions that emit `Vec<Vertex>` + `Vec<u16>`, extending the existing `build_polygon_mesh` pattern. A Shaper is a truncated icosahedron. A Monopole Tower is a tapered cylinder with radial fins. Belt segments are extruded ribbons along tile edges. Train stations are beveled rectangular prisms. Every shape is code, living next to the math it represents. Iteration cycle is compile-run-look, but for parametric geometry that's fast enough.
+
+**Phase 2: SDF raymarching for showcase objects.** Add a second render pass that raymarches signed distance functions in WGSL for the objects that *should* look impossible. Klein Bottles on belt lines (parametric SDF, non-orientable surface rendered correctly). Monopole field visualizations (radial field lines decaying along the hyperbolic grid). White Hole singularities (glowing emission, no surface, just light). Boltzmann Node flicker effects (stochastic SDF perturbation). These are small on screen and bounded in count, so the per-pixel cost is manageable. SDF lighting must match the rasterized tile lighting to stay cohesive.
+
+The bulk of the world — tiles, belts, pipes, rail, building footprints, terrain — stays rasterized procedural geometry forever. SDFs are reserved for the handful of objects where the math *is* the visual, and meshing them would lose the point.
+
 ### Sound (Future)
 
 - Ambient: low harmonic drones that shift pitch based on local curvature density

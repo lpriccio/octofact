@@ -4,14 +4,19 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-wgpu = "28"
+wgpu = "27"
 winit = "0.30"
 pollster = "0.4"
 bytemuck = { version = "1", features = ["derive"] }
 glam = "0.29"
 env_logger = "0.11"
 log = "0.4"
-glyphon = "0.10"
+egui = "0.33"
+egui-wgpu = "0.33"
+egui-winit = "0.33"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+directories = "6"
 
 [profile.release]
 opt-level = 3

@@ -14,55 +14,91 @@ You are alone on an alien mathematical surface with a fabricator, a rebase compa
 
 ### Raw Materials
 
-Resources emerge from the Surface itself, spawning at rates proportional to the local curvature density (more tiles nearby = richer yields in hyperbolic space, which means the further from your origin, the denser things get).
+Resources emerge from the Surface itself — mathematical primitives that crystallize in the negative curvature. Miners extract them from deposits within cells.
 
 | Resource | Description | Spawn pattern |
 |----------|-------------|---------------|
-| **Geodesic Stress** | Raw curvature energy. The Surface is under tension everywhere — this is the stuff that makes parallel lines diverge. Crystallizes along tile edges. | Edge deposits, common |
-| **Metric Foam** | The local fabric of space itself, skimmed where the metric is most dilated. Iridescent, slightly unsettling to look at. | Center deposits, common |
-| **Boundary Flux** | Leaked energy from the Poincare disk boundary — the place where the model says "infinity." Condenses near the frontier of explored space. | Frontier deposits, uncommon |
-| **Zero Ore** | Dense, black, and humming. Found only deep in the tiling. Named for what it contains: the raw substrate from which Riemann Zeroes can be extracted. | Deep deposits, rare |
+| **Null Sets** | The emptiness itself, structured. Crystallized absence that the Surface produces where the metric thins toward zero. | Common, evenly distributed |
+| **Points** | Dimensionless position-objects. The atomic unit of geometry on the Surface. Dense clusters near tile centers. | Common, evenly distributed |
+| **Preimages** | Ghosts of functions that haven't been applied yet. The Surface is full of latent mappings waiting to be realized. Shimmering, unstable until processed. | Uncommon, patchy distribution |
+| **Wavelets** | Oscillatory fragments of the Surface's vibrational modes. The plane hums, and wavelets are the harvestable residue. | Uncommon, frontier-weighted |
 
 ### Processing Chains
 
-The production chain climbs from raw geometry toward objects that shouldn't be able to exist — famous mathematical and physical paradoxes, impossible constructs, and theoretical mcguffins made real by the Surface's broken rules.
+The production chain is built on mathematical operations made physical. Machines don't smelt or assemble — they *compose*, *invert*, *embed*, *quotient*, and *transform*. The items they produce are mathematical objects: line segments, functions, cubes, standing waves. The factory is a proof engine.
 
-#### Tier 1 — Extraction
+Full item and recipe details are in [ITEMS.md](ITEMS.md).
 
-Miners sit on tiles and pull raw material. One miner per tile. Output rate depends on resource density.
+#### Machines
 
-#### Tier 2 — Refinement
+Each machine type performs a single mathematical operation. Machines are themselves manufactured items — your factory builds its own means of production.
 
-Smelters and shapers combine raw materials into paradox components. Recipes use the geometry: a smelter must be adjacent to a specific number of input sources, and "adjacent" on hyperbolic grids means something different than on flat ones.
+| Machine | Tier | Inputs | Outputs | Size | Operation |
+|---------|------|--------|---------|------|-----------|
+| Composer | T1 | 1 | 1 | 3x3 | Combines items into composite structures. The workhorse. |
+| Inverter | T1 | 1 | 1 | 1x1 | Reverses a mapping. Turns preimages into functions, cubes into Necker cubes. |
+| Embedder | T2 | 2 | 1 | 2x2 | Maps one object into the structure of another. |
+| Quotient | T2 | 2 | 2 | 2x4 | Divides one structure by another, producing both the quotient and remainder. |
+| Transformer | T2 | 3 | 3 | 6x3 | Applies a transformation across multiple inputs simultaneously. |
 
-| Recipe | Inputs | Output | Notes |
-|--------|--------|--------|-------|
-| Klein Bottle | 4 Metric Foam | 1 Klein Bottle | The Surface's negative curvature allows non-orientable manifolds to close. Used as universal containers — they hold more than their volume because inside and outside aren't distinct. The basic logistics container for all higher-tier transport. |
-| Magnetic Monopole | 3 Geodesic Stress + 1 Boundary Flux | 1 Monopole | Maxwell's equations lose a symmetry constraint on the Surface. Monopoles are the power source: each one generates a field that decays hyperbolically rather than inverse-square, making power transmission across exponential distances feasible. |
-| Riemann Zero | 2 Zero Ore + 1 Klein Bottle | 1 Riemann Zero | Extracted, stabilized non-trivial zeroes of the zeta function. On the Surface, the critical strip has physical extent — zeroes are *locations*, not just numbers. Each one is unique and acts as an information-dense seed for higher synthesis. Whether they all have real part 1/2 is... empirically likely, but the foundry has occasionally produced anomalous results. |
-| Penrose Tile | 2 Metric Foam + 2 Geodesic Stress | 1 Penrose Tile | Aperiodic crystal fragments that the Surface generates spontaneously. Never repeat, never quite the same. Used as structural material — buildings made from Penrose Tiles are stable against geometric perturbation because they have no periodic weakness to exploit. |
+#### Tier 1 — Composition & Inversion
 
-#### Tier 3 — Synthesis
+Built from raw resources using Composers and Inverters. This is where geometry bootstraps into algebra.
 
-Assemblers combine Tier 2 components into impossible artifacts. These require larger footprints and precise spatial arrangements.
+| Recipe | Machine | Inputs | Output |
+|--------|---------|--------|--------|
+| Line Segment | Composer | 2x Point | 1x Line Segment |
+| Exact Sequence | Composer | 3x Preimage | 1x Exact Sequence |
+| Identity | Composer | 1x Null Set | 1x Identity |
+| Square | Composer | 4x Line Segment | 1x Square |
+| Cube | Composer | 6x Square | 1x Cube |
+| Standing Wave | Composer | 2x Wavelet | 1x Standing Wave |
+| Function | Inverter | 1x Preimage | 1x Function |
+| Necker Cube | Inverter | 1x Cube | 1x Necker Cube |
+| Image | Inverter | 1x Preimage | 1x Image |
 
-| Recipe | Inputs | Output | Notes |
-|--------|--------|--------|-------|
-| Last Theorem | 3 Riemann Zeroes + 2 Penrose Tiles | 1 Last Theorem | A crystallized proof-object. Fermat's marginal note, made physical: a structure that encodes the impossibility of a^n + b^n = c^n for n > 2 as a stable lattice constraint. Used as the core logic element in advanced assemblers — it enforces exact conservation laws on material flow by making violations *structurally impossible*. |
-| White Hole | 2 Monopoles + 1 Last Theorem + 4 Klein Bottles | 1 White Hole | The time-reverse of a black hole. On the Surface, where the geometry permits closed timelike curves if you go deep enough, white holes are constructible: singularities that only emit. They are the endgame power source — a white hole outputs energy forever, but cannot be turned off or moved once placed. Choose the location wisely. |
-| Boltzmann Brain | 5 Riemann Zeroes + 1 White Hole | 1 Boltzmann Brain | A spontaneous fluctuation into consciousness, pinned and stabilized by the information density of the zeroes and the inexhaustible output of the white hole. The ultimate compute substrate. A Boltzmann Brain doesn't run programs — it *is* every possible computation simultaneously, and you query it for the one you need. Used to automate entire factory sub-networks: feed it a logistics problem, and it has always already solved it. |
+**Self-bootstrapping items** — the factory builds itself:
 
-#### Tier 4 — Extraction Beacons
+| Recipe | Machine | Inputs | Output | Notes |
+|--------|---------|--------|--------|-------|
+| Belt | Composer | 1x Line Segment | 1x Belt | You manufacture your own logistics. |
+| Axiomatic Science | Composer | 1x Cube | 1x Axiomatic Science | Research feedstock. |
+| Composer | Composer | 2x Function | 1x Composer | The machine that builds itself. |
+| Inverter | Inverter | 1x Composer | 1x Inverter | Bootstrap from a Composer. |
+| Knowledge Sheaf | Composer | 12x Axiomatic Science | 1x Knowledge Sheaf | Science consumer (5x5). |
 
-The endgame structure. An extraction beacon folds finished goods through a controlled geometric collapse — compressing the hyperbolic product into flat-space-compatible form for transmission off the Surface. Each beacon requires a White Hole (for power), a Boltzmann Brain (for the fold calculations), Last Theorems (for structural integrity), and a truly absurd quantity of Klein Bottles (for containment during the dimensional reduction).
+**Power chain:**
 
-The cruel joke: building one beacon is a triumph. But your civilization's needs are exponential. And the Surface, being hyperbolic, can always accommodate more.
+| Recipe | Machine | Inputs | Output | Notes |
+|--------|---------|--------|--------|-------|
+| Quadrupole | Composer | 4x Identity | 1x Quadrupole | Electrical pole. |
+| Dynamo | Composer | 2x Quadrupole | 1x Dynamo | Power generator. |
+
+#### Tier 2 — Embedding
+
+Embedders combine T1 products into higher-dimensional structures. This is where things get strange.
+
+| Recipe | Machine | Inputs | Output |
+|--------|---------|--------|--------|
+| Root of Unity | Embedder | Preimage + Unity | 1x Root of Unity |
+| Kernel | Embedder | Identity + Preimage | 1x Kernel |
+| Quantum | Embedder | Standing Wave + Cube | 1x Quantum |
+
+#### Later Tiers (TBD)
+
+Quotients and Transformers enable higher-tier production chains. The endgame items — Klein Bottles, Riemann Zeroes, Last Theorems, White Holes, Boltzmann Brains — build on the T1/T2 foundation but their exact recipes are unresolved. The extraction beacon remains the ultimate goal.
 
 ### Transport
 
-Three physical transport systems, unlocked in sequence. No teleportation, no abstracted logistics towers — everything moves through space, and the space is hyperbolic, so everything is harder than it looks.
+Three physical transport systems, unlocked in sequence. No long-range teleportation, no abstracted logistics towers — everything moves through space, and the space is hyperbolic, so everything is harder than it looks.
 
-**Belts** are the backbone. They follow tile edges, one hop per tick. Items travel in Klein Bottles. Belt routing is the core logistical challenge: hyperbolic space means belt networks that look local on the Poincare disk are actually covering enormous metric distances, and the geodesic between two points curves through the disk. Long belt runs visibly bend. Designing a belt network that doesn't knot itself is a genuine puzzle, and the higher the n in {4, n}, the worse it gets.
+**Belts** are the backbone. They follow grid edges, one hop per tick. Items travel in Klein Bottles. Belts connect directly into buildings — no inserters, no loader arms. A belt entering a Shaper's footprint feeds it; a belt exiting carries product. Buildings have designated input/output faces (marked on placement). This is the Satisfactory model: the belt *is* the interface.
+
+**Tunnel belts** are short-range quantum tunnels. Place an entrance and an exit up to 16 grid squares apart (in a straight line), and items phase through the intervening space underground. Same throughput as a surface belt, same tick rate — the item enters the tunnel entrance and exits 16 ticks later at the other end. Visually, the entrance and exit are matching portal frames with a faint shimmer between them. The intervening grid squares are free for other buildings or belt crossings.
+
+Tunnel belts solve the crossing problem: two belt lines that need to pass through each other without a splitter. They're the Factorio underground belt, flavored as the Surface's geometry being locally exploitable — at short range, you can punch through the metric and skip a few grid squares. The 16-square limit is a hard physical constraint; the tunnel destabilizes beyond that distance. Higher-tier tunnel belts (unlocked via research) extend the range — 32, 64 — but never to the point of replacing surface belts for long runs.
+
+Belt routing is the core logistical challenge: hyperbolic space means belt networks that look local on the Poincare disk are actually covering enormous metric distances, and the geodesic between two points curves through the disk. Long belt runs visibly bend. Designing a belt network that doesn't knot itself is a genuine puzzle, and the higher the n in {4, n}, the worse it gets.
 
 **Pipes** carry fluids — Metric Foam in its liquid state, coolant for Shapers, fuel for Monopole Towers. Pipes also follow tile edges but can be layered under belts on the same tile. Fluid flow is pressure-driven: pumps push, and the exponential branching of hyperbolic space means pressure drops faster than you'd expect over distance. Long pipe runs need relay pumps.
 
@@ -88,7 +124,7 @@ The world has two scales of structure:
 
 When a belt, pipe, or rail reaches the edge of a cell, it can connect to the corresponding edge of the neighboring cell. Each cell has 4 edges (it's a square), and each edge is 128 grid units long. The connection points at cell boundaries are where the Euclidean interior meets the hyperbolic exterior — this is where logistics gets interesting.
 
-At a vertex of the hyperbolic tiling, n cells meet (not 4, as in flat space). A belt exiting the corner of a cell has more possible destination cells than on a flat grid. Junction design at cell vertices — where n cells' corners converge — is a unique puzzle that doesn't exist in Euclidean factory games.
+**Cell corners are dead zones.** At a vertex of the hyperbolic tiling, n cells meet (not 4, as in flat space). The geometry at these corners is ambiguous — which cell does a grid square at the corner belong to? Rather than solve this, building is banned in a small exclusion zone around each corner (a few grid squares). Nothing can be placed there: no belts, no pipes, no structures. The corners are where the hyperbolic curvature concentrates, and the game makes that visible by leaving them empty. Transport crosses cell boundaries only along edges, not through corners.
 
 ### Building
 
@@ -97,22 +133,36 @@ Structures are placed on the 128x128 internal grid of a cell. Sizes below are in
 | Structure | Size | Function |
 |-----------|------|----------|
 | Miner | 3x3 | Extracts raw resource. Must be placed on a deposit within the cell. |
-| Belt | 1x1 | Moves solid items one grid square per tick. Items travel in Klein Bottles. |
-| Splitter | 1x1 | Routes belt items to 2-4 outputs based on rules |
+| Belt | 1x1 | Moves solid items one grid square per tick. Connects directly into buildings. Manufactured item (Composer + Line Segment). |
+| Tunnel Belt | 1x1 | Quantum tunnel entrance/exit pair. Items phase underground for up to 16 grid squares. |
+| Splitter | 2x2 | 4-port junction. Configurable as 1-in/3-out, 3-in/1-out, or 2-in/2-out. See below. |
 | Pipe | 1x1 | Carries fluids. Can layer under belts on the same grid square. |
 | Pump | 2x2 | Drives fluid pressure through pipes. Required every ~40 grid squares. |
 | Rail | 1x1 | Train track segment. Carries bulk throughput over long distances. |
 | Train Station | 8x4 | Load/unload point for train routes |
-| Shaper | 5x5 | Tier 2 processing — smelts raw materials into paradox components |
-| Assembler | 9x9 | Tier 3 synthesis — combines components into impossible artifacts |
-| Monopole Tower | 3x3 | Powered by a Magnetic Monopole. Transmits power across cells. |
-| White Hole Anchor | 15x15 | Late-game power source. Permanent, unmovable, infinite output. |
-| Boltzmann Node | 7x7 | Late-game optimizer. Auto-routes belts and switches train junctions in its vicinity. |
+| Composer | 3x3 | T1 machine. 1 input, 1 output. Manufactured item (Composer + 2x Function). |
+| Inverter | 1x1 | T1 machine. 1 input, 1 output. Manufactured item (Inverter + Composer). |
+| Embedder | 2x2 | T2 machine. 2 inputs, 1 output. |
+| Quotient | 2x4 | T2 machine. 2 inputs, 2 outputs. |
+| Transformer | 6x3 | T2 machine. 3 inputs, 3 outputs. |
+| Knowledge Sheaf | 5x5 | T1 science consumer. Feeds the tech tree. |
+| Quadrupole | 3x3 | Electrical pole. Transmits power across the grid. |
+| Dynamo | 5x5 | Power generator. Composed from 2x Quadrupole. |
 | Extraction Beacon | 21x21 | Endgame structure. Folds goods into flat-space-compatible form. |
+
+**Belt I/O.** No inserters. Belts plug directly into building faces. Each building has designated input and output faces shown during placement preview. A Miner has output faces only. A Composer has one input face and one output face. A Quotient has two input faces and two output faces. The player rotates the building to align its faces with the belt layout. This keeps logistics visually legible — you can trace the flow by following the belts, no invisible arm mechanics.
+
+**Splitters** are 4-port junctions (DSP-style). Each port is configurable as input or output. The three standard modes:
+
+- **1-in / 3-out (splitting):** One input belt distributes evenly across three output belts. Round-robin distribution, one item per output per cycle.
+- **3-in / 1-out (merging):** Three input belts merge onto one output. Priority is configurable (round-robin default, or set one input as primary).
+- **2-in / 2-out (balancing):** Two inputs, two outputs. Items distribute evenly across both outputs regardless of which input they arrived on. The classic bus balancer.
+
+Splitters can also filter by item type on each port — set a port to only accept Points, and everything else backs up or routes to the other ports. On hyperbolic grids where cell vertices have n > 4 meeting points, splitters placed near boundaries are especially powerful because the extra adjacency gives belt networks more routing options in tight spaces.
 
 ### Expansion
 
-You start in the origin cell with 128x128 grid squares and nothing else. Early game happens entirely within this one cell — mine local deposits, build your first Shapers, lay short belt runs. It feels like a normal factory game.
+You start in the origin cell with 128x128 grid squares, a handful of starter Composers, and nothing else. Early game happens entirely within this one cell — mine Null Sets and Points, compose your first Line Segments, build Belts, bootstrap more Composers. It feels like a normal factory game.
 
 Then you run out of room, or you need a resource that doesn't spawn in the origin cell, and you step across a cell boundary for the first time. The neighboring cell is another 128x128 grid, but getting materials back to your origin hub now requires belts or rail that cross the boundary. And the cell after that is another boundary crossing. And there are more neighbors than you expected, because n > 4 cells meet at each vertex.
 
@@ -120,15 +170,17 @@ The visible tiling grows outward via BFS from the player's current neighborhood.
 
 ### Power
 
-Power comes from Magnetic Monopoles. In flat space, a point charge's field decays as 1/r^2. A monopole on the hyperbolic plane decays differently — the exponential growth of area with distance means the field thins faster, but a monopole's inherent symmetry-breaking means it can couple to the geometry itself. In practice: Monopole Towers transmit power along adjacency chains, and the hyperbolic branching means a small number of towers cover an enormous number of tiles. But a single broken link in an exponentially-branching grid is hard to find and diagnose.
+Power comes from Dynamos (composed from 2x Quadrupole, which are themselves composed from 4x Identity). Quadrupoles transmit power along adjacency chains across the grid. The hyperbolic branching means a small number of poles cover an enormous number of grid squares — but a single broken link in an exponentially-branching power grid is hard to find and diagnose.
 
-Late-game, White Hole Anchors replace monopole networks for major installations. A white hole outputs energy forever and cannot be exhausted — but it also cannot be turned off, moved, or disassembled. Placing one is a permanent commitment to that region of the Surface.
+The power chain bootstraps from raw Null Sets: Null Set → Identity → Quadrupole → Dynamo. This means power infrastructure competes for Composer time and Null Set supply with everything else in the early game.
 
 ### Research
 
-The tech tree is organized around increasingly impossible constructs. Early research unlocks Klein Bottles and Monopoles. Mid-game research requires Riemann Zeroes as input — each zero consumed advances a branch of the tree, and since each zero is unique, the order you feed them in matters. Late-game research demands Last Theorems, which act as proof-of-concept: you must demonstrate that your factory can produce these impossibilities before the tree grants access to White Holes and Boltzmann Brains.
+Research is driven by Knowledge Sheaves (5x5, science consumer). Each Knowledge Sheaf consumes Axiomatic Science (composed from Cubes) to advance the tech tree. The production chain is: Point → Line Segment → Square → Cube → Axiomatic Science → Knowledge Sheaf.
 
-Some branches are only reachable if you've built infrastructure at sufficient canonical depth — the Surface rewards those who push outward. The tree branches exponentially, like everything else here.
+This means research competes for Composer time and Point supply with everything else. A dedicated science production line — miners feeding Points into a Composer chain that terminates at a Knowledge Sheaf — is an early-game priority.
+
+The tech tree unlocks T2 machines (Embedders, Quotients, Transformers), higher-tier recipes, and infrastructure upgrades. Some branches are only reachable if you've built infrastructure at sufficient canonical depth — the Surface rewards those who push outward.
 
 ---
 
@@ -180,11 +232,11 @@ The tension: 128x128 is a lot of space, but it's finite. Every spoke route from 
 
 The current renderer already establishes the mood: a gentle bowl of colored tiles curving away in every direction, fading at the disk boundary, lit from above. The factory game extends this:
 
-- **Tiles** shift from the current rainbow HSV cycle to a terrain palette — dark basalt, veined crystal, shimmering metric distortion. Tiles rich in Zero Ore are black and faintly vibrating. Boundary Flux deposits glow at the edges.
-- **Structures** are built from Penrose Tiles and impossible geometry. A Shaper is a slowly rotating non-orientable surface. A Monopole Tower is a single point source with visible field lines radiating outward along the hyperbolic grid. A White Hole Anchor is a permanent scar of light — blinding at the center, dimming along geodesics.
-- **Belts** carry Klein Bottles — tiny glass-like vessels that catch the light wrong. Their curvature through the disk is part of the visual identity — the way they bend reveals the geometry.
+- **Tiles** shift from the current rainbow HSV cycle to a terrain palette — dark basalt, veined crystal, shimmering metric distortion. Deposits of Null Sets are dark voids; Point clusters are bright pinpricks; Preimage deposits shimmer with unrealized potential; Wavelet patches oscillate faintly.
+- **Structures** are mathematical operations made visible. A Composer is interlocking rotating rings. An Inverter is a mirrored prism. A Transformer is three parallel channels with rotating matrix motifs. Quadrupoles radiate visible field lines. Dynamos hum with rotating cores.
+- **Belts** carry items — tiny mathematical objects in Klein Bottles that catch the light wrong. Their curvature through the disk is part of the visual identity — the way they bend reveals the geometry.
 - **The disk boundary** is not just a fade-out but a presence: an encroaching dark, suggesting the Surface extends further than you can perceive. Things move at the edge of visibility.
-- **Boltzmann Nodes** flicker. They display, for single frames, solutions to problems you haven't posed yet.
+- **Knowledge Sheaves** glow when actively consuming Axiomatic Science, pages fanning through proofs.
 
 ### Atmosphere
 
@@ -196,11 +248,11 @@ The horror is the geometry itself: infinite, proliferating, indifferent. You are
 
 No external modeling tools. The geometric/abstract aesthetic is a strength — everything can be expressed as math.
 
-**Phase 1: Procedural geometry.** All structures are Rust functions that emit `Vec<Vertex>` + `Vec<u16>`, extending the existing `build_polygon_mesh` pattern. A Shaper is a truncated icosahedron. A Monopole Tower is a tapered cylinder with radial fins. Belt segments are extruded ribbons along tile edges. Train stations are beveled rectangular prisms. Every shape is code, living next to the math it represents. Iteration cycle is compile-run-look, but for parametric geometry that's fast enough.
+**Phase 1: Procedural geometry.** All structures are Rust functions that emit `Vec<Vertex>` + `Vec<u16>`, extending the existing `build_polygon_mesh` pattern. Composers are interlocking rings, Inverters are mirrored prisms, Transformers are tri-channel machines. Belt segments are instanced trough-shaped ribbons. Every shape is code, living next to the math it represents.
 
-**Phase 2: SDF raymarching for showcase objects.** Add a second render pass that raymarches signed distance functions in WGSL for the objects that *should* look impossible. Klein Bottles on belt lines (parametric SDF, non-orientable surface rendered correctly). Monopole field visualizations (radial field lines decaying along the hyperbolic grid). White Hole singularities (glowing emission, no surface, just light). Boltzmann Node flicker effects (stochastic SDF perturbation). These are small on screen and bounded in count, so the per-pixel cost is manageable. SDF lighting must match the rasterized tile lighting to stay cohesive.
+**Phase 2: SDF raymarching for showcase objects.** A second render pass for late-game objects that *should* look impossible. Small on screen, bounded in count.
 
-The bulk of the world — tiles, belts, pipes, rail, building footprints, terrain — stays rasterized procedural geometry forever. SDFs are reserved for the handful of objects where the math *is* the visual, and meshing them would lose the point.
+Implementation details — belt rendering, instancing strategy, pipes, rail, structure geometry sketches — are in [GRAPHICS.md](GRAPHICS.md).
 
 ### Sound (Future)
 
@@ -212,7 +264,18 @@ The bulk of the world — tiles, belts, pipes, rail, building footprints, terrai
 
 ## 6. User Configuration
 
-Build the settings layer early, before the codebase accumulates ad-hoc input handling and hardcoded defaults.
+Build the settings layer early, before the codebase accumulates ad-hoc input handling and hardcoded defaults. All screen-space UI is rendered via **egui** (`egui-wgpu` + `egui-winit`). See [GRAPHICS.md](GRAPHICS.md) for integration details.
+
+### In-Game Windows
+
+| Window | Opens via | Contents |
+|--------|-----------|----------|
+| Build Selector | B or toolbar | Grid of unlocked structures, grouped by category. Click or hotkey to select, then place in world. |
+| Inventory | I or Tab | Current resource counts, item totals, production/consumption rates. |
+| Tech Tree | T | Branching research graph. Locked nodes greyed out. Knowledge Sheaves consume Axiomatic Science to advance. |
+| Settings | Esc | Key bindings, graphics, gameplay, audio. Pauses the simulation. |
+| Milestone Log | M | Completed and upcoming milestones. |
+| Cell Info | Click cell border | Canonical address, resource deposits, structure count for the selected cell. |
 
 ### Settings Menu
 
@@ -267,7 +330,7 @@ Config is separate from save data. A fresh install with an existing config file 
 
 **Flat only.** No stacking, no bridges, no vertical gameplay axis. The hyperbolic grid provides more than enough complexity. Height remains cosmetic (the existing click-to-raise is debug/aesthetic only). This simplifies building placement, collision, rendering, and saves an entire dimension of logistics headaches.
 
-**Milestone-based sandbox.** No hard win condition, no credits screen. Instead, a sequence of escalating milestones that give structure without an ending: first Klein Bottle, first Monopole, first Riemann Zero, first Extraction Beacon, reach canonical depth 20, reach depth 50, build 10 beacons, etc. Milestones unlock cosmetic rewards or new ambient details (the Surface acknowledges your presence the deeper you go). You can always go deeper. You can never finish.
+**Milestone-based sandbox.** No hard win condition, no credits screen. Instead, a sequence of escalating milestones that give structure without an ending: first Line Segment, first Function, first self-built Composer, first Dynamo, first Embedder recipe, first Extraction Beacon, reach canonical depth 20, reach depth 50, etc. Milestones unlock cosmetic rewards or new ambient details (the Surface acknowledges your presence the deeper you go). You can always go deeper. You can never finish.
 
 **Single-player.** Multiplayer is out of scope. The isolation is thematically load-bearing. (The Surface is theoretically large enough to share — two players could build toward each other across exponential space — but this is a someday-maybe, not a design target.)
 

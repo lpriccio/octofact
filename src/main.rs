@@ -1,6 +1,8 @@
 mod app;
+mod game;
 mod hyperbolic;
 mod render;
+mod ui;
 
 use app::App;
 use hyperbolic::poincare::TilingConfig;

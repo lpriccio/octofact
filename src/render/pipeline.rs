@@ -38,19 +38,11 @@ pub struct RenderState {
     pub index_buffer: wgpu::Buffer,
     pub num_indices: u32,
     pub depth_view: wgpu::TextureView,
-    // Label rendering (glyphon)
-    pub font_system: glyphon::FontSystem,
-    pub swash_cache: glyphon::SwashCache,
-    #[allow(dead_code)] // kept alive for glyphon shared resources
-    pub label_cache: glyphon::Cache,
-    pub atlas: glyphon::TextAtlas,
-    pub text_renderer: glyphon::TextRenderer,
-    pub viewport: glyphon::Viewport,
     pub labels_enabled: bool,
 }
 
 impl RenderState {
-    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat, width: u32, height: u32, vertices: &[Vertex], indices: &[u16]) -> Self {
+    pub fn new(device: &wgpu::Device, _queue: &wgpu::Queue, format: wgpu::TextureFormat, width: u32, height: u32, vertices: &[Vertex], indices: &[u16]) -> Self {
         use wgpu::util::DeviceExt;
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -96,7 +88,7 @@ impl RenderState {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("pipeline layout"),
             bind_group_layouts: &[&bind_group_layout],
-            immediate_size: 0,
+            push_constant_ranges: &[],
         });
 
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -139,7 +131,7 @@ impl RenderState {
                 mask: !0,
                 alpha_to_coverage_enabled: false,
             },
-            multiview_mask: None,
+            multiview: None,
             cache: None,
         });
 
@@ -157,25 +149,6 @@ impl RenderState {
 
         let depth_view = Self::create_depth_view(device, width, height);
 
-        // Label rendering
-        let font_system = glyphon::FontSystem::new();
-        let swash_cache = glyphon::SwashCache::new();
-        let label_cache = glyphon::Cache::new(device);
-        let mut atlas = glyphon::TextAtlas::new(device, queue, &label_cache, format);
-        let text_renderer = glyphon::TextRenderer::new(
-            &mut atlas,
-            device,
-            wgpu::MultisampleState::default(),
-            Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::Always,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-        );
-        let viewport = glyphon::Viewport::new(device, &label_cache);
-
         Self {
             pipeline,
             uniform_buffer,
@@ -184,12 +157,6 @@ impl RenderState {
             index_buffer,
             num_indices: indices.len() as u32,
             depth_view,
-            font_system,
-            swash_cache,
-            label_cache,
-            atlas,
-            text_renderer,
-            viewport,
             labels_enabled: false,
         }
     }

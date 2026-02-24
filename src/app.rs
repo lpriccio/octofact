@@ -910,10 +910,11 @@ impl App {
                                 _ => continue,
                             };
 
-                            let a_edge = (alpha * 220.0) as u8;
-                            let a_fill = (alpha * 180.0) as u8;
-                            let a_hilite = (alpha * 100.0) as u8;
-                            let a_arrow = (alpha * 240.0) as u8;
+                            // Alpha only controls distance fade; face/arrow are
+                            // fully opaque at close range to prevent tile-surface
+                            // bleed-through (the eldritch palette shifts under Mobius
+                            // causing flicker through semi-transparent layers).
+                            let a = (alpha * 255.0) as u8;
 
                             // Dark outer edge (slightly larger quad)
                             let centroid = egui::pos2(
@@ -927,7 +928,7 @@ impl App {
                             }).collect();
                             painter.add(egui::Shape::convex_polygon(
                                 edge_corners,
-                                egui::Color32::from_rgba_unmultiplied(20, 20, 20, a_edge),
+                                egui::Color32::from_rgba_unmultiplied(20, 20, 20, a),
                                 egui::Stroke::NONE,
                             ));
 
@@ -935,20 +936,19 @@ impl App {
                             let hilite_corners: Vec<egui::Pos2> = corners.iter().enumerate().map(|(i, p)| {
                                 let dx = p.x - centroid.x;
                                 let dy = p.y - centroid.y;
-                                // Shift highlight inward more on bottom-right corners (indices 2,3)
                                 let shrink = if i == 0 || i == 1 { 1.04 } else { 0.96 };
                                 egui::pos2(centroid.x + dx * shrink, centroid.y + dy * shrink)
                             }).collect();
                             painter.add(egui::Shape::convex_polygon(
                                 hilite_corners,
-                                egui::Color32::from_rgba_unmultiplied(180, 180, 185, a_hilite),
+                                egui::Color32::from_rgba_unmultiplied(180, 180, 185, a),
                                 egui::Stroke::NONE,
                             ));
 
-                            // Main belt face
+                            // Main belt face (opaque to prevent tile bleed-through)
                             painter.add(egui::Shape::convex_polygon(
                                 corners.to_vec(),
-                                egui::Color32::from_rgba_unmultiplied(140, 140, 145, a_fill),
+                                egui::Color32::from_rgba_unmultiplied(140, 140, 145, a),
                                 egui::Stroke::NONE,
                             ));
 
@@ -961,7 +961,7 @@ impl App {
                             }).collect();
                             painter.add(egui::Shape::convex_polygon(
                                 shadow_corners,
-                                egui::Color32::from_rgba_unmultiplied(60, 60, 60, a_hilite),
+                                egui::Color32::from_rgba_unmultiplied(60, 60, 60, a),
                                 egui::Stroke::NONE,
                             ));
 
@@ -974,7 +974,7 @@ impl App {
                             if let (Some(t), Some(l), Some(r)) = (tip, bl, br) {
                                 painter.add(egui::Shape::convex_polygon(
                                     vec![t, l, r],
-                                    egui::Color32::from_rgba_unmultiplied(30, 30, 30, a_arrow),
+                                    egui::Color32::from_rgba_unmultiplied(30, 30, 30, a),
                                     egui::Stroke::NONE,
                                 ));
                             }

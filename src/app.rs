@@ -169,6 +169,7 @@ pub struct App {
     grid_enabled: bool,
     klein_half_side: f64,
     flash_screen_pos: Option<(f32, f32)>,
+    flash_label: String,
     flash_timer: f32,
 }
 
@@ -202,6 +203,7 @@ impl App {
                 r_k / std::f64::consts::SQRT_2
             },
             flash_screen_pos: None,
+            flash_label: String::new(),
             flash_timer: 0.0,
         }
     }
@@ -359,7 +361,20 @@ impl App {
         if dir.y.abs() < 1e-8 {
             return None;
         }
-        let t = -near.y / dir.y;
+
+        // Iteratively intersect ray with bowl surface y = 0.4*r²/(1+r²)
+        // Start with Y=0, refine by computing bowl height at each hit point
+        let mut target_y = 0.0_f32;
+        for _ in 0..5 {
+            let t = (target_y - near.y) / dir.y;
+            if t < 0.0 {
+                return None;
+            }
+            let hit = near + dir * t;
+            let r2 = hit.x * hit.x + hit.z * hit.z;
+            target_y = 0.4 * r2 / (1.0 + r2);
+        }
+        let t = (target_y - near.y) / dir.y;
         if t < 0.0 {
             return None;
         }
@@ -369,16 +384,16 @@ impl App {
 
     fn find_clicked_tile(&self, sx: f64, sy: f64) -> Option<ClickResult> {
         let running = self.running.as_ref()?;
-        let width = running.gpu.config.width as f32;
-        let height = running.gpu.config.height as f32;
-        let aspect = width / height;
-        let view_proj = self.build_view_proj(aspect);
         let inv_view = self.camera_local.inverse();
-        let click_sx = sx as f32;
-        let click_sy = sy as f32;
+        let khs = self.klein_half_side;
+        let click_disk = self.unproject_to_disk(sx, sy)?;
 
-        let mut best_idx: Option<usize> = None;
-        let mut best_dist_sq = f32::MAX;
+        // Find the tile whose Klein cell actually contains the click.
+        // For each visible tile, compute local Klein coords and pick the
+        // tile where the click is closest to cell center (smallest Chebyshev distance).
+        let mut best: Option<(usize, f64, f64)> = None; // (tile_idx, norm_x, norm_y)
+        let mut best_max_norm = f64::MAX;
+
         for (i, tile) in running.tiling.tiles.iter().enumerate() {
             let combined = inv_view.compose(&tile.transform);
             let disk_center = combined.apply(Complex::ZERO);
@@ -386,42 +401,38 @@ impl App {
                 continue;
             }
 
-            let bowl = crate::hyperbolic::embedding::disk_to_bowl(disk_center);
-            let elevation = running.extra_elevation.get(&i).copied().unwrap_or(0.0);
+            let inv_combined = combined.inverse();
+            let local_p = inv_combined.apply(click_disk);
+            let r2 = local_p.re * local_p.re + local_p.im * local_p.im;
+            let local_kx = 2.0 * local_p.re / (1.0 + r2);
+            let local_ky = 2.0 * local_p.im / (1.0 + r2);
+            let norm_x = local_kx / (2.0 * khs);
+            let norm_y = local_ky / (2.0 * khs);
+            let max_norm = norm_x.abs().max(norm_y.abs());
 
-            let world_pos = glam::Vec3::new(bowl[0], bowl[1] + elevation, bowl[2]);
-
-            if let Some((proj_sx, proj_sy)) = project_to_screen(world_pos, &view_proj, width, height) {
-                let dx = proj_sx - click_sx;
-                let dy = proj_sy - click_sy;
-                let dist_sq = dx * dx + dy * dy;
-                if dist_sq < best_dist_sq {
-                    best_dist_sq = dist_sq;
-                    best_idx = Some(i);
-                }
+            if max_norm < best_max_norm {
+                best_max_norm = max_norm;
+                best = Some((i, norm_x, norm_y));
             }
         }
 
-        let tile_idx = best_idx?;
+        let (tile_idx, norm_x, norm_y) = best?;
 
-        // Compute grid-snapped local position
-        let grid_scale = 32.0_f64;
-        let click_disk = self.unproject_to_disk(sx, sy);
-        let tile_xform = running.tiling.tiles[tile_idx].transform;
-        let combined = inv_view.compose(&tile_xform);
-        let inv_combined = combined.inverse();
+        // Snap to nearest grid intersection (64 divisions per cell edge)
+        let divisions = 64.0_f64;
+        let gx = (norm_x * divisions).round() as i32;
+        let gy = (norm_y * divisions).round() as i32;
+        let gx = gx.clamp(-32, 32);
+        let gy = gy.clamp(-32, 32);
 
-        let (grid_xy, local_disk) = if let Some(disk_pos) = click_disk {
-            let local = inv_combined.apply(disk_pos);
-            let gx = (local.re * grid_scale).round() as i32;
-            let gy = (local.im * grid_scale).round() as i32;
-            let snapped = Complex::new(gx as f64 / grid_scale, gy as f64 / grid_scale);
-            ((gx, gy), snapped)
-        } else {
-            ((0, 0), Complex::ZERO)
-        };
+        // Snap back: grid coords -> Klein -> Poincare
+        let snap_kx = (gx as f64 / divisions) * 2.0 * khs;
+        let snap_ky = (gy as f64 / divisions) * 2.0 * khs;
+        let kr2 = snap_kx * snap_kx + snap_ky * snap_ky;
+        let denom = 1.0 + (1.0 - kr2).max(0.0).sqrt();
+        let local_disk = Complex::new(snap_kx / denom, snap_ky / denom);
 
-        Some(ClickResult { tile_idx, grid_xy, local_disk })
+        Some(ClickResult { tile_idx, grid_xy: (gx, gy), local_disk })
     }
 
     fn handle_debug_click(&mut self, sx: f64, sy: f64) {
@@ -433,21 +444,41 @@ impl App {
         if self.config.debug.log_clicks {
             let tile = &self.running.as_ref().unwrap().tiling.tiles[result.tile_idx];
             log::info!(
-                "Click: tile[{}] addr={} grid=({},{}) local=({:.4},{:.4})",
-                result.tile_idx,
+                "{};{},{}",
                 format_address(&tile.address),
                 result.grid_xy.0,
                 result.grid_xy.1,
-                result.local_disk.re,
-                result.local_disk.im,
             );
         }
 
-        // Flash at click screen position
+        // Flash at snapped grid intersection projected to screen
         let running = self.running.as_ref().unwrap();
+        let width = running.gpu.config.width as f32;
+        let height = running.gpu.config.height as f32;
         let scale = running.gpu.window.scale_factor() as f32;
-        self.flash_screen_pos = Some((sx as f32 / scale, sy as f32 / scale));
-        self.flash_timer = 0.4;
+        let aspect = width / height;
+        let view_proj = self.build_view_proj(aspect);
+
+        let inv_view = self.camera_local.inverse();
+        let tile_xform = running.tiling.tiles[result.tile_idx].transform;
+        let combined = inv_view.compose(&tile_xform);
+        // Transform snapped local Poincare coords back to view-space disk
+        let world_disk = combined.apply(result.local_disk);
+        let bowl = crate::hyperbolic::embedding::disk_to_bowl(world_disk);
+        let elevation = running.extra_elevation.get(&result.tile_idx).copied().unwrap_or(0.0);
+        let world_pos = glam::Vec3::new(bowl[0], bowl[1] + elevation, bowl[2]);
+
+        if let Some((px, py)) = project_to_screen(world_pos, &view_proj, width, height) {
+            let tile = &running.tiling.tiles[result.tile_idx];
+            self.flash_label = format!(
+                "{};{},{}",
+                format_address(&tile.address),
+                result.grid_xy.0,
+                result.grid_xy.1,
+            );
+            self.flash_screen_pos = Some((px / scale, py / scale));
+            self.flash_timer = 0.4;
+        }
     }
 
     fn modify_terrain(&mut self, sx: f64, sy: f64, delta: f32) {
@@ -589,6 +620,15 @@ impl App {
                             6.0,
                             egui::Color32::from_rgba_unmultiplied(255, 255, 255, a),
                         );
+                        if !self.flash_label.is_empty() {
+                            painter.text(
+                                egui::pos2(fx, fy - 12.0),
+                                egui::Align2::CENTER_BOTTOM,
+                                &self.flash_label,
+                                egui::FontId::monospace(13.0),
+                                egui::Color32::from_rgba_unmultiplied(255, 255, 255, a),
+                            );
+                        }
                     });
             }
         }

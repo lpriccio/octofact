@@ -41,13 +41,16 @@ fn project_to_screen(world_pos: glam::Vec3, view_proj: &glam::Mat4, width: f32, 
 }
 
 /// Like project_to_screen but allows points outside the viewport (for partially visible geometry).
+/// Like project_to_screen but allows points slightly outside the viewport
+/// (for partially visible geometry). Coordinates are clamped to 2x viewport
+/// to prevent degenerate polygons when clip.w is near zero.
 fn project_to_screen_unclamped(world_pos: glam::Vec3, view_proj: &glam::Mat4, width: f32, height: f32) -> Option<(f32, f32)> {
     let clip = *view_proj * glam::Vec4::new(world_pos.x, world_pos.y, world_pos.z, 1.0);
-    if clip.w <= 0.0 {
+    if clip.w <= 0.01 {
         return None;
     }
-    let ndc_x = clip.x / clip.w;
-    let ndc_y = clip.y / clip.w;
+    let ndc_x = (clip.x / clip.w).clamp(-3.0, 3.0);
+    let ndc_y = (clip.y / clip.w).clamp(-3.0, 3.0);
     let screen_x = (ndc_x + 1.0) * 0.5 * width;
     let screen_y = (1.0 - ndc_y) * 0.5 * height;
     Some((screen_x, screen_y))

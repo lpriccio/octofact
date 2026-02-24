@@ -40,6 +40,19 @@ fn project_to_screen(world_pos: glam::Vec3, view_proj: &glam::Mat4, width: f32, 
     Some((screen_x, screen_y))
 }
 
+/// Like project_to_screen but allows points outside the viewport (for partially visible geometry).
+fn project_to_screen_unclamped(world_pos: glam::Vec3, view_proj: &glam::Mat4, width: f32, height: f32) -> Option<(f32, f32)> {
+    let clip = *view_proj * glam::Vec4::new(world_pos.x, world_pos.y, world_pos.z, 1.0);
+    if clip.w <= 0.0 {
+        return None;
+    }
+    let ndc_x = clip.x / clip.w;
+    let ndc_y = clip.y / clip.w;
+    let screen_x = (ndc_x + 1.0) * 0.5 * width;
+    let screen_y = (1.0 - ndc_y) * 0.5 * height;
+    Some((screen_x, screen_y))
+}
+
 fn render_egui_pass(
     encoder: &mut wgpu::CommandEncoder,
     renderer: &egui_wgpu::Renderer,
@@ -176,6 +189,20 @@ pub struct App {
     flash_screen_pos: Option<(f32, f32)>,
     flash_label: String,
     flash_timer: f32,
+    /// Active drag-to-place state: tile address, axis constraint, last placed grid coord
+    belt_drag: Option<BeltDrag>,
+}
+
+/// State for dragging belts along a gridline.
+struct BeltDrag {
+    tile_idx: usize,
+    address: Vec<u8>,
+    /// Fixed axis: true = horizontal (fixed gy), false = vertical (fixed gx)
+    horizontal: bool,
+    /// The fixed coordinate on the constrained axis
+    fixed_coord: i32,
+    /// The last grid coordinate placed along the free axis
+    last_free: i32,
 }
 
 impl App {
@@ -213,6 +240,7 @@ impl App {
             flash_screen_pos: None,
             flash_label: String::new(),
             flash_timer: 0.0,
+            belt_drag: None,
         }
     }
 
@@ -489,6 +517,58 @@ impl App {
         }
     }
 
+    /// Place a single structure at the given tile address and grid position.
+    /// Returns true if placement succeeded.
+    fn try_place_at(&mut self, tile_idx: usize, address: &[u8], grid_xy: (i32, i32), mode: &PlacementMode) -> bool {
+        if self.inventory.count(mode.item) == 0 {
+            return false;
+        }
+        let structure = Structure {
+            item: mode.item,
+            direction: mode.direction,
+        };
+        if !self.world.place(address, grid_xy, structure) {
+            return false; // occupied
+        }
+        self.inventory.remove(mode.item, 1);
+
+        // Flash feedback
+        let running = self.running.as_ref().unwrap();
+        let width = running.gpu.config.width as f32;
+        let height = running.gpu.config.height as f32;
+        let scale = running.gpu.window.scale_factor() as f32;
+        let aspect = width / height;
+        let view_proj = self.build_view_proj(aspect);
+        let khs = self.klein_half_side;
+        let divisions = 64.0_f64;
+
+        let inv_view = self.camera_local.inverse();
+        let tile_xform = running.tiling.tiles[tile_idx].transform;
+        let combined = inv_view.compose(&tile_xform);
+
+        let snap_kx = (grid_xy.0 as f64 / divisions) * 2.0 * khs;
+        let snap_ky = (grid_xy.1 as f64 / divisions) * 2.0 * khs;
+        let kr2 = snap_kx * snap_kx + snap_ky * snap_ky;
+        let denom = 1.0 + (1.0 - kr2).max(0.0).sqrt();
+        let local_disk = Complex::new(snap_kx / denom, snap_ky / denom);
+
+        let world_disk = combined.apply(local_disk);
+        let bowl = crate::hyperbolic::embedding::disk_to_bowl(world_disk);
+        let elevation = running.extra_elevation.get(&tile_idx).copied().unwrap_or(0.0);
+        let world_pos = glam::Vec3::new(bowl[0], bowl[1] + elevation, bowl[2]);
+
+        if let Some((px, py)) = project_to_screen(world_pos, &view_proj, width, height) {
+            self.flash_label = format!(
+                "{} {}",
+                mode.item.display_name(),
+                mode.direction.arrow_char(),
+            );
+            self.flash_screen_pos = Some((px / scale, py / scale));
+            self.flash_timer = 0.4;
+        }
+        true
+    }
+
     fn handle_placement_click(&mut self, sx: f64, sy: f64) {
         let mode = match self.placement_mode.as_ref() {
             Some(m) => m.clone(),
@@ -500,48 +580,113 @@ impl App {
             None => return,
         };
 
-        if self.inventory.count(mode.item) == 0 {
-            return;
-        }
-
         let running = self.running.as_ref().unwrap();
         let address = running.tiling.tiles[result.tile_idx].address.clone();
 
-        let structure = Structure {
-            item: mode.item,
-            direction: mode.direction,
+        if self.try_place_at(result.tile_idx, &address, result.grid_xy, &mode) {
+            // Start drag state — axis determined on first move
+            self.belt_drag = Some(BeltDrag {
+                tile_idx: result.tile_idx,
+                address,
+                horizontal: true, // placeholder, set on first move
+                fixed_coord: 0,
+                last_free: 0,
+            });
+            // Store origin so first move can determine axis
+            let drag = self.belt_drag.as_mut().unwrap();
+            drag.last_free = result.grid_xy.0; // stash gx temporarily
+            drag.fixed_coord = result.grid_xy.1; // stash gy temporarily
+        }
+    }
+
+    fn handle_placement_drag(&mut self, sx: f64, sy: f64) {
+        let mode = match self.placement_mode.as_ref() {
+            Some(m) => m.clone(),
+            None => { self.belt_drag = None; return; },
         };
 
-        if !self.world.place(&address, result.grid_xy, structure) {
-            return; // occupied
+        let drag = match self.belt_drag.as_ref() {
+            Some(d) => d,
+            None => return,
+        };
+
+        let result = match self.find_clicked_tile(sx, sy) {
+            Some(r) => r,
+            None => return,
+        };
+
+        // Only drag within the same tile
+        if result.tile_idx != drag.tile_idx {
+            return;
         }
 
-        self.inventory.remove(mode.item, 1);
+        let (gx, gy) = result.grid_xy;
+        let origin_gx = drag.last_free;
+        let origin_gy = drag.fixed_coord;
 
-        // Flash feedback at placement location
-        let running = self.running.as_ref().unwrap();
-        let width = running.gpu.config.width as f32;
-        let height = running.gpu.config.height as f32;
-        let scale = running.gpu.window.scale_factor() as f32;
-        let aspect = width / height;
-        let view_proj = self.build_view_proj(aspect);
+        // First real move: determine axis from the larger displacement
+        let dx_abs = (gx - origin_gx).abs();
+        let dy_abs = (gy - origin_gy).abs();
+        if dx_abs == 0 && dy_abs == 0 {
+            return;
+        }
 
-        let inv_view = self.camera_local.inverse();
-        let tile_xform = running.tiling.tiles[result.tile_idx].transform;
-        let combined = inv_view.compose(&tile_xform);
-        let world_disk = combined.apply(result.local_disk);
-        let bowl = crate::hyperbolic::embedding::disk_to_bowl(world_disk);
-        let elevation = running.extra_elevation.get(&result.tile_idx).copied().unwrap_or(0.0);
-        let world_pos = glam::Vec3::new(bowl[0], bowl[1] + elevation, bowl[2]);
+        // Copy out drag state so we can mutate self freely
+        let mut horizontal = drag.horizontal;
+        let mut fixed_coord = drag.fixed_coord;
+        let mut last_free = drag.last_free;
+        let address = drag.address.clone();
+        let tile_idx = drag.tile_idx;
 
-        if let Some((px, py)) = project_to_screen(world_pos, &view_proj, width, height) {
-            self.flash_label = format!(
-                "{} {}",
-                mode.item.display_name(),
-                mode.direction.arrow_char(),
-            );
-            self.flash_screen_pos = Some((px / scale, py / scale));
-            self.flash_timer = 0.4;
+        // On first motion, lock axis based on which direction moved more
+        let first_motion = horizontal && fixed_coord == origin_gy && last_free == origin_gx
+            && (dx_abs > 0 || dy_abs > 0);
+        if first_motion {
+            if dx_abs >= dy_abs {
+                horizontal = true;
+                fixed_coord = origin_gy;
+                last_free = origin_gx;
+            } else {
+                horizontal = false;
+                fixed_coord = origin_gx;
+                last_free = origin_gy;
+            }
+        }
+
+        // Constrain to the locked axis
+        let target_free = if horizontal { gx } else { gy };
+
+        if target_free == last_free {
+            // Write back axis lock even if no new placement
+            if let Some(d) = self.belt_drag.as_mut() {
+                d.horizontal = horizontal;
+                d.fixed_coord = fixed_coord;
+                d.last_free = last_free;
+            }
+            return;
+        }
+
+        // Fill from last_free toward target_free
+        let step = if target_free > last_free { 1 } else { -1 };
+        let mut current = last_free + step;
+        loop {
+            let grid_xy = if horizontal {
+                (current, fixed_coord)
+            } else {
+                (fixed_coord, current)
+            };
+            self.try_place_at(tile_idx, &address, grid_xy, &mode);
+            if current == target_free {
+                break;
+            }
+            current += step;
+        }
+
+        // Update drag state
+        if let Some(d) = self.belt_drag.as_mut() {
+            d.horizontal = horizontal;
+            d.fixed_coord = fixed_coord;
+            d.last_free = target_free;
         }
     }
 
@@ -736,6 +881,7 @@ impl App {
 
                         for (&(gx, gy), structure) in &cell.structures {
                             // Project fractional grid coords through the full 3D pipeline
+                            // Uses unclamped projection so partially offscreen belts still render
                             let grid_to_screen = |fx: f64, fy: f64| -> Option<egui::Pos2> {
                                 let skx = (fx / divisions) * 2.0 * khs;
                                 let sky = (fy / divisions) * 2.0 * khs;
@@ -745,7 +891,7 @@ impl App {
                                 let wd = combined.apply(ld);
                                 let b = crate::hyperbolic::embedding::disk_to_bowl(wd);
                                 let wp = glam::Vec3::new(b[0], b[1] + elevation, b[2]);
-                                project_to_screen(wp, &view_proj, width, height)
+                                project_to_screen_unclamped(wp, &view_proj, width, height)
                                     .map(|(px, py)| egui::pos2(px / scale, py / scale))
                             };
 
@@ -1058,17 +1204,24 @@ impl ApplicationHandler for App {
             }
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor_pos = Some(position);
+                // Continue drag-to-place if active
+                if self.belt_drag.is_some() {
+                    self.handle_placement_drag(position.x, position.y);
+                }
             }
             WindowEvent::MouseInput { state, button, .. } => {
-                if state == winit::event::ElementState::Pressed
-                    && button == winit::event::MouseButton::Left
-                {
-                    if let Some(pos) = self.cursor_pos {
-                        if self.placement_mode.is_some() {
-                            self.handle_placement_click(pos.x, pos.y);
-                        } else if !self.ui_is_open() {
-                            self.handle_debug_click(pos.x, pos.y);
+                if button == winit::event::MouseButton::Left {
+                    if state == winit::event::ElementState::Pressed {
+                        if let Some(pos) = self.cursor_pos {
+                            if self.placement_mode.is_some() {
+                                self.handle_placement_click(pos.x, pos.y);
+                            } else if !self.ui_is_open() {
+                                self.handle_debug_click(pos.x, pos.y);
+                            }
                         }
+                    } else {
+                        // Mouse released — end drag
+                        self.belt_drag = None;
                     }
                 }
             }

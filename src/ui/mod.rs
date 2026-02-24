@@ -5,3 +5,4 @@ pub mod keybind;
 pub mod inventory;
 pub mod icons;
 pub mod tooltip;
+pub mod placement;

@@ -18,6 +18,7 @@ pub enum GameAction {
     LowerTerrain,
     RotateStructure,
     ToggleGrid,
+    OpenPlacement,
 }
 
 impl GameAction {
@@ -37,6 +38,7 @@ impl GameAction {
             Self::LowerTerrain => "Lower Terrain",
             Self::RotateStructure => "Rotate Structure",
             Self::ToggleGrid => "Toggle Grid",
+            Self::OpenPlacement => "Placement Menu",
         }
     }
 
@@ -46,7 +48,7 @@ impl GameAction {
             MoveForward, MoveBackward, StrafeLeft, StrafeRight,
             CameraUp, CameraDown, ToggleLabels, OpenSettings,
             OpenInventory, ToggleViewMode, RaiseTerrain,
-            LowerTerrain, RotateStructure, ToggleGrid,
+            LowerTerrain, RotateStructure, ToggleGrid, OpenPlacement,
         ]
     }
 }
@@ -188,6 +190,7 @@ pub fn default_bindings() -> HashMap<GameAction, KeyBind> {
         (ToggleGrid, KeyBind::new(KeyCode::KeyG)),
         (RaiseTerrain, KeyBind::with_shift(KeyCode::ArrowUp)),
         (LowerTerrain, KeyBind::with_shift(KeyCode::ArrowDown)),
+        (OpenPlacement, KeyBind::new(KeyCode::KeyP)),
     ])
 }
 
@@ -338,6 +341,6 @@ mod tests {
 
     #[test]
     fn test_all_actions_listed() {
-        assert_eq!(GameAction::all().len(), 14);
+        assert_eq!(GameAction::all().len(), 15);
     }
 }

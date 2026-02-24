@@ -15,7 +15,7 @@ impl Inventory {
 
     pub fn starting_inventory() -> Self {
         let mut inv = Self::new();
-        inv.add(ItemId::Belt, 1);
+        inv.add(ItemId::Belt, 2000);
         inv.add(ItemId::Quadrupole, 1);
         inv
     }
@@ -90,7 +90,7 @@ mod tests {
     #[test]
     fn test_starting_inventory_contents() {
         let inv = Inventory::starting_inventory();
-        assert_eq!(inv.count(ItemId::Belt), 1);
+        assert_eq!(inv.count(ItemId::Belt), 2000);
         assert_eq!(inv.count(ItemId::Quadrupole), 1);
         assert_eq!(inv.count(ItemId::Point), 0);
     }

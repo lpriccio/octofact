@@ -10,12 +10,14 @@ use crate::game::config::GameConfig;
 use crate::game::input::{GameAction, InputState};
 use crate::game::inventory::Inventory;
 use crate::game::recipes::RecipeIndex;
+use crate::game::world::{Structure, WorldState};
 use crate::hyperbolic::poincare::{canonical_polygon, polygon_disk_radius, Complex, Mobius, TilingConfig};
 use crate::hyperbolic::tiling::{format_address, TilingState};
 use crate::render::mesh::build_polygon_mesh;
 use crate::render::pipeline::{RenderState, Uniforms};
 use crate::ui::icons::IconAtlas;
 use crate::ui::integration::EguiIntegration;
+use crate::ui::placement::PlacementMode;
 use crate::ui::style::apply_octofact_style;
 
 struct ClickResult {
@@ -161,6 +163,9 @@ pub struct App {
     config: GameConfig,
     inventory: Inventory,
     recipes: RecipeIndex,
+    world: WorldState,
+    placement_mode: Option<PlacementMode>,
+    placement_open: bool,
     last_frame: Option<std::time::Instant>,
     cursor_pos: Option<winit::dpi::PhysicalPosition<f64>>,
     settings_open: bool,
@@ -189,6 +194,9 @@ impl App {
             config,
             inventory: Inventory::starting_inventory(),
             recipes: RecipeIndex::new(),
+            world: WorldState::new(),
+            placement_mode: None,
+            placement_open: false,
             last_frame: None,
             cursor_pos: None,
             settings_open: false,
@@ -481,6 +489,62 @@ impl App {
         }
     }
 
+    fn handle_placement_click(&mut self, sx: f64, sy: f64) {
+        let mode = match self.placement_mode.as_ref() {
+            Some(m) => m.clone(),
+            None => return,
+        };
+
+        let result = match self.find_clicked_tile(sx, sy) {
+            Some(r) => r,
+            None => return,
+        };
+
+        if self.inventory.count(mode.item) == 0 {
+            return;
+        }
+
+        let running = self.running.as_ref().unwrap();
+        let address = running.tiling.tiles[result.tile_idx].address.clone();
+
+        let structure = Structure {
+            item: mode.item,
+            direction: mode.direction,
+        };
+
+        if !self.world.place(&address, result.grid_xy, structure) {
+            return; // occupied
+        }
+
+        self.inventory.remove(mode.item, 1);
+
+        // Flash feedback at placement location
+        let running = self.running.as_ref().unwrap();
+        let width = running.gpu.config.width as f32;
+        let height = running.gpu.config.height as f32;
+        let scale = running.gpu.window.scale_factor() as f32;
+        let aspect = width / height;
+        let view_proj = self.build_view_proj(aspect);
+
+        let inv_view = self.camera_local.inverse();
+        let tile_xform = running.tiling.tiles[result.tile_idx].transform;
+        let combined = inv_view.compose(&tile_xform);
+        let world_disk = combined.apply(result.local_disk);
+        let bowl = crate::hyperbolic::embedding::disk_to_bowl(world_disk);
+        let elevation = running.extra_elevation.get(&result.tile_idx).copied().unwrap_or(0.0);
+        let world_pos = glam::Vec3::new(bowl[0], bowl[1] + elevation, bowl[2]);
+
+        if let Some((px, py)) = project_to_screen(world_pos, &view_proj, width, height) {
+            self.flash_label = format!(
+                "{} {}",
+                mode.item.display_name(),
+                mode.direction.arrow_char(),
+            );
+            self.flash_screen_pos = Some((px / scale, py / scale));
+            self.flash_timer = 0.4;
+        }
+    }
+
     fn modify_terrain(&mut self, sx: f64, sy: f64, delta: f32) {
         let result = match self.find_clicked_tile(sx, sy) {
             Some(r) => r,
@@ -603,6 +667,15 @@ impl App {
             &self.recipes,
         );
 
+        // Placement panel
+        crate::ui::placement::placement_panel(
+            &running.egui.ctx.clone(),
+            &mut self.placement_open,
+            &self.inventory,
+            &running.icon_atlas,
+            &mut self.placement_mode,
+        );
+
         // Debug click flash
         if self.flash_timer > 0.0 {
             if let Some((fx, fy)) = self.flash_screen_pos {
@@ -631,6 +704,137 @@ impl App {
                         }
                     });
             }
+        }
+
+        // Belt overlay — projected flat on tile surface
+        {
+            let egui_ctx = running.egui.ctx.clone();
+            let scale = window.scale_factor() as f32;
+            let khs = self.klein_half_side;
+            let divisions = 64.0_f64;
+            egui::Area::new(egui::Id::new("belt_overlay"))
+                .order(egui::Order::Background)
+                .interactable(false)
+                .show(&egui_ctx, |ui| {
+                    let painter = ui.painter();
+                    for &(tile_idx, combined) in &visible {
+                        let tile = &running.tiling.tiles[tile_idx];
+                        let disk_center = combined.apply(Complex::ZERO);
+                        if disk_center.abs() > 0.9 {
+                            continue;
+                        }
+                        let cell = match self.world.get_cell(&tile.address) {
+                            Some(c) => c,
+                            None => continue,
+                        };
+                        let elevation = running.extra_elevation.get(&tile_idx).copied().unwrap_or(0.0);
+                        let dist = disk_center.abs();
+                        let alpha = ((1.0 - dist / 0.9) * 1.5).clamp(0.0, 1.0);
+                        if alpha < 0.01 {
+                            continue;
+                        }
+
+                        for (&(gx, gy), structure) in &cell.structures {
+                            // Project fractional grid coords through the full 3D pipeline
+                            let grid_to_screen = |fx: f64, fy: f64| -> Option<egui::Pos2> {
+                                let skx = (fx / divisions) * 2.0 * khs;
+                                let sky = (fy / divisions) * 2.0 * khs;
+                                let kr2 = skx * skx + sky * sky;
+                                let d = 1.0 + (1.0 - kr2).max(0.0).sqrt();
+                                let ld = Complex::new(skx / d, sky / d);
+                                let wd = combined.apply(ld);
+                                let b = crate::hyperbolic::embedding::disk_to_bowl(wd);
+                                let wp = glam::Vec3::new(b[0], b[1] + elevation, b[2]);
+                                project_to_screen(wp, &view_proj, width, height)
+                                    .map(|(px, py)| egui::pos2(px / scale, py / scale))
+                            };
+
+                            let cx = gx as f64;
+                            let cy = gy as f64;
+                            let h = 0.48; // slightly inset from full grid cell
+
+                            // Four corners of the belt, projected flat on the surface
+                            let c0 = grid_to_screen(cx - h, cy - h);
+                            let c1 = grid_to_screen(cx + h, cy - h);
+                            let c2 = grid_to_screen(cx + h, cy + h);
+                            let c3 = grid_to_screen(cx - h, cy + h);
+
+                            let corners = match (c0, c1, c2, c3) {
+                                (Some(a), Some(b), Some(c), Some(d)) => [a, b, c, d],
+                                _ => continue,
+                            };
+
+                            let a_edge = (alpha * 220.0) as u8;
+                            let a_fill = (alpha * 180.0) as u8;
+                            let a_hilite = (alpha * 100.0) as u8;
+                            let a_arrow = (alpha * 240.0) as u8;
+
+                            // Dark outer edge (slightly larger quad)
+                            let centroid = egui::pos2(
+                                corners.iter().map(|p| p.x).sum::<f32>() / 4.0,
+                                corners.iter().map(|p| p.y).sum::<f32>() / 4.0,
+                            );
+                            let edge_corners: Vec<egui::Pos2> = corners.iter().map(|p| {
+                                let dx = p.x - centroid.x;
+                                let dy = p.y - centroid.y;
+                                egui::pos2(centroid.x + dx * 1.12, centroid.y + dy * 1.12)
+                            }).collect();
+                            painter.add(egui::Shape::convex_polygon(
+                                edge_corners,
+                                egui::Color32::from_rgba_unmultiplied(20, 20, 20, a_edge),
+                                egui::Stroke::NONE,
+                            ));
+
+                            // Light bevel highlight (top-left bias)
+                            let hilite_corners: Vec<egui::Pos2> = corners.iter().enumerate().map(|(i, p)| {
+                                let dx = p.x - centroid.x;
+                                let dy = p.y - centroid.y;
+                                // Shift highlight inward more on bottom-right corners (indices 2,3)
+                                let shrink = if i == 0 || i == 1 { 1.04 } else { 0.96 };
+                                egui::pos2(centroid.x + dx * shrink, centroid.y + dy * shrink)
+                            }).collect();
+                            painter.add(egui::Shape::convex_polygon(
+                                hilite_corners,
+                                egui::Color32::from_rgba_unmultiplied(180, 180, 185, a_hilite),
+                                egui::Stroke::NONE,
+                            ));
+
+                            // Main belt face
+                            painter.add(egui::Shape::convex_polygon(
+                                corners.to_vec(),
+                                egui::Color32::from_rgba_unmultiplied(140, 140, 145, a_fill),
+                                egui::Stroke::NONE,
+                            ));
+
+                            // Dark bevel shadow (bottom-right bias)
+                            let shadow_corners: Vec<egui::Pos2> = corners.iter().enumerate().map(|(i, p)| {
+                                let dx = p.x - centroid.x;
+                                let dy = p.y - centroid.y;
+                                let shrink = if i == 2 || i == 3 { 1.0 } else { 0.88 };
+                                egui::pos2(centroid.x + dx * shrink, centroid.y + dy * shrink)
+                            }).collect();
+                            painter.add(egui::Shape::convex_polygon(
+                                shadow_corners,
+                                egui::Color32::from_rgba_unmultiplied(60, 60, 60, a_hilite),
+                                egui::Stroke::NONE,
+                            ));
+
+                            // Direction arrow — projected triangle flat on surface
+                            let (dx, dy) = structure.direction.grid_offset();
+                            let tip = grid_to_screen(cx + dx * 0.35, cy + dy * 0.35);
+                            let bl = grid_to_screen(cx - dx * 0.25 - dy * 0.2, cy - dy * 0.25 + dx * 0.2);
+                            let br = grid_to_screen(cx - dx * 0.25 + dy * 0.2, cy - dy * 0.25 - dx * 0.2);
+
+                            if let (Some(t), Some(l), Some(r)) = (tip, bl, br) {
+                                painter.add(egui::Shape::convex_polygon(
+                                    vec![t, l, r],
+                                    egui::Color32::from_rgba_unmultiplied(30, 30, 30, a_arrow),
+                                    egui::Stroke::NONE,
+                                ));
+                            }
+                        }
+                    }
+                });
         }
 
         let full_output = running.egui.end_frame(&window);
@@ -809,6 +1013,17 @@ impl ApplicationHandler for App {
                         self.grid_enabled = !self.grid_enabled;
                         log::info!("grid: {}", if self.grid_enabled { "ON" } else { "OFF" });
                     }
+                    if self.input_state.just_pressed(GameAction::OpenPlacement) {
+                        self.placement_open = !self.placement_open;
+                        if !self.placement_open {
+                            self.placement_mode = None;
+                        }
+                    }
+                    if self.input_state.just_pressed(GameAction::RotateStructure) {
+                        if let Some(mode) = &mut self.placement_mode {
+                            mode.direction = mode.direction.rotate_cw();
+                        }
+                    }
                     if self.input_state.just_pressed(GameAction::RaiseTerrain) {
                         if let Some(pos) = self.cursor_pos {
                             self.modify_terrain(pos.x, pos.y, 0.04);
@@ -847,10 +1062,13 @@ impl ApplicationHandler for App {
             WindowEvent::MouseInput { state, button, .. } => {
                 if state == winit::event::ElementState::Pressed
                     && button == winit::event::MouseButton::Left
-                    && !self.ui_is_open()
                 {
                     if let Some(pos) = self.cursor_pos {
-                        self.handle_debug_click(pos.x, pos.y);
+                        if self.placement_mode.is_some() {
+                            self.handle_placement_click(pos.x, pos.y);
+                        } else if !self.ui_is_open() {
+                            self.handle_debug_click(pos.x, pos.y);
+                        }
                     }
                 }
             }

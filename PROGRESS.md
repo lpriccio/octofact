@@ -45,7 +45,7 @@
 
 > Complete the production chain: belts -> inserters -> machines -> inserters -> belts.
 
-- [ ] Create `sim/machine.rs` with `MachinePool` (SoA hot/cold split)
+- [x] Create `sim/machine.rs` with `MachinePool` (SoA hot/cold split)
 - [ ] Implement machine state machine: Idle -> Working -> OutputFull / NoInput / NoPower
 - [ ] Create `sim/inserter.rs` with `InserterPool`
 - [ ] Implement inserter grab/place logic with two-phase transfer

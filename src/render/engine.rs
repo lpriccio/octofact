@@ -3,8 +3,8 @@ use winit::window::Window;
 
 use crate::hyperbolic::poincare::{Complex, Mobius};
 use crate::hyperbolic::tiling::TilingState;
-use crate::render::instances::{BeltInstance, InstanceBuffer, MachineInstance, TileInstance};
-use crate::render::pipeline::{BeltPipeline, Globals, MachinePipeline, RenderState, TilePipeline, MAX_TILES};
+use crate::render::instances::{BeltInstance, InstanceBuffer, ItemInstance, MachineInstance, TileInstance};
+use crate::render::pipeline::{BeltPipeline, Globals, ItemPipeline, MachinePipeline, RenderState, TilePipeline, MAX_TILES};
 use crate::ui::icons::IconAtlas;
 use crate::ui::integration::EguiIntegration;
 use crate::ui::style::apply_octofact_style;
@@ -95,6 +95,8 @@ pub struct RenderEngine {
     pub belt_instances: InstanceBuffer<BeltInstance>,
     pub machine_pipeline: MachinePipeline,
     pub machine_instances: InstanceBuffer<MachineInstance>,
+    pub item_pipeline: ItemPipeline,
+    pub item_instances: InstanceBuffer<ItemInstance>,
     pub tiling: TilingState,
     pub extra_elevation: std::collections::HashMap<usize, f32>,
     pub egui: EguiIntegration,
@@ -133,6 +135,9 @@ impl RenderEngine {
         let machine_pipeline = MachinePipeline::new(&gpu.device, gpu.config.format, &globals_layout);
         let machine_instances = InstanceBuffer::new(&gpu.device, "machine instances", 64);
 
+        let item_pipeline = ItemPipeline::new(&gpu.device, gpu.config.format, &globals_layout);
+        let item_instances = InstanceBuffer::new(&gpu.device, "item instances", 256);
+
         let egui = EguiIntegration::new(&gpu.device, gpu.config.format, window);
         apply_octofact_style(&egui.ctx);
         let icon_atlas = IconAtlas::generate(&egui.ctx);
@@ -146,6 +151,8 @@ impl RenderEngine {
             belt_instances,
             machine_pipeline,
             machine_instances,
+            item_pipeline,
+            item_instances,
             tiling,
             extra_elevation: std::collections::HashMap::new(),
             egui,
@@ -309,6 +316,20 @@ impl RenderEngine {
                     wgpu::IndexFormat::Uint16,
                 );
                 pass.draw_indexed(0..self.machine_pipeline.num_indices, 0, 0..machine_count);
+            }
+
+            // Draw items on belts (instanced)
+            let item_count = self.item_instances.count();
+            if item_count > 0 {
+                pass.set_pipeline(&self.item_pipeline.pipeline);
+                pass.set_bind_group(0, &self.tile_pipeline.globals_bind_group, &[]);
+                pass.set_vertex_buffer(0, self.item_pipeline.vertex_buffer.slice(..));
+                pass.set_vertex_buffer(1, self.item_instances.slice());
+                pass.set_index_buffer(
+                    self.item_pipeline.index_buffer.slice(..),
+                    wgpu::IndexFormat::Uint16,
+                );
+                pass.draw_indexed(0..self.item_pipeline.num_indices, 0, 0..item_count);
             }
         }
 

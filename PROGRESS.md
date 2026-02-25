@@ -86,14 +86,25 @@
 - [x] Write `tile.wgsl` shader with per-instance Mobius from vertex buffer
 - [x] Write `belt.wgsl` shader: position rectangle on tile surface via instance data
 - [x] Write `machine.wgsl` shader with machine-type-specific visuals
-- [ ] Write `item.wgsl` shader: billboard or sprite at belt position
+- [x] Write `item.wgsl` shader: billboard or sprite at belt position
 - [x] Shared WGSL functions: `apply_mobius()`, `disk_to_bowl()`, `klein_to_poincare()`
 - [x] Build instance buffers each frame from visible tiles + world state
-- [ ] Update belt/inserter connection logic for multi-cell machine footprints (1x1, 2x2, 3x2)
 - [ ] Delete egui belt overlay code
 - [ ] Delete per-tile uniform buffer and dynamic offset system
 
-## Phase 7: Chunk Streaming
+## Phase 7: Multi-Cell Machines
+
+> Support machines with footprints larger than 1x1 grid cells.
+
+- [ ] Extend `PortDef` with grid offset for ports on non-origin cells
+- [ ] Update `WorldState` to register multi-cell machines across all occupied cells
+- [ ] Update placement logic to check entire footprint is free
+- [ ] Update rotation to transform cell offsets as well as port directions
+- [ ] Define footprints per machine type (e.g., Embedder 1x2, Transformer 2x2)
+- [ ] Update belt connection logic to check ports on exterior cells only
+- [ ] Update rendering for multi-cell machine meshes
+
+## Phase 8: Chunk Streaming
 
 > Support unbounded world exploration without running out of memory.
 
@@ -105,17 +116,7 @@
 - [ ] Integrate with `TilingState`: on-demand tile generation instead of global BFS
 - [ ] Integrate with simulation: only tick Active/Nearby chunks
 
-## Phase 8: Multi-Cell Machines
 
-> Support machines with footprints larger than 1x1 grid cells.
-
-- [ ] Extend `PortDef` with grid offset for ports on non-origin cells
-- [ ] Update `WorldState` to register multi-cell machines across all occupied cells
-- [ ] Update placement logic to check entire footprint is free
-- [ ] Update rotation to transform cell offsets as well as port directions
-- [ ] Define footprints per machine type (e.g., Embedder 1x2, Transformer 2x2)
-- [ ] Update belt connection logic to check ports on exterior cells only
-- [ ] Update rendering for multi-cell machine meshes
 
 ## Phase 9: Save/Load
 

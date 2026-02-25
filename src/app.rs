@@ -15,7 +15,7 @@ use crate::hyperbolic::poincare::{canonical_polygon, polygon_disk_radius, Comple
 use crate::hyperbolic::tiling::{format_address, TileAddr};
 use crate::render::camera::Camera;
 use crate::render::engine::{project_to_screen, project_to_screen_unclamped, RenderEngine};
-use crate::render::instances::{BeltInstance, MachineInstance};
+use crate::render::instances::{BeltInstance, ItemInstance, MachineInstance};
 use crate::render::mesh::build_polygon_mesh;
 use crate::sim::belt::BeltNetwork;
 use crate::sim::tick::GameLoop;
@@ -829,6 +829,50 @@ impl App {
             }
         }
         re.machine_instances.upload(&re.gpu.device, &re.gpu.queue);
+
+        // Build item instances from items riding on visible belts
+        re.item_instances.clear();
+        let khs = self.klein_half_side;
+        let divisions = 64.0;
+        for &(tile_idx, combined) in &visible {
+            let tile = &re.tiling.tiles[tile_idx];
+            let entities = match self.world.tile_entities(&tile.address) {
+                Some(e) => e,
+                None => continue,
+            };
+            let ma = [combined.a.re as f32, combined.a.im as f32];
+            let mb = [combined.b.re as f32, combined.b.im as f32];
+            for (&(gx, gy), &entity) in entities {
+                if !matches!(self.world.kind(entity), Some(StructureKind::Belt)) {
+                    continue;
+                }
+                let dir = match self.world.direction(entity) {
+                    Some(d) => d,
+                    None => continue,
+                };
+                if let Some((belt_items, offset)) = self.belt_network.entity_items(entity) {
+                    let (dx, dy) = dir.grid_offset();
+                    for bi in belt_items {
+                        let pos_frac = (bi.pos - offset) as f64 / crate::sim::belt::FP_SCALE as f64;
+                        let item_gx = gx as f64 + dx * (0.5 - pos_frac);
+                        let item_gy = gy as f64 + dy * (0.5 - pos_frac);
+                        let klein_x = (item_gx / divisions * 2.0 * khs) as f32;
+                        let klein_y = (item_gy / divisions * 2.0 * khs) as f32;
+                        let type_idx = crate::game::items::ItemId::all()
+                            .iter()
+                            .position(|&x| x == bi.item)
+                            .unwrap_or(0) as f32;
+                        re.item_instances.push(ItemInstance {
+                            mobius_a: ma,
+                            mobius_b: mb,
+                            klein_pos: [klein_x, klein_y],
+                            item_type: type_idx,
+                        });
+                    }
+                }
+            }
+        }
+        re.item_instances.upload(&re.gpu.device, &re.gpu.queue);
 
         let window = re.gpu.window.clone();
         let width = re.width();

@@ -1,4 +1,4 @@
-use super::instances::{BeltInstance, MachineInstance, TileInstance};
+use super::instances::{BeltInstance, ItemInstance, MachineInstance, TileInstance};
 use super::mesh::{QuadVertex, Vertex};
 
 /// Uniforms: 112 bytes, padded to 256 for dynamic offset alignment.
@@ -522,6 +522,107 @@ impl MachinePipeline {
 
         let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("machine index buffer"),
+            contents: bytemuck::cast_slice(&quad_indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+
+        Self {
+            pipeline,
+            vertex_buffer,
+            index_buffer,
+            num_indices: quad_indices.len() as u32,
+        }
+    }
+}
+
+/// Instanced item pipeline: one draw call for all visible items on belts.
+/// Uses the same Globals uniform bind group as TilePipeline.
+pub struct ItemPipeline {
+    pub pipeline: wgpu::RenderPipeline,
+    pub vertex_buffer: wgpu::Buffer,
+    pub index_buffer: wgpu::Buffer,
+    pub num_indices: u32,
+}
+
+impl ItemPipeline {
+    /// Create the item pipeline. `globals_layout` should come from
+    /// `tile_pipeline.pipeline.get_bind_group_layout(0)` to share the same bind group.
+    pub fn new(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        globals_layout: &wgpu::BindGroupLayout,
+    ) -> Self {
+        use wgpu::util::DeviceExt;
+
+        let common_src = include_str!("common.wgsl");
+        let item_src = include_str!("item.wgsl");
+        let full_src = format!("{}\n{}", common_src, item_src);
+
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("item instanced shader"),
+            source: wgpu::ShaderSource::Wgsl(full_src.into()),
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("item pipeline layout"),
+            bind_group_layouts: &[globals_layout],
+            push_constant_ranges: &[],
+        });
+
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("item instanced pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_item"),
+                buffers: &[QuadVertex::desc(), ItemInstance::desc()],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_item"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview: None,
+            cache: None,
+        });
+
+        let (quad_verts, quad_indices) = crate::render::mesh::build_quad_mesh();
+
+        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("item vertex buffer"),
+            contents: bytemuck::cast_slice(&quad_verts),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("item index buffer"),
             contents: bytemuck::cast_slice(&quad_indices),
             usage: wgpu::BufferUsages::INDEX,
         });

@@ -303,6 +303,29 @@ impl BeltNetwork {
         Some((&line.items[start..end], seg.offset))
     }
 
+    /// Link the output end of `source`'s transport line to the input end of
+    /// `target`'s transport line. Used for cross-tile belt connections where
+    /// items should transfer across tile boundaries.
+    pub fn link_output_to_input(&mut self, source: EntityId, target: EntityId) {
+        let source_line_id = match self.segments.get(source) {
+            Some(seg) => seg.line,
+            None => return,
+        };
+        let target_line_id = match self.segments.get(target) {
+            Some(seg) => seg.line,
+            None => return,
+        };
+        if source_line_id == target_line_id {
+            return;
+        }
+        if let Some(line) = self.lines.get_mut(source_line_id) {
+            line.output_end = BeltEnd::Belt(target_line_id);
+        }
+        if let Some(line) = self.lines.get_mut(target_line_id) {
+            line.input_end = BeltEnd::Belt(source_line_id);
+        }
+    }
+
     /// Advance N ticks (for chunk fast-forward).
     #[allow(dead_code)]
     pub fn fast_forward(&mut self, ticks: u32) {
@@ -313,7 +336,7 @@ impl BeltNetwork {
 }
 
 /// Check if a grid position is within a tile's bounds (-32..=32 on each axis).
-fn is_within_tile(gx: i32, gy: i32) -> bool {
+pub fn is_within_tile(gx: i32, gy: i32) -> bool {
     (-32..=32).contains(&gx) && (-32..=32).contains(&gy)
 }
 
@@ -583,5 +606,99 @@ mod tests {
         let items = local_items(&net, e1);
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].1, 0);
+    }
+
+    #[test]
+    fn cross_tile_link_transfers_items() {
+        let mut world = WorldState::new();
+        let mut net = BeltNetwork::new();
+
+        // Tile A: belt at (32, 0) East — at the eastern edge
+        let e1 = place_belt(&mut world, &mut net, &[0], 32, 0, Direction::East);
+        // Tile B: belt at (-32, 0) East — at the western edge
+        let e2 = place_belt(&mut world, &mut net, &[0, 0], -32, 0, Direction::East);
+
+        // Link: e1's output → e2's input (cross-tile)
+        net.link_output_to_input(e1, e2);
+
+        // Spawn item on e1
+        net.spawn_item_on_entity(e1, ItemId::NullSet);
+
+        // Run enough ticks for item to transfer
+        for _ in 0..1000 {
+            net.tick();
+        }
+
+        // Item should have moved from e1 to e2
+        let items1 = local_items(&net, e1);
+        let items2 = local_items(&net, e2);
+        assert_eq!(items1.len(), 0);
+        assert_eq!(items2.len(), 1);
+        assert_eq!(items2[0].0, ItemId::NullSet);
+    }
+
+    #[test]
+    fn cross_tile_link_with_merged_lines() {
+        let mut world = WorldState::new();
+        let mut net = BeltNetwork::new();
+
+        // Tile A: belts at (31, 0) and (32, 0) East — merged line
+        let e1 = place_belt(&mut world, &mut net, &[0], 31, 0, Direction::East);
+        let e2 = place_belt(&mut world, &mut net, &[0], 32, 0, Direction::East);
+        // Tile B: belt at (-32, 0) East
+        let e3 = place_belt(&mut world, &mut net, &[0, 0], -32, 0, Direction::East);
+
+        // e1 and e2 are on the same line
+        let seg1 = *net.segments.get(e1).unwrap();
+        let seg2 = *net.segments.get(e2).unwrap();
+        assert_eq!(seg1.line, seg2.line);
+
+        // Link output (e2 is at offset 0) to e3's input
+        net.link_output_to_input(e2, e3);
+
+        // Spawn item on e1 (upstream)
+        net.spawn_item_on_entity(e1, ItemId::NullSet);
+
+        for _ in 0..2000 {
+            net.tick();
+        }
+
+        // Item should flow through e1 → e2 → cross-tile → e3
+        let items3 = local_items(&net, e3);
+        assert_eq!(items3.len(), 1);
+        assert_eq!(items3[0].0, ItemId::NullSet);
+    }
+
+    #[test]
+    fn cross_tile_bidirectional_link() {
+        let mut world = WorldState::new();
+        let mut net = BeltNetwork::new();
+
+        // Two belts flowing in opposite directions across the same tile boundary
+        // Tile A: belt at (32, 0) East, belt at (32, 1) West (separate lines)
+        let e1 = place_belt(&mut world, &mut net, &[0], 32, 0, Direction::East);
+        let e2 = place_belt(&mut world, &mut net, &[0], -32, 1, Direction::West);
+
+        // Tile B: corresponding belts
+        let e3 = place_belt(&mut world, &mut net, &[0, 0], -32, 0, Direction::East);
+        let e4 = place_belt(&mut world, &mut net, &[0, 0], 32, 1, Direction::West);
+
+        // Link e1→e3 (East flow) and e4→e2 (West flow)
+        net.link_output_to_input(e1, e3);
+        net.link_output_to_input(e4, e2);
+
+        net.spawn_item_on_entity(e1, ItemId::NullSet);
+        net.spawn_item_on_entity(e4, ItemId::Point);
+
+        for _ in 0..1000 {
+            net.tick();
+        }
+
+        let items3 = local_items(&net, e3);
+        let items2 = local_items(&net, e2);
+        assert_eq!(items3.len(), 1);
+        assert_eq!(items3[0].0, ItemId::NullSet);
+        assert_eq!(items2.len(), 1);
+        assert_eq!(items2[0].0, ItemId::Point);
     }
 }

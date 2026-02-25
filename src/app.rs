@@ -10,7 +10,7 @@ use crate::game::config::GameConfig;
 use crate::game::input::{GameAction, InputState};
 use crate::game::inventory::Inventory;
 use crate::game::recipes::RecipeIndex;
-use crate::game::world::{Direction, StructureKind, WorldState};
+use crate::game::world::{Direction, EntityId, StructureKind, WorldState};
 use crate::hyperbolic::poincare::{canonical_polygon, polygon_disk_radius, Complex, Mobius, TilingConfig};
 use crate::hyperbolic::tiling::{format_address, TileAddr, TilingState};
 use crate::render::camera::Camera;
@@ -384,6 +384,8 @@ impl App {
             self.belt_network.on_belt_placed(
                 entity, address, grid_xy.0, grid_xy.1, mode.direction, &self.world,
             );
+            // Establish cross-tile transport line links
+            self.check_cross_tile_belt_link(entity, tile_idx, address, grid_xy, mode.direction);
         }
 
         // Flash feedback
@@ -421,6 +423,66 @@ impl App {
             self.ui.flash_timer = 0.4;
         }
         true
+    }
+
+    /// After a belt is placed, check if its ahead/behind positions cross a tile
+    /// boundary. If so, find the neighboring tile's belt and link the two
+    /// transport lines via `BeltEnd::Belt`.
+    ///
+    /// Cross-tile check triggers when the neighbor position is:
+    /// - Off-tile (outside -32..=32), OR
+    /// - At the shared edge (±32) with no same-direction belt on this tile.
+    fn check_cross_tile_belt_link(
+        &mut self,
+        entity: EntityId,
+        tile_idx: usize,
+        tile_addr: &[u8],
+        grid_xy: (i32, i32),
+        direction: Direction,
+    ) {
+        use crate::sim::belt::is_within_tile;
+
+        let (dx, dy) = direction.grid_offset_i32();
+        let ahead = (grid_xy.0 + dx, grid_xy.1 + dy);
+        let behind = (grid_xy.0 - dx, grid_xy.1 - dy);
+
+        // Determine which neighbor positions need cross-tile checks.
+        // Off-tile always needs it; ±32 needs it only if no belt exists there
+        // on this tile (the edge is shared between adjacent tiles).
+        let check_ahead = !is_within_tile(ahead.0, ahead.1)
+            || ((ahead.0.abs() == 32 || ahead.1.abs() == 32)
+                && find_same_dir_belt_at(&self.world, tile_addr, ahead, direction).is_none());
+        let check_behind = !is_within_tile(behind.0, behind.1)
+            || ((behind.0.abs() == 32 || behind.1.abs() == 32)
+                && find_same_dir_belt_at(&self.world, tile_addr, behind, direction).is_none());
+
+        // Output connection: this belt's flow exits toward ahead
+        if check_ahead {
+            let edge = direction.tiling_edge_index();
+            let mirror = cross_tile_mirror(ahead);
+            let running = self.running.as_ref().unwrap();
+            if let Some(neighbor_addr) = running.tiling.neighbor_tile_addr(tile_idx, edge) {
+                if let Some(neighbor_entity) = find_same_dir_belt_at(
+                    &self.world, &neighbor_addr, mirror, direction,
+                ) {
+                    self.belt_network.link_output_to_input(entity, neighbor_entity);
+                }
+            }
+        }
+
+        // Input connection: items would enter this belt from behind
+        if check_behind {
+            let edge = direction.opposite().tiling_edge_index();
+            let mirror = cross_tile_mirror(behind);
+            let running = self.running.as_ref().unwrap();
+            if let Some(neighbor_addr) = running.tiling.neighbor_tile_addr(tile_idx, edge) {
+                if let Some(neighbor_entity) = find_same_dir_belt_at(
+                    &self.world, &neighbor_addr, mirror, direction,
+                ) {
+                    self.belt_network.link_output_to_input(neighbor_entity, entity);
+                }
+            }
+        }
     }
 
     fn handle_placement_click(&mut self, sx: f64, sy: f64) {
@@ -561,19 +623,24 @@ impl App {
                     (result.tile_idx, running.tiling.tiles[result.tile_idx].address.clone())
                 };
 
-                // For {4,n} (even p), grids align straight across edges:
-                // old gx=+32 → new gx=-32 (same gy), and vice versa
-                let new_edge = -old_edge;
+                // For {4,n} (even p), grids align straight across edges.
+                // ±32 on adjacent tiles is the SAME physical edge, so skip it
+                // on the new tile to avoid overlapping belts.
+                // old gx=+32 → new tile starts at gx=-31 (not -32).
+                let inward: i32 = if old_edge > 0 { 1 } else { -1 };
+                let new_start = -old_edge + inward;
                 let new_free = if horizontal { result.grid_xy.0 } else { result.grid_xy.1 };
-                let new_target = new_free.clamp(new_edge - MAX_DRAG_STEP, new_edge + MAX_DRAG_STEP);
+                let clamp_lo = new_start.min(new_start + (MAX_DRAG_STEP - 1) * inward);
+                let clamp_hi = new_start.max(new_start + (MAX_DRAG_STEP - 1) * inward);
+                let new_target = new_free.clamp(clamp_lo, clamp_hi);
 
-                // Fill from new_edge toward cursor on new tile (inclusive)
-                let mut current = new_edge;
+                // Fill from new_start toward cursor on new tile (inclusive)
+                let mut current = new_start;
                 loop {
                     let grid_xy = if horizontal { (current, fixed_coord) } else { (fixed_coord, current) };
                     self.try_place_at(new_tile_idx, &new_address, grid_xy, &mode);
                     if current == new_target { break; }
-                    current += if new_target > new_edge { 1 } else { -1 };
+                    current += inward;
                 }
 
                 // Switch drag to the new tile
@@ -1344,5 +1411,32 @@ impl ApplicationHandler for App {
         if let Some(running) = &self.running {
             running.gpu.window.request_redraw();
         }
+    }
+}
+
+/// Map a grid position at or past the tile edge to the neighbor tile's coordinate.
+/// Tiles share edge positions (±32 ↔ ∓32) and the grid has 64 cells per tile,
+/// so the mapping is a ±64 offset: 32→-32, 33→-31, -32→32, -33→31.
+fn cross_tile_mirror(pos: (i32, i32)) -> (i32, i32) {
+    let mx = if pos.0 > 31 { pos.0 - 64 } else if pos.0 < -31 { pos.0 + 64 } else { pos.0 };
+    let my = if pos.1 > 31 { pos.1 - 64 } else if pos.1 < -31 { pos.1 + 64 } else { pos.1 };
+    (mx, my)
+}
+
+/// Find a belt entity at the given tile + grid position with a specific direction.
+fn find_same_dir_belt_at(
+    world: &WorldState,
+    tile_addr: &[u8],
+    grid_xy: (i32, i32),
+    direction: Direction,
+) -> Option<EntityId> {
+    let entities = world.tile_entities(tile_addr)?;
+    let &entity = entities.get(&grid_xy)?;
+    if world.kind(entity) == Some(StructureKind::Belt)
+        && world.direction(entity) == Some(direction)
+    {
+        Some(entity)
+    } else {
+        None
     }
 }

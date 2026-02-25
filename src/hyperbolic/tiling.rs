@@ -149,6 +149,18 @@ impl TilingState {
         self.spatial_to_tile.get(&key).copied()
     }
 
+    /// Find the address of the tile adjacent to `tile_idx` across edge `edge` (0..p-1).
+    /// Returns None if the neighbor tile hasn't been expanded yet.
+    pub fn neighbor_tile_addr(&self, tile_idx: usize, edge: u8) -> Option<TileAddr> {
+        let tile = &self.tiles[tile_idx];
+        let xforms = &self.neighbor_xforms[tile.parity as usize];
+        let neighbor_transform = tile.transform.compose(&xforms[edge as usize]);
+        let center = neighbor_transform.apply(Complex::ZERO);
+        let key = spatial_key(center);
+        let &idx = self.spatial_to_tile.get(&key)?;
+        Some(self.tiles[idx].address.clone())
+    }
+
     /// Recenter the tiling so that `center_idx` becomes the origin.
     /// Recomputes ALL tile transforms fresh from their canonical addresses,
     /// eliminating accumulated floating-point drift from repeated compositions.

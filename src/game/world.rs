@@ -55,6 +55,26 @@ impl Direction {
             Self::West => (-1, 0),
         }
     }
+
+    pub fn opposite(self) -> Self {
+        match self {
+            Self::North => Self::South,
+            Self::East => Self::West,
+            Self::South => Self::North,
+            Self::West => Self::East,
+        }
+    }
+
+    /// Map this grid direction to the {4,n} tiling edge index (0–3).
+    /// The neighbor transform at angle k·π/2 corresponds to: East=0, South=1, West=2, North=3.
+    pub fn tiling_edge_index(self) -> u8 {
+        match self {
+            Self::East => 0,
+            Self::South => 1,
+            Self::West => 2,
+            Self::North => 3,
+        }
+    }
 }
 
 /// Functional type of a placed structure. Determines which simulation

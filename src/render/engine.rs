@@ -3,8 +3,8 @@ use winit::window::Window;
 
 use crate::hyperbolic::poincare::{Complex, Mobius};
 use crate::hyperbolic::tiling::TilingState;
-use crate::render::instances::{InstanceBuffer, TileInstance};
-use crate::render::pipeline::{Globals, RenderState, TilePipeline, MAX_TILES};
+use crate::render::instances::{BeltInstance, InstanceBuffer, TileInstance};
+use crate::render::pipeline::{BeltPipeline, Globals, RenderState, TilePipeline, MAX_TILES};
 use crate::ui::icons::IconAtlas;
 use crate::ui::integration::EguiIntegration;
 use crate::ui::style::apply_octofact_style;
@@ -91,6 +91,8 @@ pub struct RenderEngine {
     pub render: RenderState,
     pub tile_pipeline: TilePipeline,
     pub tile_instances: InstanceBuffer<TileInstance>,
+    pub belt_pipeline: BeltPipeline,
+    pub belt_instances: InstanceBuffer<BeltInstance>,
     pub tiling: TilingState,
     pub extra_elevation: std::collections::HashMap<usize, f32>,
     pub egui: EguiIntegration,
@@ -122,6 +124,10 @@ impl RenderEngine {
         let tile_pipeline = TilePipeline::new(&gpu.device, gpu.config.format);
         let tile_instances = InstanceBuffer::new(&gpu.device, "tile instances", 256);
 
+        let globals_layout = tile_pipeline.pipeline.get_bind_group_layout(0);
+        let belt_pipeline = BeltPipeline::new(&gpu.device, gpu.config.format, &globals_layout);
+        let belt_instances = InstanceBuffer::new(&gpu.device, "belt instances", 256);
+
         let egui = EguiIntegration::new(&gpu.device, gpu.config.format, window);
         apply_octofact_style(&egui.ctx);
         let icon_atlas = IconAtlas::generate(&egui.ctx);
@@ -131,6 +137,8 @@ impl RenderEngine {
             render,
             tile_pipeline,
             tile_instances,
+            belt_pipeline,
+            belt_instances,
             tiling,
             extra_elevation: std::collections::HashMap::new(),
             egui,
@@ -266,6 +274,20 @@ impl RenderEngine {
                     wgpu::IndexFormat::Uint16,
                 );
                 pass.draw_indexed(0..self.render.num_indices, 0, 0..tile_count);
+            }
+
+            // Draw belt segments (instanced)
+            let belt_count = self.belt_instances.count();
+            if belt_count > 0 {
+                pass.set_pipeline(&self.belt_pipeline.pipeline);
+                pass.set_bind_group(0, &self.tile_pipeline.globals_bind_group, &[]);
+                pass.set_vertex_buffer(0, self.belt_pipeline.vertex_buffer.slice(..));
+                pass.set_vertex_buffer(1, self.belt_instances.slice());
+                pass.set_index_buffer(
+                    self.belt_pipeline.index_buffer.slice(..),
+                    wgpu::IndexFormat::Uint16,
+                );
+                pass.draw_indexed(0..self.belt_pipeline.num_indices, 0, 0..belt_count);
             }
         }
 

@@ -161,3 +161,46 @@ pub fn build_polygon_mesh(vertices: &[Complex]) -> (Vec<Vertex>, Vec<u16>) {
 fn lerp_complex(a: Complex, b: Complex, t: f64) -> Complex {
     Complex::new(a.re + (b.re - a.re) * t, a.im + (b.im - a.im) * t)
 }
+
+/// 16-byte 2D quad vertex: position (8) + uv (8).
+/// Used for belt, machine, and item quads rendered on the tile surface.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct QuadVertex {
+    pub pos: [f32; 2],
+    pub uv: [f32; 2],
+}
+
+impl QuadVertex {
+    pub fn desc() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<QuadVertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 0,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
+                wgpu::VertexAttribute {
+                    offset: 8,
+                    shader_location: 1,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
+            ],
+        }
+    }
+}
+
+/// Build a unit quad mesh centered at origin ([-0.5, 0.5] in both axes).
+/// Returns 4 vertices + 6 indices (two triangles).
+pub fn build_quad_mesh() -> (Vec<QuadVertex>, Vec<u16>) {
+    let verts = vec![
+        QuadVertex { pos: [-0.5, -0.5], uv: [0.0, 0.0] },
+        QuadVertex { pos: [ 0.5, -0.5], uv: [1.0, 0.0] },
+        QuadVertex { pos: [ 0.5,  0.5], uv: [1.0, 1.0] },
+        QuadVertex { pos: [-0.5,  0.5], uv: [0.0, 1.0] },
+    ];
+    let indices = vec![0, 1, 2, 0, 2, 3];
+    (verts, indices)
+}

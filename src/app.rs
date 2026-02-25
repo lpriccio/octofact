@@ -15,6 +15,7 @@ use crate::hyperbolic::poincare::{canonical_polygon, polygon_disk_radius, Comple
 use crate::hyperbolic::tiling::{format_address, TileAddr};
 use crate::render::camera::Camera;
 use crate::render::engine::{project_to_screen, project_to_screen_unclamped, RenderEngine};
+use crate::render::instances::BeltInstance;
 use crate::render::mesh::build_polygon_mesh;
 use crate::sim::belt::BeltNetwork;
 use crate::sim::tick::GameLoop;
@@ -743,6 +744,38 @@ impl App {
         // Visibility culling + instanced tile rendering setup
         let visible = re.visible_tiles(&inv_view);
         re.build_tile_instances(&visible, &view_proj, self.grid_enabled, self.klein_half_side as f32);
+
+        // Build belt instances from visible tiles + world state
+        re.belt_instances.clear();
+        for &(tile_idx, combined) in &visible {
+            let tile = &re.tiling.tiles[tile_idx];
+            let entities = match self.world.tile_entities(&tile.address) {
+                Some(e) => e,
+                None => continue,
+            };
+            for (&(gx, gy), &entity) in entities {
+                if !matches!(self.world.kind(entity), Some(StructureKind::Belt)) {
+                    continue;
+                }
+                let dir = match self.world.direction(entity) {
+                    Some(d) => d,
+                    None => continue,
+                };
+                let dir_float = match dir {
+                    Direction::North => 0.0,
+                    Direction::East => 1.0,
+                    Direction::South => 2.0,
+                    Direction::West => 3.0,
+                };
+                re.belt_instances.push(BeltInstance {
+                    mobius_a: [combined.a.re as f32, combined.a.im as f32],
+                    mobius_b: [combined.b.re as f32, combined.b.im as f32],
+                    grid_pos: [gx as f32, gy as f32],
+                    direction: dir_float,
+                });
+            }
+        }
+        re.belt_instances.upload(&re.gpu.device, &re.gpu.queue);
 
         let window = re.gpu.window.clone();
         let width = re.width();

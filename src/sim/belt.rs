@@ -26,6 +26,14 @@ pub enum BeltEnd {
     Open,
     /// Connected to another transport line.
     Belt(TransportLineId),
+    /// Belt output feeds into a machine's input port.
+    /// `entity` is the machine's EntityId, `slot` is the input slot index.
+    #[allow(dead_code)]
+    MachineInput { entity: EntityId, slot: usize },
+    /// Machine output port feeds into belt input.
+    /// `entity` is the machine's EntityId, `slot` is the output slot index.
+    #[allow(dead_code)]
+    MachineOutput { entity: EntityId, slot: usize },
 }
 
 /// An item riding on a transport line.

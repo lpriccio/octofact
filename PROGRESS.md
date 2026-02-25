@@ -93,7 +93,19 @@
 - [ ] Integrate with `TilingState`: on-demand tile generation instead of global BFS
 - [ ] Integrate with simulation: only tick Active/Nearby chunks
 
-## Phase 8: Save/Load
+## Phase 8: Multi-Cell Machines
+
+> Support machines with footprints larger than 1x1 grid cells.
+
+- [ ] Extend `PortDef` with grid offset for ports on non-origin cells
+- [ ] Update `WorldState` to register multi-cell machines across all occupied cells
+- [ ] Update placement logic to check entire footprint is free
+- [ ] Update rotation to transform cell offsets as well as port directions
+- [ ] Define footprints per machine type (e.g., Embedder 1x2, Transformer 2x2)
+- [ ] Update belt connection logic to check ports on exterior cells only
+- [ ] Update rendering for multi-cell machine meshes
+
+## Phase 9: Save/Load
 
 > Persist world state across sessions.
 

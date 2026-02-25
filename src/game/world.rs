@@ -65,6 +65,27 @@ impl Direction {
         }
     }
 
+    /// Number of 90° clockwise rotations from North to reach this direction.
+    #[allow(dead_code)]
+    pub fn rotations_from_north(self) -> u8 {
+        match self {
+            Self::North => 0,
+            Self::East => 1,
+            Self::South => 2,
+            Self::West => 3,
+        }
+    }
+
+    /// Rotate clockwise by `n` 90° steps.
+    #[allow(dead_code)]
+    pub fn rotate_n_cw(self, n: u8) -> Self {
+        let mut d = self;
+        for _ in 0..(n % 4) {
+            d = d.rotate_cw();
+        }
+        d
+    }
+
     /// Map this grid direction to the {4,n} tiling edge index (0–3).
     /// The neighbor transform at angle k·π/2 corresponds to: East=0, South=1, West=2, North=3.
     pub fn tiling_edge_index(self) -> u8 {

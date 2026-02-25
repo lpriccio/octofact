@@ -84,7 +84,7 @@
 - [x] Create `InstanceBuffer<T>` helper (staging Vec + GPU buffer + upload)
 - [x] Create `RenderEngine` struct, extract rendering from `app.rs`
 - [x] Write `tile.wgsl` shader with per-instance Mobius from vertex buffer
-- [ ] Write `belt.wgsl` shader: position rectangle on tile surface via instance data
+- [x] Write `belt.wgsl` shader: position rectangle on tile surface via instance data
 - [ ] Write `machine.wgsl` shader with machine-type-specific visuals
 - [ ] Write `item.wgsl` shader: billboard or sprite at belt position
 - [x] Shared WGSL functions: `apply_mobius()`, `disk_to_bowl()`, `klein_to_poincare()`

@@ -13,8 +13,10 @@ use crate::game::recipes::RecipeIndex;
 use crate::game::world::{Structure, WorldState};
 use crate::hyperbolic::poincare::{canonical_polygon, polygon_disk_radius, Complex, Mobius, TilingConfig};
 use crate::hyperbolic::tiling::{format_address, TilingState};
+use crate::render::camera::Camera;
 use crate::render::mesh::build_polygon_mesh;
 use crate::render::pipeline::{RenderState, Uniforms};
+use crate::sim::tick::GameLoop;
 use crate::ui::icons::IconAtlas;
 use crate::ui::integration::EguiIntegration;
 use crate::ui::placement::PlacementMode;
@@ -170,11 +172,8 @@ struct RunningState {
 pub struct App {
     cfg: TilingConfig,
     running: Option<RunningState>,
-    camera_height: f32,
-    camera_tile: usize,
-    camera_local: Mobius,
-    first_person: bool,
-    heading: f64,
+    camera: Camera,
+    game_loop: GameLoop,
     input_state: InputState,
     config: GameConfig,
     inventory: Inventory,
@@ -182,7 +181,6 @@ pub struct App {
     world: WorldState,
     placement_mode: Option<PlacementMode>,
     placement_open: bool,
-    last_frame: Option<std::time::Instant>,
     cursor_pos: Option<winit::dpi::PhysicalPosition<f64>>,
     settings_open: bool,
     inventory_open: bool,
@@ -215,11 +213,8 @@ impl App {
         Self {
             cfg,
             running: None,
-            camera_height: 2.0,
-            camera_tile: 0,
-            camera_local: Mobius::identity(),
-            first_person: false,
-            heading: 0.0,
+            camera: Camera::new(),
+            game_loop: GameLoop::new(),
             input_state,
             config,
             inventory: Inventory::starting_inventory(),
@@ -227,7 +222,6 @@ impl App {
             world: WorldState::new(),
             placement_mode: None,
             placement_open: false,
-            last_frame: None,
             cursor_pos: None,
             settings_open: false,
             inventory_open: false,
@@ -247,185 +241,17 @@ impl App {
         }
     }
 
-    fn build_view_proj(&self, aspect: f32) -> glam::Mat4 {
-        if self.first_person {
-            let eye = glam::Vec3::new(0.0, self.camera_height, 0.0);
-
-            let h = self.heading as f32;
-            let look_dist = 0.5_f32;
-            let target = glam::Vec3::new(
-                -h.sin() * look_dist,
-                0.02,
-                -h.cos() * look_dist,
-            );
-
-            let view = glam::Mat4::look_at_rh(eye, target, glam::Vec3::Y);
-            let proj = glam::Mat4::perspective_rh(90.0_f32.to_radians(), aspect, 0.005, 100.0);
-            proj * view
-        } else {
-            let eye = glam::Vec3::new(0.0, self.camera_height, 0.0);
-            let center = glam::Vec3::ZERO;
-            let up = glam::Vec3::new(0.0, 0.0, -1.0);
-            let view = glam::Mat4::look_at_rh(eye, center, up);
-            let proj = glam::Mat4::perspective_rh(60.0_f32.to_radians(), aspect, 0.1, 100.0);
-            proj * view
-        }
-    }
-
     fn ui_is_open(&self) -> bool {
         self.settings_open || self.inventory_open
     }
 
-    fn process_movement(&mut self, dt: f64) {
-        // Don't process movement when UI is open
-        if self.ui_is_open() {
-            return;
-        }
-
-        let move_speed = 0.8 * dt;
-        let mut dx = 0.0_f64;
-        let mut dy = 0.0_f64;
-
-        if self.first_person {
-            let rotate_speed = 1.8 * dt;
-            if self.input_state.is_active(GameAction::StrafeLeft) {
-                self.heading += rotate_speed;
-            }
-            if self.input_state.is_active(GameAction::StrafeRight) {
-                self.heading -= rotate_speed;
-            }
-            let mut forward = 0.0_f64;
-            if self.input_state.is_active(GameAction::MoveForward) {
-                forward += move_speed;
-            }
-            if self.input_state.is_active(GameAction::MoveBackward) {
-                forward -= move_speed;
-            }
-            if forward != 0.0 {
-                dx = -self.heading.sin() * forward;
-                dy = -self.heading.cos() * forward;
-            }
-        } else {
-            if self.input_state.is_active(GameAction::MoveForward) {
-                dy -= move_speed;
-            }
-            if self.input_state.is_active(GameAction::MoveBackward) {
-                dy += move_speed;
-            }
-            if self.input_state.is_active(GameAction::StrafeLeft) {
-                dx -= move_speed;
-            }
-            if self.input_state.is_active(GameAction::StrafeRight) {
-                dx += move_speed;
-            }
-        }
-        if self.input_state.is_active(GameAction::CameraUp) {
-            self.camera_height = (self.camera_height + 2.0 * dt as f32).min(20.0);
-        }
-        if self.input_state.is_active(GameAction::CameraDown) {
-            let min_height = if self.first_person { 0.02 } else { 1.5 };
-            self.camera_height = (self.camera_height - 2.0 * dt as f32).max(min_height);
-        }
-
-        if dx != 0.0 || dy != 0.0 {
-            let dist = (dx * dx + dy * dy).sqrt();
-            let half_d = dist / 2.0;
-            let a_val = half_d.cosh();
-            let b_mag = half_d.sinh();
-            let theta = dy.atan2(dx);
-            let translation = Mobius {
-                a: Complex::new(a_val, 0.0),
-                b: Complex::from_polar(b_mag, theta),
-            };
-            self.camera_local = self.camera_local.compose(&translation);
-
-            if let Some(running) = &mut self.running {
-                let tiling = &mut running.tiling;
-                let camera_pos = self.camera_local.apply(Complex::ZERO);
-                let dist_to_origin = camera_pos.abs();
-
-                let cam_parity = tiling.tiles[self.camera_tile].parity as usize;
-                let xforms = &tiling.neighbor_xforms[cam_parity];
-                let mut best_dir: Option<usize> = None;
-                let mut best_dist = dist_to_origin;
-                for (dir, xform) in xforms.iter().enumerate() {
-                    let neighbor_center = xform.apply(Complex::ZERO);
-                    let d = (camera_pos - neighbor_center).abs();
-                    if d < best_dist {
-                        best_dist = d;
-                        best_dir = Some(dir);
-                    }
-                }
-
-                if let Some(dir) = best_dir {
-                    let current_tile_xform = tiling.tiles[self.camera_tile].transform;
-                    let neighbor_abs = current_tile_xform.compose(&xforms[dir]);
-                    let neighbor_center = neighbor_abs.apply(Complex::ZERO);
-
-                    if let Some(new_tile_idx) = tiling.find_tile_near(neighbor_center) {
-                        let new_tile_xform = tiling.tiles[new_tile_idx].transform;
-                        let inv_new = new_tile_xform.inverse();
-                        self.camera_local =
-                            inv_new.compose(&current_tile_xform.compose(&self.camera_local));
-                        self.camera_tile = new_tile_idx;
-                        tiling.recenter_on(new_tile_idx);
-                    }
-                }
-            }
-        }
-
-        if let Some(running) = &mut self.running {
-            let cam_pos = self.camera_local.apply(Complex::ZERO);
-            running.tiling.ensure_coverage(cam_pos, 3);
-        }
-    }
-
-    fn unproject_to_disk(&self, sx: f64, sy: f64) -> Option<Complex> {
-        let running = self.running.as_ref()?;
-        let width = running.gpu.config.width as f32;
-        let height = running.gpu.config.height as f32;
-        let aspect = width / height;
-        let view_proj = self.build_view_proj(aspect);
-        let inv_vp = view_proj.inverse();
-
-        let ndc_x = 2.0 * (sx as f32 / width) - 1.0;
-        let ndc_y = 1.0 - 2.0 * (sy as f32 / height);
-
-        let near = inv_vp * glam::Vec4::new(ndc_x, ndc_y, -1.0, 1.0);
-        let far = inv_vp * glam::Vec4::new(ndc_x, ndc_y, 1.0, 1.0);
-        let near = glam::Vec3::new(near.x / near.w, near.y / near.w, near.z / near.w);
-        let far = glam::Vec3::new(far.x / far.w, far.y / far.w, far.z / far.w);
-
-        let dir = far - near;
-        if dir.y.abs() < 1e-8 {
-            return None;
-        }
-
-        // Iteratively intersect ray with bowl surface y = 0.4*r²/(1+r²)
-        // Start with Y=0, refine by computing bowl height at each hit point
-        let mut target_y = 0.0_f32;
-        for _ in 0..5 {
-            let t = (target_y - near.y) / dir.y;
-            if t < 0.0 {
-                return None;
-            }
-            let hit = near + dir * t;
-            let r2 = hit.x * hit.x + hit.z * hit.z;
-            target_y = 0.4 * r2 / (1.0 + r2);
-        }
-        let t = (target_y - near.y) / dir.y;
-        if t < 0.0 {
-            return None;
-        }
-        let hit = near + dir * t;
-        Some(Complex::new(hit.x as f64, hit.z as f64))
-    }
-
     fn find_clicked_tile(&self, sx: f64, sy: f64) -> Option<ClickResult> {
         let running = self.running.as_ref()?;
-        let inv_view = self.camera_local.inverse();
+        let inv_view = self.camera.local.inverse();
         let khs = self.klein_half_side;
-        let click_disk = self.unproject_to_disk(sx, sy)?;
+        let width = running.gpu.config.width as f32;
+        let height = running.gpu.config.height as f32;
+        let click_disk = self.camera.unproject_to_disk(sx, sy, width, height)?;
 
         // Find the tile whose Klein cell actually contains the click.
         // For each visible tile, compute local Klein coords and pick the
@@ -496,9 +322,9 @@ impl App {
         let height = running.gpu.config.height as f32;
         let scale = running.gpu.window.scale_factor() as f32;
         let aspect = width / height;
-        let view_proj = self.build_view_proj(aspect);
+        let view_proj = self.camera.build_view_proj(aspect);
 
-        let inv_view = self.camera_local.inverse();
+        let inv_view = self.camera.local.inverse();
         let tile_xform = running.tiling.tiles[result.tile_idx].transform;
         let combined = inv_view.compose(&tile_xform);
         // Transform snapped local Poincare coords back to view-space disk
@@ -541,11 +367,11 @@ impl App {
         let height = running.gpu.config.height as f32;
         let scale = running.gpu.window.scale_factor() as f32;
         let aspect = width / height;
-        let view_proj = self.build_view_proj(aspect);
+        let view_proj = self.camera.build_view_proj(aspect);
         let khs = self.klein_half_side;
         let divisions = 64.0_f64;
 
-        let inv_view = self.camera_local.inverse();
+        let inv_view = self.camera.local.inverse();
         let tile_xform = running.tiling.tiles[tile_idx].transform;
         let combined = inv_view.compose(&tile_xform);
 
@@ -703,11 +529,15 @@ impl App {
     }
 
     fn render_frame(&mut self) -> Result<(), wgpu::SurfaceError> {
+        // Use interpolated camera for smooth rendering between sim ticks
+        let render_camera = self.game_loop.interpolated_camera()
+            .unwrap_or_else(|| self.camera.snapshot());
+
         let aspect = {
             let gpu = &self.running.as_ref().unwrap().gpu;
             gpu.config.width as f32 / gpu.config.height as f32
         };
-        let view_proj = self.build_view_proj(aspect);
+        let view_proj = render_camera.build_view_proj(aspect);
 
         let running = self.running.as_mut().unwrap();
         let window = running.gpu.window.clone();
@@ -720,7 +550,7 @@ impl App {
         let width = running.gpu.config.width as f32;
         let height = running.gpu.config.height as f32;
 
-        let inv_view = self.camera_local.inverse();
+        let inv_view = render_camera.local.inverse();
 
         let running = self.running.as_mut().unwrap();
 
@@ -852,6 +682,25 @@ impl App {
                         }
                     });
             }
+        }
+
+        // FPS / UPS debug overlay
+        {
+            let egui_ctx = running.egui.ctx.clone();
+            egui::Area::new(egui::Id::new("fps_ups_overlay"))
+                .order(egui::Order::Foreground)
+                .fixed_pos(egui::pos2(8.0, 8.0))
+                .interactable(false)
+                .show(&egui_ctx, |ui| {
+                    let fps = self.game_loop.fps;
+                    let ups = self.game_loop.ups;
+                    ui.label(
+                        egui::RichText::new(format!("FPS {fps:.0}  UPS {ups:.0}"))
+                            .color(egui::Color32::from_rgb(180, 220, 180))
+                            .size(13.0)
+                            .font(egui::FontId::monospace(13.0)),
+                    );
+                });
         }
 
         // Belt overlay — projected flat on tile surface
@@ -1154,9 +1003,8 @@ impl ApplicationHandler for App {
                         }
                     }
                     if self.input_state.just_pressed(GameAction::ToggleViewMode) {
-                        self.first_person = !self.first_person;
-                        self.camera_height = if self.first_person { 0.05 } else { 2.0 };
-                        log::info!("view: {}", if self.first_person { "first-person" } else { "top-down" });
+                        self.camera.toggle_mode();
+                        log::info!("view: {}", if self.camera.is_first_person() { "first-person" } else { "top-down" });
                     }
                     if self.input_state.just_pressed(GameAction::ToggleGrid) {
                         self.grid_enabled = !self.grid_enabled;
@@ -1246,15 +1094,42 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        let now = std::time::Instant::now();
-        if let Some(last) = self.last_frame {
-            let dt = now.duration_since(last).as_secs_f64();
-            self.process_movement(dt);
-            if self.flash_timer > 0.0 {
-                self.flash_timer = (self.flash_timer - dt as f32).max(0.0);
+        let frame_dt = match self.game_loop.begin_frame() {
+            Some(dt) => dt,
+            None => {
+                // First frame — just initialize timing, don't sim yet
+                self.input_state.end_frame();
+                if let Some(running) = &self.running {
+                    running.gpu.window.request_redraw();
+                }
+                return;
             }
+        };
+
+        // Fixed timestep simulation
+        let ticks = self.game_loop.accumulate(frame_dt);
+
+        let ui_open = self.ui_is_open();
+        for _ in 0..ticks {
+            // Save per-tick so prev/curr are always one SIM_DT apart
+            // and in adjacent coordinate frames (at most one tile crossing)
+            self.game_loop.save_prev_camera(self.camera.snapshot());
+            if let Some(running) = &mut self.running {
+                self.camera.process_movement(
+                    &self.input_state,
+                    &mut running.tiling,
+                    ui_open,
+                    crate::sim::tick::SIM_DT,
+                );
+            }
+            self.game_loop.save_curr_camera(self.camera.snapshot());
         }
-        self.last_frame = Some(now);
+
+        // Flash timer uses real frame dt for smooth fadeout
+        if self.flash_timer > 0.0 {
+            self.flash_timer = (self.flash_timer - frame_dt as f32).max(0.0);
+        }
+
         self.input_state.end_frame();
 
         if let Some(running) = &self.running {

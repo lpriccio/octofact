@@ -2,6 +2,7 @@ mod app;
 mod game;
 mod hyperbolic;
 mod render;
+mod sim;
 mod ui;
 
 use app::App;

@@ -59,12 +59,12 @@
 
 > Machines require power. Quadrupoles supply it.
 
-- [ ] Create `sim/power.rs` with `PowerNetwork`
-- [ ] Implement connected-component power solving (ratio-based)
-- [ ] Wire power into simulation tick
-- [ ] Machines without power enter `NoPower` state
-- [ ] Power overlay visualization (satisfaction ratio as color)
-- [ ] Power info in machine UI
+- [x] Create `sim/power.rs` with `PowerNetwork`
+- [x] Implement connected-component power solving (ratio-based)
+- [x] Wire power into simulation tick
+- [x] Machines without power enter `NoPower` state
+- [x] Power overlay visualization (satisfaction ratio as color)
+- [x] Power info in machine UI
 
 ## Phase 6: Instanced Rendering
 

@@ -965,9 +965,9 @@ impl App {
                                     }
 
                                     // Draw items riding on this belt
-                                    if let Some(belt_items) = self.belt_network.entity_items(entity) {
+                                    if let Some((belt_items, offset)) = self.belt_network.entity_items(entity) {
                                         for bi in belt_items {
-                                            let pos_frac = bi.pos as f64 / crate::sim::belt::FP_SCALE as f64;
+                                            let pos_frac = (bi.pos - offset) as f64 / crate::sim::belt::FP_SCALE as f64;
                                             let ix = cx + dx * (0.5 - pos_frac);
                                             let iy = cy + dy * (0.5 - pos_frac);
                                             if let Some(center) = grid_to_screen(ix, iy) {

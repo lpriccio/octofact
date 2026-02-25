@@ -37,7 +37,7 @@ pub struct BeltItem {
     pub pos: u32,
 }
 
-/// A single transport line (one belt segment).
+/// A single transport line — possibly spanning multiple consecutive belt segments.
 /// Items flow from input_end (pos = length) toward output_end (pos = 0).
 pub struct TransportLine {
     /// Items on the line, ordered front (output) to back (input).
@@ -92,22 +92,32 @@ impl TransportLine {
     }
 }
 
+/// Tracks a belt entity's position within a (possibly merged) transport line.
+#[derive(Clone, Copy, Debug)]
+pub struct BeltSegment {
+    /// Which transport line this entity belongs to.
+    pub line: TransportLineId,
+    /// Offset of this segment's output end within the line (fixed-point).
+    /// Items in range [offset, offset + FP_SCALE) belong to this segment.
+    pub offset: u32,
+}
+
 /// The belt simulation network — manages all transport lines.
 pub struct BeltNetwork {
     lines: SlotMap<TransportLineId, TransportLine>,
-    entity_to_line: SecondaryMap<EntityId, TransportLineId>,
+    segments: SecondaryMap<EntityId, BeltSegment>,
 }
 
 impl BeltNetwork {
     pub fn new() -> Self {
         Self {
             lines: SlotMap::with_key(),
-            entity_to_line: SecondaryMap::new(),
+            segments: SecondaryMap::new(),
         }
     }
 
     /// Called after a belt entity is placed in the world.
-    /// Creates a transport line and links to same-direction neighbors within the tile.
+    /// Merges consecutive same-direction segments within a tile into one line.
     pub fn on_belt_placed(
         &mut self,
         entity: EntityId,
@@ -117,38 +127,112 @@ impl BeltNetwork {
         direction: Direction,
         world: &WorldState,
     ) {
-        let line_id = self.lines.insert(TransportLine::new(FP_SCALE));
-        self.entity_to_line.insert(entity, line_id);
-
         let (dx, dy) = direction.grid_offset_i32();
 
-        // Link to upstream neighbor (behind us — items flow FROM there TO us)
+        // Find upstream (behind) and downstream (ahead) same-direction neighbors
         let behind = (gx - dx, gy - dy);
-        if is_within_tile(behind.0, behind.1) {
-            if let Some(behind_entity) = find_belt_at(tile, behind, direction, world) {
-                if let Some(&behind_line) = self.entity_to_line.get(behind_entity) {
-                    if let Some(bl) = self.lines.get_mut(behind_line) {
-                        bl.output_end = BeltEnd::Belt(line_id);
-                    }
-                    if let Some(our) = self.lines.get_mut(line_id) {
-                        our.input_end = BeltEnd::Belt(behind_line);
-                    }
-                }
-            }
-        }
-
-        // Link to downstream neighbor (ahead of us — items flow FROM us TO there)
         let ahead = (gx + dx, gy + dy);
-        if is_within_tile(ahead.0, ahead.1) {
-            if let Some(ahead_entity) = find_belt_at(tile, ahead, direction, world) {
-                if let Some(&ahead_line) = self.entity_to_line.get(ahead_entity) {
-                    if let Some(our) = self.lines.get_mut(line_id) {
-                        our.output_end = BeltEnd::Belt(ahead_line);
-                    }
-                    if let Some(al) = self.lines.get_mut(ahead_line) {
-                        al.input_end = BeltEnd::Belt(line_id);
+
+        let upstream_seg = if is_within_tile(behind.0, behind.1) {
+            find_belt_at(tile, behind, direction, world)
+                .and_then(|e| self.segments.get(e).copied())
+        } else {
+            None
+        };
+
+        let downstream_seg = if is_within_tile(ahead.0, ahead.1) {
+            find_belt_at(tile, ahead, direction, world)
+                .and_then(|e| self.segments.get(e).copied())
+        } else {
+            None
+        };
+
+        match (upstream_seg, downstream_seg) {
+            (None, None) => {
+                // No neighbors — create a new single-segment line.
+                let line_id = self.lines.insert(TransportLine::new(FP_SCALE));
+                self.segments.insert(entity, BeltSegment { line: line_id, offset: 0 });
+            }
+            (Some(up), None) => {
+                // We're downstream of upstream (closer to output).
+                // Insert at output end: shift existing items/segments up.
+                let line_id = up.line;
+                let line = self.lines.get_mut(line_id).unwrap();
+                for item in &mut line.items {
+                    item.pos += FP_SCALE;
+                }
+                line.length += FP_SCALE;
+                for (_, seg) in self.segments.iter_mut() {
+                    if seg.line == line_id {
+                        seg.offset += FP_SCALE;
                     }
                 }
+                self.segments.insert(entity, BeltSegment { line: line_id, offset: 0 });
+            }
+            (None, Some(down)) => {
+                // We're upstream of downstream (closer to input).
+                // Insert at input end: no shifting needed.
+                let line = self.lines.get_mut(down.line).unwrap();
+                let new_offset = line.length;
+                line.length += FP_SCALE;
+                self.segments.insert(entity, BeltSegment { line: down.line, offset: new_offset });
+            }
+            (Some(up), Some(down)) if up.line == down.line => {
+                // Both on the same line already (filling a gap) — shouldn't normally happen.
+                // Create a standalone line as a fallback.
+                let line_id = self.lines.insert(TransportLine::new(FP_SCALE));
+                self.segments.insert(entity, BeltSegment { line: line_id, offset: 0 });
+            }
+            (Some(up), Some(down)) => {
+                // Bridge two lines — merge upstream into downstream.
+                // Result: [downstream segments] [new segment] [upstream segments]
+                let up_line_id = up.line;
+                let down_line_id = down.line;
+
+                let down_len = self.lines.get(down_line_id).unwrap().length;
+                let new_seg_offset = down_len;
+                let up_shift = down_len + FP_SCALE;
+
+                // Take items and metadata from upstream line.
+                let (up_items, up_length, up_input_end) = {
+                    let up_line = self.lines.get_mut(up_line_id).unwrap();
+                    (
+                        std::mem::take(&mut up_line.items),
+                        up_line.length,
+                        up_line.input_end,
+                    )
+                };
+
+                // Merge into downstream line.
+                let down_line = self.lines.get_mut(down_line_id).unwrap();
+                for mut item in up_items {
+                    item.pos += up_shift;
+                    down_line.items.push(item);
+                }
+                down_line.items.sort_by_key(|i| i.pos);
+                down_line.length = down_len + FP_SCALE + up_length;
+                down_line.input_end = up_input_end;
+
+                // Update external line that fed into upstream's input.
+                if let BeltEnd::Belt(feeder_id) = up_input_end {
+                    if let Some(feeder) = self.lines.get_mut(feeder_id) {
+                        feeder.output_end = BeltEnd::Belt(down_line_id);
+                    }
+                }
+
+                // Reassign all upstream segments to the downstream line.
+                for (_, seg) in self.segments.iter_mut() {
+                    if seg.line == up_line_id {
+                        seg.offset += up_shift;
+                        seg.line = down_line_id;
+                    }
+                }
+
+                // Add the new bridging segment.
+                self.segments.insert(entity, BeltSegment { line: down_line_id, offset: new_seg_offset });
+
+                // Remove the old upstream line.
+                self.lines.remove(up_line_id);
             }
         }
     }
@@ -197,22 +281,26 @@ impl BeltNetwork {
         }
     }
 
-    /// Debug: spawn an item at the center of the belt entity's line.
+    /// Debug: spawn an item at the center of the belt entity's segment.
     pub fn spawn_item_on_entity(&mut self, entity: EntityId, item: ItemId) {
-        if let Some(&line_id) = self.entity_to_line.get(entity) {
-            if let Some(line) = self.lines.get_mut(line_id) {
-                let pos = line.length / 2;
+        if let Some(seg) = self.segments.get(entity).copied() {
+            if let Some(line) = self.lines.get_mut(seg.line) {
+                let pos = seg.offset + FP_SCALE / 2;
                 let idx = line.items.partition_point(|i| i.pos < pos);
                 line.items.insert(idx, BeltItem { item, pos });
             }
         }
     }
 
-    /// Get the items on the transport line for a belt entity.
-    pub fn entity_items(&self, entity: EntityId) -> Option<&[BeltItem]> {
-        let &line_id = self.entity_to_line.get(entity)?;
-        let line = self.lines.get(line_id)?;
-        Some(&line.items)
+    /// Get items on the belt entity's segment, plus the segment offset.
+    /// Returns `(items_slice, offset)` where each item's position relative to
+    /// this segment is `item.pos - offset` (range 0..FP_SCALE).
+    pub fn entity_items(&self, entity: EntityId) -> Option<(&[BeltItem], u32)> {
+        let seg = self.segments.get(entity)?;
+        let line = self.lines.get(seg.line)?;
+        let start = line.items.partition_point(|i| i.pos < seg.offset);
+        let end = line.items.partition_point(|i| i.pos < seg.offset + FP_SCALE);
+        Some((&line.items[start..end], seg.offset))
     }
 
     /// Advance N ticks (for chunk fast-forward).
@@ -257,6 +345,14 @@ mod tests {
         entity
     }
 
+    /// Helper: get items for an entity with positions relative to the segment.
+    fn local_items(net: &BeltNetwork, entity: EntityId) -> Vec<(ItemId, u32)> {
+        match net.entity_items(entity) {
+            Some((items, offset)) => items.iter().map(|i| (i.item, i.pos - offset)).collect(),
+            None => vec![],
+        }
+    }
+
     #[test]
     fn single_item_moves_toward_output() {
         let mut world = WorldState::new();
@@ -264,13 +360,14 @@ mod tests {
         let e = place_belt(&mut world, &mut net, &[0], 0, 0, Direction::East);
 
         net.spawn_item_on_entity(e, ItemId::NullSet);
-        let start = net.entity_items(e).unwrap()[0].pos;
-        assert_eq!(start, FP_SCALE / 2);
+        let items = local_items(&net, e);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].1, FP_SCALE / 2);
 
         net.tick();
 
-        let after = net.entity_items(e).unwrap()[0].pos;
-        assert_eq!(after, start - DEFAULT_BELT_SPEED as u32);
+        let items = local_items(&net, e);
+        assert_eq!(items[0].1, FP_SCALE / 2 - DEFAULT_BELT_SPEED as u32);
     }
 
     #[test]
@@ -284,9 +381,9 @@ mod tests {
             net.tick();
         }
 
-        let items = net.entity_items(e).unwrap();
+        let items = local_items(&net, e);
         assert_eq!(items.len(), 1);
-        assert_eq!(items[0].pos, 0);
+        assert_eq!(items[0].1, 0);
     }
 
     #[test]
@@ -295,9 +392,9 @@ mod tests {
         let mut net = BeltNetwork::new();
         let e = place_belt(&mut world, &mut net, &[0], 0, 0, Direction::East);
 
-        // Manually insert two items
-        let line_id = *net.entity_to_line.get(e).unwrap();
-        let line = net.lines.get_mut(line_id).unwrap();
+        // Manually insert two items on the line
+        let seg = *net.segments.get(e).unwrap();
+        let line = net.lines.get_mut(seg.line).unwrap();
         line.items.push(BeltItem { item: ItemId::NullSet, pos: 100 });
         line.items.push(BeltItem { item: ItemId::Point, pos: 200 });
 
@@ -305,38 +402,64 @@ mod tests {
             net.tick();
         }
 
-        let items = net.entity_items(e).unwrap();
+        let items = local_items(&net, e);
         assert_eq!(items.len(), 2);
-        assert_eq!(items[0].pos, 0);
-        assert_eq!(items[1].pos, MIN_ITEM_GAP);
+        assert_eq!(items[0].1, 0);
+        assert_eq!(items[1].1, MIN_ITEM_GAP);
     }
 
     #[test]
-    fn chain_transfer_between_belts() {
+    fn consecutive_belts_merge_into_one_line() {
         let mut world = WorldState::new();
         let mut net = BeltNetwork::new();
         let addr: &[u8] = &[0];
         let e1 = place_belt(&mut world, &mut net, addr, 0, 0, Direction::East);
         let e2 = place_belt(&mut world, &mut net, addr, 1, 0, Direction::East);
 
-        // Verify linking
-        let l1 = *net.entity_to_line.get(e1).unwrap();
-        let l2 = *net.entity_to_line.get(e2).unwrap();
-        assert_eq!(net.lines.get(l1).unwrap().output_end, BeltEnd::Belt(l2));
-        assert_eq!(net.lines.get(l2).unwrap().input_end, BeltEnd::Belt(l1));
+        // Both entities should be on the same transport line.
+        let seg1 = *net.segments.get(e1).unwrap();
+        let seg2 = *net.segments.get(e2).unwrap();
+        assert_eq!(seg1.line, seg2.line);
 
+        // e2 is downstream (output side), e1 is upstream (input side).
+        // e2 offset = 0, e1 offset = FP_SCALE.
+        assert_eq!(seg2.offset, 0);
+        assert_eq!(seg1.offset, FP_SCALE);
+
+        // Merged line length = 2 * FP_SCALE.
+        let line = net.lines.get(seg1.line).unwrap();
+        assert_eq!(line.length, 2 * FP_SCALE);
+        assert_eq!(line.input_end, BeltEnd::Open);
+        assert_eq!(line.output_end, BeltEnd::Open);
+    }
+
+    #[test]
+    fn item_flows_through_merged_line() {
+        let mut world = WorldState::new();
+        let mut net = BeltNetwork::new();
+        let addr: &[u8] = &[0];
+        let e1 = place_belt(&mut world, &mut net, addr, 0, 0, Direction::East);
+        let e2 = place_belt(&mut world, &mut net, addr, 1, 0, Direction::East);
+
+        // Spawn item on e1 (upstream segment)
         net.spawn_item_on_entity(e1, ItemId::NullSet);
 
+        // Item starts at center of e1's segment
+        let items = local_items(&net, e1);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].1, FP_SCALE / 2);
+
+        // Run enough ticks for item to cross into e2
         for _ in 0..500 {
             net.tick();
         }
 
-        // Item should have transferred to second belt
-        let items1 = net.entity_items(e1).unwrap();
-        let items2 = net.entity_items(e2).unwrap();
+        // Item should now be in e2's segment (at output end, pos=0)
+        let items1 = local_items(&net, e1);
+        let items2 = local_items(&net, e2);
         assert_eq!(items1.len(), 0);
         assert_eq!(items2.len(), 1);
-        assert_eq!(items2[0].item, ItemId::NullSet);
+        assert_eq!(items2[0].0, ItemId::NullSet);
     }
 
     #[test]
@@ -346,17 +469,17 @@ mod tests {
         let e = place_belt(&mut world, &mut net, &[0], 0, 0, Direction::East);
 
         net.spawn_item_on_entity(e, ItemId::NullSet);
-        let start = net.entity_items(e).unwrap()[0].pos;
+        let start = local_items(&net, e)[0].1;
 
         net.fast_forward(10);
 
-        let after = net.entity_items(e).unwrap()[0].pos;
+        let after = local_items(&net, e)[0].1;
         assert_eq!(after, start - 10 * DEFAULT_BELT_SPEED as u32);
     }
 
     #[test]
-    fn linking_order_does_not_matter() {
-        // Place second belt first, then first — links should still form
+    fn placement_order_does_not_matter() {
+        // Place downstream belt first, then upstream — should still merge.
         let mut world = WorldState::new();
         let mut net = BeltNetwork::new();
         let addr: &[u8] = &[0];
@@ -364,57 +487,101 @@ mod tests {
         let e2 = place_belt(&mut world, &mut net, addr, 1, 0, Direction::East);
         let e1 = place_belt(&mut world, &mut net, addr, 0, 0, Direction::East);
 
-        let l1 = *net.entity_to_line.get(e1).unwrap();
-        let l2 = *net.entity_to_line.get(e2).unwrap();
-        assert_eq!(net.lines.get(l1).unwrap().output_end, BeltEnd::Belt(l2));
-        assert_eq!(net.lines.get(l2).unwrap().input_end, BeltEnd::Belt(l1));
+        let seg1 = *net.segments.get(e1).unwrap();
+        let seg2 = *net.segments.get(e2).unwrap();
+        assert_eq!(seg1.line, seg2.line);
+
+        let line = net.lines.get(seg1.line).unwrap();
+        assert_eq!(line.length, 2 * FP_SCALE);
     }
 
     #[test]
-    fn different_directions_do_not_link() {
+    fn different_directions_do_not_merge() {
         let mut world = WorldState::new();
         let mut net = BeltNetwork::new();
         let addr: &[u8] = &[0];
 
+        let e1 = place_belt(&mut world, &mut net, addr, 0, 0, Direction::East);
+        let e2 = place_belt(&mut world, &mut net, addr, 1, 0, Direction::North);
+
+        let seg1 = *net.segments.get(e1).unwrap();
+        let seg2 = *net.segments.get(e2).unwrap();
+        assert_ne!(seg1.line, seg2.line);
+    }
+
+    #[test]
+    fn three_belts_merge_into_one_line() {
+        let mut world = WorldState::new();
+        let mut net = BeltNetwork::new();
+        let addr: &[u8] = &[0];
+
+        let e1 = place_belt(&mut world, &mut net, addr, 0, 0, Direction::East);
+        let e2 = place_belt(&mut world, &mut net, addr, 1, 0, Direction::East);
+        let e3 = place_belt(&mut world, &mut net, addr, 2, 0, Direction::East);
+
+        let seg1 = *net.segments.get(e1).unwrap();
+        let seg2 = *net.segments.get(e2).unwrap();
+        let seg3 = *net.segments.get(e3).unwrap();
+        assert_eq!(seg1.line, seg2.line);
+        assert_eq!(seg2.line, seg3.line);
+
+        let line = net.lines.get(seg1.line).unwrap();
+        assert_eq!(line.length, 3 * FP_SCALE);
+
+        // e3 is most downstream (output), e1 is most upstream (input).
+        assert_eq!(seg3.offset, 0);
+        assert_eq!(seg2.offset, FP_SCALE);
+        assert_eq!(seg1.offset, 2 * FP_SCALE);
+    }
+
+    #[test]
+    fn bridge_merges_two_lines() {
+        // Place e1 and e3 first (two separate lines), then e2 bridges them.
+        let mut world = WorldState::new();
+        let mut net = BeltNetwork::new();
+        let addr: &[u8] = &[0];
+
+        let e1 = place_belt(&mut world, &mut net, addr, 0, 0, Direction::East);
+        let e3 = place_belt(&mut world, &mut net, addr, 2, 0, Direction::East);
+
+        // Before bridge: two separate lines.
+        let seg1_before = *net.segments.get(e1).unwrap();
+        let seg3_before = *net.segments.get(e3).unwrap();
+        assert_ne!(seg1_before.line, seg3_before.line);
+
+        // Place the bridge.
+        let e2 = place_belt(&mut world, &mut net, addr, 1, 0, Direction::East);
+
+        // After bridge: all on one line.
+        let seg1 = *net.segments.get(e1).unwrap();
+        let seg2 = *net.segments.get(e2).unwrap();
+        let seg3 = *net.segments.get(e3).unwrap();
+        assert_eq!(seg1.line, seg2.line);
+        assert_eq!(seg2.line, seg3.line);
+
+        let line = net.lines.get(seg1.line).unwrap();
+        assert_eq!(line.length, 3 * FP_SCALE);
+    }
+
+    #[test]
+    fn blocked_output_stops_items() {
+        let mut world = WorldState::new();
+        let mut net = BeltNetwork::new();
+        let addr: &[u8] = &[0];
+
+        // Two belts: e1 East, e2 North — different directions, separate lines.
         let e1 = place_belt(&mut world, &mut net, addr, 0, 0, Direction::East);
         let _e2 = place_belt(&mut world, &mut net, addr, 1, 0, Direction::North);
 
-        let l1 = *net.entity_to_line.get(e1).unwrap();
-        assert_eq!(net.lines.get(l1).unwrap().output_end, BeltEnd::Open);
-    }
-
-    #[test]
-    fn blocked_output_stops_transfer() {
-        let mut world = WorldState::new();
-        let mut net = BeltNetwork::new();
-        let addr: &[u8] = &[0];
-
-        let e1 = place_belt(&mut world, &mut net, addr, 0, 0, Direction::East);
-        let e2 = place_belt(&mut world, &mut net, addr, 1, 0, Direction::East);
-
-        // Fill e2 with items so it can't accept more
-        let l2 = *net.entity_to_line.get(e2).unwrap();
-        let line2 = net.lines.get_mut(l2).unwrap();
-        // Pack items fully: at positions 0, 64, 128, 192, 256
-        // Last item at input end (256) leaves gap 0 — can't accept
-        for i in 0..5 {
-            line2.items.push(BeltItem {
-                item: ItemId::Point,
-                pos: i * MIN_ITEM_GAP,
-            });
-        }
-
-        // Spawn item on e1
         net.spawn_item_on_entity(e1, ItemId::NullSet);
 
-        // Tick until e1's item reaches position 0
         for _ in 0..500 {
             net.tick();
         }
 
-        // Item should be stuck at position 0 on e1 (can't transfer to full e2)
-        let items1 = net.entity_items(e1).unwrap();
-        assert_eq!(items1.len(), 1);
-        assert_eq!(items1[0].pos, 0);
+        // Item stuck at output end (open, since e2 is different direction).
+        let items = local_items(&net, e1);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].1, 0);
     }
 }

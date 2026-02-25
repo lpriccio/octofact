@@ -30,16 +30,16 @@
 
 > Items move on belts. The core factory gameplay loop begins.
 
-- [ ] Create `sim/belt.rs` with `TransportLine`, `BeltNetwork`, `BeltEnd`
-- [ ] Implement gap-based item storage and `tick()` method
-- [ ] Implement `fast_forward(elapsed_ticks)` for chunk catch-up
-- [ ] Build transport line topology when belts are placed/removed
-- [ ] Same-direction consecutive segments within a tile merge into one line
+- [x] Create `sim/belt.rs` with `TransportLine`, `BeltNetwork`, `BeltEnd`
+- [x] Implement gap-based item storage and `tick()` method
+- [x] Implement `fast_forward(elapsed_ticks)` for chunk catch-up
+- [x] Build transport line topology when belts are placed/removed
+- [x] Same-direction consecutive segments within a tile merge into one line
 - [ ] Cross-tile connections via `BeltEnd::Belt` links
-- [ ] Add belt input/output: items can be placed on belt input end, taken from output end
-- [ ] Wire belt simulation into simulation tick
-- [ ] Debug visualization: show item positions on belts
-- [ ] Debug item spawner: place items on belt via click
+- [x] Add belt input/output: items can be placed on belt input end, taken from output end
+- [x] Wire belt simulation into simulation tick
+- [x] Debug visualization: show item positions on belts
+- [x] Debug item spawner: place items on belt via click
 
 ## Phase 4: Machine & Inserter Simulation
 

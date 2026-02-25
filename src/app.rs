@@ -234,6 +234,7 @@ pub struct App {
     world: WorldState,
     belt_network: BeltNetwork,
     machine_pool: crate::sim::machine::MachinePool,
+    power_network: crate::sim::power::PowerNetwork,
     ui: UiState,
     grid_enabled: bool,
     klein_half_side: f64,
@@ -255,6 +256,7 @@ impl App {
             world: WorldState::new(),
             belt_network: BeltNetwork::new(),
             machine_pool: crate::sim::machine::MachinePool::new(),
+            power_network: crate::sim::power::PowerNetwork::new(),
             ui: UiState::new(),
             grid_enabled: false,
             klein_half_side: {
@@ -401,6 +403,44 @@ impl App {
         {
             self.machine_pool.add(entity, mt);
             self.auto_connect_machine_ports(entity, address, grid_xy, mode.direction, mt);
+            // Register machine as power consumer
+            let exempt = mt == crate::game::items::MachineType::Source;
+            self.power_network.add(
+                entity,
+                crate::sim::power::PowerNodeKind::Consumer,
+                crate::sim::power::MACHINE_CONSUMPTION,
+                address,
+                grid_xy.0 as i16,
+                grid_xy.1 as i16,
+                exempt,
+            );
+        }
+
+        // Register power structures as producers
+        match crate::game::world::StructureKind::from_item(mode.item) {
+            Some(crate::game::world::StructureKind::PowerNode) => {
+                self.power_network.add(
+                    entity,
+                    crate::sim::power::PowerNodeKind::Producer,
+                    crate::sim::power::QUADRUPOLE_RATE,
+                    address,
+                    grid_xy.0 as i16,
+                    grid_xy.1 as i16,
+                    false,
+                );
+            }
+            Some(crate::game::world::StructureKind::PowerSource) => {
+                self.power_network.add(
+                    entity,
+                    crate::sim::power::PowerNodeKind::Producer,
+                    crate::sim::power::DYNAMO_RATE,
+                    address,
+                    grid_xy.0 as i16,
+                    grid_xy.1 as i16,
+                    false,
+                );
+            }
+            _ => {}
         }
 
         // Auto-connect belt to adjacent machines
@@ -1263,6 +1303,29 @@ impl App {
                                     }
                                 }
                             }
+
+                            // Power satisfaction indicator pip (machines and power structures)
+                            if matches!(kind, StructureKind::Machine(_) | StructureKind::PowerNode | StructureKind::PowerSource) {
+                                if let Some(sat) = self.power_network.satisfaction(entity) {
+                                    let pip_color = if sat >= 1.0 {
+                                        egui::Color32::from_rgba_unmultiplied(50, 200, 50, a) // green
+                                    } else if sat >= 0.5 {
+                                        let t = (sat - 0.5) * 2.0; // 0..1
+                                        let r = (230.0 - t * 180.0) as u8;
+                                        let g = (180.0 + t * 20.0) as u8;
+                                        egui::Color32::from_rgba_unmultiplied(r, g, 50, a) // yellow->green
+                                    } else {
+                                        let t = sat * 2.0; // 0..1
+                                        let r = 200;
+                                        let g = (50.0 + t * 130.0) as u8;
+                                        egui::Color32::from_rgba_unmultiplied(r, g, 50, a) // red->yellow
+                                    };
+
+                                    if let Some(pip_pos) = grid_to_screen(cx + 0.35, cy + 0.35) {
+                                        painter.circle_filled(pip_pos, 2.5, pip_color);
+                                    }
+                                }
+                            }
                         }
                     }
                 });
@@ -1558,6 +1621,14 @@ impl ApplicationHandler for App {
             // Save per-tick so prev/curr are always one SIM_DT apart
             // and in adjacent coordinate frames (at most one tile crossing)
             self.game_loop.save_prev_camera(self.camera.snapshot());
+            // Solve power network and propagate satisfaction to machines
+            self.power_network.solve();
+            for i in 0..self.machine_pool.count {
+                let entity = self.machine_pool.cold.entity_id[i];
+                if let Some(sat) = self.power_network.satisfaction(entity) {
+                    self.machine_pool.hot.power_draw[i] = sat;
+                }
+            }
             self.machine_pool.tick(&self.recipes);
             self.belt_network.tick();
             self.belt_network.tick_port_transfers(&mut self.machine_pool);

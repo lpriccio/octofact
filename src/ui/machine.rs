@@ -23,6 +23,7 @@ pub fn machine_panel(
     let machine_type = machine_pool.cold.machine_type[idx];
     let state = machine_pool.hot.state[idx];
     let progress = machine_pool.hot.progress[idx];
+    let power_draw = machine_pool.hot.power_draw[idx];
     let current_recipe = machine_pool.cold.recipe[idx];
     let input_slots = &machine_pool.cold.input_slots[idx];
     let output_slots = &machine_pool.cold.output_slots[idx];
@@ -44,6 +45,22 @@ pub fn machine_panel(
                 let (status_text, status_color) = state_display(state);
                 ui.colored_label(status_color, status_text);
             });
+
+            // --- Power ---
+            if machine_type != crate::game::items::MachineType::Source {
+                ui.horizontal(|ui| {
+                    ui.label("Power:");
+                    let power_pct = (power_draw * 100.0).round() as u32;
+                    let power_color = if power_draw >= 1.0 {
+                        egui::Color32::from_rgb(100, 200, 100) // green
+                    } else if power_draw >= 0.5 {
+                        egui::Color32::from_rgb(230, 180, 50) // yellow
+                    } else {
+                        egui::Color32::from_rgb(200, 50, 50) // red
+                    };
+                    ui.colored_label(power_color, format!("{}%", power_pct));
+                });
+            }
 
             // --- Progress bar ---
             if state == MachineState::Working || state == MachineState::OutputFull {

@@ -45,7 +45,7 @@ fn vs_item(vert: VertexInput, inst: InstanceInput) -> VertexOutput {
     let poincare = klein_to_poincare(klein);
     let disk = apply_mobius(poincare, inst.mobius_a, inst.mobius_b);
     var world = disk_to_bowl(disk);
-    world.y += 0.004;  // lift above belt (0.002) and machine (0.003) surfaces
+    world.y += 0.006;  // lift above belt surface (BELT_HEIGHT = 0.005)
 
     out.clip_position = globals.view_proj * vec4<f32>(world, 1.0);
     out.uv = vert.uv;

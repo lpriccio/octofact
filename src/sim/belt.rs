@@ -859,10 +859,10 @@ mod tests {
         let mut machines = MachinePool::new();
         let addr: &[u8] = &[0];
 
-        // Machine at (0,0), belt at (1,0) flowing East
+        // Machine at (0,0) (Composer is 2x2, occupies 0..1 x 0..1), belt at (2,0) flowing East
         let machine_entity = world.place(addr, (0, 0), ItemId::Composer, Direction::East).unwrap();
         machines.add(machine_entity, MachineType::Composer);
-        let belt = place_belt(&mut world, &mut net, addr, 1, 0, Direction::East);
+        let belt = place_belt(&mut world, &mut net, addr, 2, 0, Direction::East);
 
         // Connect machine output slot 0 to belt input
         net.connect_machine_output_to_belt(belt, machine_entity, 0);
@@ -892,13 +892,13 @@ mod tests {
         let addr: &[u8] = &[0];
 
         // Input belt → machine → output belt
-        // Belt at (-1,0) East feeds into machine at (0,0) facing East
-        // Machine at (0,0) outputs to belt at (1,0) East
+        // Composer is 2x2 at (0,0): occupies (0,0)-(1,1)
+        // Belt at (-1,0) East feeds into machine, belt at (2,0) East receives output
         let input_belt = place_belt(&mut world, &mut net, addr, -1, 0, Direction::East);
         let machine_entity = world.place(addr, (0, 0), ItemId::Composer, Direction::East).unwrap();
         machines.add(machine_entity, MachineType::Composer);
         machines.set_recipe(machine_entity, Some(0)); // 2x Point -> LineSegment
-        let output_belt = place_belt(&mut world, &mut net, addr, 1, 0, Direction::East);
+        let output_belt = place_belt(&mut world, &mut net, addr, 2, 0, Direction::East);
 
         // Connect: input belt output → machine input slot 0
         net.connect_belt_to_machine_input(input_belt, machine_entity, 0);

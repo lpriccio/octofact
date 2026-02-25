@@ -110,6 +110,16 @@ pub enum StructureKind {
 }
 
 impl StructureKind {
+    /// Footprint in grid cells: (width, height). Matches shader `machine_size()`.
+    pub fn footprint(&self) -> (i32, i32) {
+        match self {
+            Self::Belt => (1, 1),
+            Self::Machine(mt) => mt.footprint(),
+            Self::PowerNode => (1, 1),   // Quadrupole
+            Self::PowerSource => (2, 2), // Dynamo
+        }
+    }
+
     /// Derive structure kind from the item being placed.
     /// Returns `None` for non-placeable items (raw resources, intermediates).
     pub fn from_item(item: ItemId) -> Option<Self> {
@@ -136,12 +146,25 @@ pub struct GridPos {
     pub gy: i16,
 }
 
+/// Compute all grid cells occupied by a structure with the given footprint placed at `origin`.
+/// Footprint extends from origin in +x, +y direction.
+pub fn occupied_cells(origin: (i32, i32), footprint: (i32, i32)) -> Vec<(i32, i32)> {
+    let (w, h) = footprint;
+    let mut cells = Vec::with_capacity((w * h) as usize);
+    for dy in 0..h {
+        for dx in 0..w {
+            cells.push((origin.0 + dx, origin.1 + dy));
+        }
+    }
+    cells
+}
+
 pub struct WorldState {
     /// Spatial index: tile address → (grid position → entity). "What's at this square?"
     tile_grid: HashMap<TileAddr, HashMap<(i32, i32), EntityId>>,
     /// Primary storage: entity → structure kind.
     structures: SlotMap<EntityId, StructureKind>,
-    /// Entity → canonical world position.
+    /// Entity → canonical world position (origin cell of multi-cell structures).
     positions: SecondaryMap<EntityId, GridPos>,
     /// Entity → facing direction.
     directions: SecondaryMap<EntityId, Direction>,
@@ -160,9 +183,10 @@ impl WorldState {
         }
     }
 
-    /// Place a structure at the given tile address and grid position.
-    /// Returns the entity ID on success, or `None` if the cell is
-    /// occupied or the item isn't a placeable structure.
+    /// Place a structure at the given tile address and grid position (origin cell).
+    /// Multi-cell structures occupy all cells in their footprint extending from
+    /// origin in +x, +y. Returns the entity ID on success, or `None` if any cell
+    /// in the footprint is occupied or the item isn't a placeable structure.
     pub fn place(
         &mut self,
         address: &[u8],
@@ -171,11 +195,18 @@ impl WorldState {
         direction: Direction,
     ) -> Option<EntityId> {
         let kind = StructureKind::from_item(item)?;
+        let footprint = kind.footprint();
+        let cells = occupied_cells(grid_xy, footprint);
         let tile_addr = TileAddr::from_slice(address);
         let tile_slots = self.tile_grid.entry(tile_addr.clone()).or_default();
-        if tile_slots.contains_key(&grid_xy) {
-            return None;
+
+        // Check all cells in footprint are free
+        for &cell in &cells {
+            if tile_slots.contains_key(&cell) {
+                return None;
+            }
         }
+
         let entity = self.structures.insert(kind);
         self.positions.insert(
             entity,
@@ -187,8 +218,20 @@ impl WorldState {
         );
         self.directions.insert(entity, direction);
         self.items.insert(entity, item);
-        tile_slots.insert(grid_xy, entity);
+
+        // Register all occupied cells
+        for &cell in &cells {
+            tile_slots.insert(cell, entity);
+        }
         Some(entity)
+    }
+
+    /// Check if `(gx, gy)` is the origin cell of the given entity.
+    pub fn is_origin(&self, entity: EntityId, gx: i32, gy: i32) -> bool {
+        self.positions
+            .get(entity)
+            .map(|pos| pos.gx as i32 == gx && pos.gy as i32 == gy)
+            .unwrap_or(false)
     }
 
     /// All entity positions within a tile. Returns the grid→entity map.
@@ -223,7 +266,20 @@ impl WorldState {
 impl WorldState {
     pub fn remove(&mut self, address: &[u8], grid_xy: (i32, i32)) -> Option<ItemId> {
         let tile_slots = self.tile_grid.get_mut(address)?;
-        let entity = tile_slots.remove(&grid_xy)?;
+        let &entity = tile_slots.get(&grid_xy)?;
+        let kind = self.structures.get(entity)?;
+        let footprint = kind.footprint();
+
+        // Find origin for this entity
+        let origin = self.positions.get(entity)?;
+        let origin_xy = (origin.gx as i32, origin.gy as i32);
+        let cells = occupied_cells(origin_xy, footprint);
+
+        // Remove all occupied cells
+        for &cell in &cells {
+            tile_slots.remove(&cell);
+        }
+
         let item = self.items.remove(entity);
         self.structures.remove(entity);
         self.positions.remove(entity);
@@ -275,6 +331,83 @@ mod tests {
         let addr = vec![0];
         assert!(world.place(&addr, (0, 0), ItemId::Belt, Direction::North).is_some());
         assert!(world.place(&addr, (0, 0), ItemId::Quadrupole, Direction::East).is_none());
+    }
+
+    #[test]
+    fn test_multi_cell_placement() {
+        let mut world = WorldState::new();
+        let addr = vec![0];
+        // Composer is 2x2: occupies (5,5), (6,5), (5,6), (6,6)
+        let entity = world.place(&addr, (5, 5), ItemId::Composer, Direction::North).unwrap();
+
+        // All 4 cells should map to the same entity
+        let entities = world.tile_entities(&addr).unwrap();
+        assert_eq!(entities.get(&(5, 5)), Some(&entity));
+        assert_eq!(entities.get(&(6, 5)), Some(&entity));
+        assert_eq!(entities.get(&(5, 6)), Some(&entity));
+        assert_eq!(entities.get(&(6, 6)), Some(&entity));
+
+        // Origin is (5, 5)
+        assert!(world.is_origin(entity, 5, 5));
+        assert!(!world.is_origin(entity, 6, 5));
+    }
+
+    #[test]
+    fn test_multi_cell_overlap_blocked() {
+        let mut world = WorldState::new();
+        let addr = vec![0];
+        // Composer at (5,5) occupies (5,5)-(6,6)
+        world.place(&addr, (5, 5), ItemId::Composer, Direction::North).unwrap();
+        // Another Composer at (6,6) would overlap at (6,6)
+        assert!(world.place(&addr, (6, 6), ItemId::Composer, Direction::North).is_none());
+        // Belt at (6,5) overlaps with the Composer
+        assert!(world.place(&addr, (6, 5), ItemId::Belt, Direction::North).is_none());
+        // Belt at (7,5) is free
+        assert!(world.place(&addr, (7, 5), ItemId::Belt, Direction::North).is_some());
+    }
+
+    #[test]
+    fn test_multi_cell_click_any_cell() {
+        let mut world = WorldState::new();
+        let addr = vec![0];
+        let entity = world.place(&addr, (10, 10), ItemId::Composer, Direction::North).unwrap();
+
+        // Clicking any cell of the 2x2 machine returns the same entity
+        let entities = world.tile_entities(&addr).unwrap();
+        for dy in 0..2 {
+            for dx in 0..2 {
+                let &found = entities.get(&(10 + dx, 10 + dy)).unwrap();
+                assert_eq!(found, entity);
+                assert_eq!(world.kind(found), Some(StructureKind::Machine(MachineType::Composer)));
+            }
+        }
+    }
+
+    #[test]
+    fn test_multi_cell_remove() {
+        let mut world = WorldState::new();
+        let addr = vec![0];
+        world.place(&addr, (5, 5), ItemId::Composer, Direction::North).unwrap();
+        // Remove via any cell in the footprint
+        let removed = world.remove(&addr, (6, 6));
+        assert_eq!(removed, Some(ItemId::Composer));
+        // All cells should be free now
+        assert!(world.tile_entities(&addr).is_none());
+    }
+
+    #[test]
+    fn test_3x2_footprint() {
+        let mut world = WorldState::new();
+        let addr = vec![0];
+        // Inverter is 3x2: occupies (0,0), (1,0), (2,0), (0,1), (1,1), (2,1)
+        let entity = world.place(&addr, (0, 0), ItemId::Inverter, Direction::North).unwrap();
+        let entities = world.tile_entities(&addr).unwrap();
+        assert_eq!(entities.len(), 6);
+        for dy in 0..2 {
+            for dx in 0..3 {
+                assert_eq!(entities.get(&(dx, dy)), Some(&entity));
+            }
+        }
     }
 
     #[test]

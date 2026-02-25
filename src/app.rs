@@ -404,7 +404,8 @@ impl App {
         }
     }
 
-    /// When a machine is placed, check all its ports for adjacent belts and connect them.
+    /// When a machine is placed, check all exterior cells for adjacent belts and connect ports.
+    /// For multi-cell machines, scans all cells on the footprint's border.
     fn auto_connect_machine_ports(
         &mut self,
         machine_entity: EntityId,
@@ -413,31 +414,43 @@ impl App {
         facing: Direction,
         machine_type: crate::game::items::MachineType,
     ) {
+        use crate::game::world::occupied_cells;
         use crate::sim::inserter::{belt_compatible_with_port, rotated_ports, PortKind};
+
+        let footprint = machine_type.footprint();
+        let cells = occupied_cells(grid_xy, footprint);
 
         for port in rotated_ports(machine_type, facing) {
             let (dx, dy) = port.side.grid_offset_i32();
-            let adj = (grid_xy.0 + dx, grid_xy.1 + dy);
 
-            if let Some(entities) = self.world.tile_entities(tile_addr) {
-                if let Some(&belt_entity) = entities.get(&adj) {
-                    if self.world.kind(belt_entity) == Some(StructureKind::Belt) {
-                        if let Some(belt_dir) = self.world.direction(belt_entity) {
-                            if belt_compatible_with_port(&port, belt_dir) {
-                                match port.kind {
-                                    PortKind::Input => {
-                                        self.belt_network.connect_belt_to_machine_input(
-                                            belt_entity,
-                                            machine_entity,
-                                            port.slot,
-                                        );
-                                    }
-                                    PortKind::Output => {
-                                        self.belt_network.connect_machine_output_to_belt(
-                                            belt_entity,
-                                            machine_entity,
-                                            port.slot,
-                                        );
+            // Check all cells on the port's side of the footprint
+            for &cell in &cells {
+                let adj = (cell.0 + dx, cell.1 + dy);
+                // Only check cells on the exterior edge (adjacent cell must be outside footprint)
+                if cells.contains(&adj) {
+                    continue;
+                }
+
+                if let Some(entities) = self.world.tile_entities(tile_addr) {
+                    if let Some(&belt_entity) = entities.get(&adj) {
+                        if self.world.kind(belt_entity) == Some(StructureKind::Belt) {
+                            if let Some(belt_dir) = self.world.direction(belt_entity) {
+                                if belt_compatible_with_port(&port, belt_dir) {
+                                    match port.kind {
+                                        PortKind::Input => {
+                                            self.belt_network.connect_belt_to_machine_input(
+                                                belt_entity,
+                                                machine_entity,
+                                                port.slot,
+                                            );
+                                        }
+                                        PortKind::Output => {
+                                            self.belt_network.connect_machine_output_to_belt(
+                                                belt_entity,
+                                                machine_entity,
+                                                port.slot,
+                                            );
+                                        }
                                     }
                                 }
                             }
@@ -778,6 +791,7 @@ impl App {
         re.belt_instances.upload(&re.gpu.device, &re.gpu.queue);
 
         // Build machine instances from visible tiles + world state
+        // Only emit one instance per entity (at its origin cell).
         re.machine_instances.clear();
         for &(tile_idx, combined) in &visible {
             let tile = &re.tiling.tiles[tile_idx];
@@ -786,6 +800,10 @@ impl App {
                 None => continue,
             };
             for (&(gx, gy), &entity) in entities {
+                // Skip non-origin cells to avoid duplicate instances
+                if !self.world.is_origin(entity, gx, gy) {
+                    continue;
+                }
                 let (machine_type_float, has_pool_entry) = match self.world.kind(entity) {
                     Some(StructureKind::Machine(mt)) => {
                         use crate::game::items::MachineType;

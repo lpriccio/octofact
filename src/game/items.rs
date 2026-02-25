@@ -354,6 +354,16 @@ impl MachineType {
             Self::Source => "Source",
         }
     }
+
+    /// Footprint in grid cells: (width, height). Matches shader `machine_size()`.
+    /// Width = East-West extent, Height = North-South extent (facing North).
+    pub fn footprint(&self) -> (i32, i32) {
+        match self {
+            Self::Source => (1, 1),
+            Self::Composer => (2, 2),
+            Self::Inverter | Self::Embedder | Self::Quotient | Self::Transformer => (3, 2),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

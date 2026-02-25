@@ -66,8 +66,8 @@ mod tests {
     fn test_recipe_index_lookup_by_output() {
         let index = RecipeIndex::new();
         let recipes = index.recipes_for(ItemId::LineSegment);
-        assert_eq!(recipes.len(), 1);
-        assert_eq!(recipes[0].output, ItemId::LineSegment);
+        assert!(recipes.len() >= 1);
+        assert!(recipes.iter().all(|r| r.output == ItemId::LineSegment));
     }
 
     #[test]

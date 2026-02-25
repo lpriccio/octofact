@@ -29,6 +29,7 @@ pub enum ItemId {
     RootOfUnity,
     Kernel,
     Quantum,
+    SourceMachine,
 }
 
 impl ItemId {
@@ -39,7 +40,7 @@ impl ItemId {
             Identity, Square, Cube, StandingWave, Function, NeckerCube,
             Image, Belt, AxiomaticScience, Composer, Inverter, Embedder,
             Quotient, Transformer, KnowledgeSheaf, Quadrupole, Dynamo,
-            RootOfUnity, Kernel, Quantum,
+            RootOfUnity, Kernel, Quantum, SourceMachine,
         ]
     }
 
@@ -71,6 +72,7 @@ impl ItemId {
             Self::RootOfUnity => "Root of Unity",
             Self::Kernel => "Kernel",
             Self::Quantum => "Quantum",
+            Self::SourceMachine => "Source",
         }
     }
 
@@ -85,7 +87,8 @@ impl ItemId {
             | Self::AxiomaticScience => ItemCategory::Intermediate,
             Self::Belt | Self::Quadrupole | Self::Dynamo => ItemCategory::Infrastructure,
             Self::Composer | Self::Inverter | Self::Embedder
-            | Self::Quotient | Self::Transformer | Self::KnowledgeSheaf => {
+            | Self::Quotient | Self::Transformer | Self::KnowledgeSheaf
+            | Self::SourceMachine => {
                 ItemCategory::Machine
             }
             Self::RootOfUnity | Self::Kernel | Self::Quantum => ItemCategory::Advanced,
@@ -97,6 +100,7 @@ impl ItemId {
             Self::NullSet | Self::Point | Self::Preimage | Self::Wavelet => 0,
             Self::RootOfUnity | Self::Kernel | Self::Quantum
             | Self::Embedder | Self::Quotient | Self::Transformer => 2,
+            Self::SourceMachine => 0,
             _ => 1,
         }
     }
@@ -129,6 +133,7 @@ impl ItemId {
             Self::RootOfUnity => "A preimage embedded in unity. Cycles back to itself.",
             Self::Kernel => "An identity embedded in a preimage. The null space made real.",
             Self::Quantum => "A standing wave embedded in a cube. Probability crystallized.",
+            Self::SourceMachine => "Debug machine. Produces any item from nothing.",
         }
     }
 
@@ -269,6 +274,12 @@ impl ItemId {
                 primary_color: [0.3, 0.6, 1.0],
                 secondary_color: [0.1, 0.3, 0.7],
             },
+            // Debug source — bright green diamond
+            Self::SourceMachine => IconParams {
+                shape: IconShape::Diamond,
+                primary_color: [0.2, 1.0, 0.2],
+                secondary_color: [0.1, 0.7, 0.1],
+            },
         }
     }
 }
@@ -329,6 +340,7 @@ pub enum MachineType {
     Embedder,
     Quotient,
     Transformer,
+    Source,
 }
 
 impl MachineType {
@@ -339,6 +351,7 @@ impl MachineType {
             Self::Embedder => "Embedder",
             Self::Quotient => "Quotient",
             Self::Transformer => "Transformer",
+            Self::Source => "Source",
         }
     }
 }
@@ -382,6 +395,25 @@ pub fn all_recipes() -> Vec<Recipe> {
         Recipe { machine: e, inputs: vec![(Preimage, 1), (Identity, 1)], output: RootOfUnity, output_count: 1 },
         Recipe { machine: e, inputs: vec![(Identity, 1), (Preimage, 1)], output: Kernel, output_count: 1 },
         Recipe { machine: e, inputs: vec![(StandingWave, 1), (Cube, 1)], output: Quantum, output_count: 1 },
+        // Source machine: one recipe per item (no inputs required)
+        Recipe { machine: MachineType::Source, inputs: vec![], output: NullSet, output_count: 1 },
+        Recipe { machine: MachineType::Source, inputs: vec![], output: Point, output_count: 1 },
+        Recipe { machine: MachineType::Source, inputs: vec![], output: Preimage, output_count: 1 },
+        Recipe { machine: MachineType::Source, inputs: vec![], output: Wavelet, output_count: 1 },
+        Recipe { machine: MachineType::Source, inputs: vec![], output: LineSegment, output_count: 1 },
+        Recipe { machine: MachineType::Source, inputs: vec![], output: ExactSequence, output_count: 1 },
+        Recipe { machine: MachineType::Source, inputs: vec![], output: Identity, output_count: 1 },
+        Recipe { machine: MachineType::Source, inputs: vec![], output: Square, output_count: 1 },
+        Recipe { machine: MachineType::Source, inputs: vec![], output: Cube, output_count: 1 },
+        Recipe { machine: MachineType::Source, inputs: vec![], output: StandingWave, output_count: 1 },
+        Recipe { machine: MachineType::Source, inputs: vec![], output: Function, output_count: 1 },
+        Recipe { machine: MachineType::Source, inputs: vec![], output: NeckerCube, output_count: 1 },
+        Recipe { machine: MachineType::Source, inputs: vec![], output: Image, output_count: 1 },
+        Recipe { machine: MachineType::Source, inputs: vec![], output: Belt, output_count: 1 },
+        Recipe { machine: MachineType::Source, inputs: vec![], output: AxiomaticScience, output_count: 1 },
+        Recipe { machine: MachineType::Source, inputs: vec![], output: RootOfUnity, output_count: 1 },
+        Recipe { machine: MachineType::Source, inputs: vec![], output: Kernel, output_count: 1 },
+        Recipe { machine: MachineType::Source, inputs: vec![], output: Quantum, output_count: 1 },
     ]
 }
 
@@ -426,7 +458,7 @@ mod tests {
 
     #[test]
     fn test_all_items_count() {
-        assert_eq!(ItemId::all().len(), 26);
+        assert_eq!(ItemId::all().len(), 27);
     }
 
     #[test]

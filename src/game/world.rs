@@ -122,6 +122,7 @@ impl StructureKind {
             ItemId::Embedder => Some(Self::Machine(MachineType::Embedder)),
             ItemId::Quotient => Some(Self::Machine(MachineType::Quotient)),
             ItemId::Transformer => Some(Self::Machine(MachineType::Transformer)),
+            ItemId::SourceMachine => Some(Self::Machine(MachineType::Source)),
             _ => None,
         }
     }

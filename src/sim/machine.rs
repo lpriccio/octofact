@@ -7,6 +7,9 @@ use crate::game::world::EntityId;
 /// Default crafting duration in ticks (60 UPS = 2 seconds).
 pub const DEFAULT_CRAFT_TICKS: u16 = 120;
 
+/// Source machine crafting duration in ticks (60 UPS = 0.5 seconds).
+pub const SOURCE_CRAFT_TICKS: u16 = 30;
+
 /// An item type + count, used for machine input/output slots.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ItemStack {
@@ -317,8 +320,13 @@ impl MachinePool {
                     // Try to start crafting if inputs are available
                     if Self::has_inputs(&self.cold.input_slots[i], &recipe.inputs) {
                         Self::consume_inputs(&mut self.cold.input_slots[i], &recipe.inputs);
-                        self.hot.recipe_ticks[i] = DEFAULT_CRAFT_TICKS;
-                        self.hot.recipe_total_ticks[i] = DEFAULT_CRAFT_TICKS;
+                        let ticks = if self.cold.machine_type[i] == MachineType::Source {
+                            SOURCE_CRAFT_TICKS
+                        } else {
+                            DEFAULT_CRAFT_TICKS
+                        };
+                        self.hot.recipe_ticks[i] = ticks;
+                        self.hot.recipe_total_ticks[i] = ticks;
                         self.hot.progress[i] = 0.0;
                         self.hot.state[i] = MachineState::Working;
                     } else {
@@ -793,5 +801,59 @@ mod tests {
             .map(|s| s.count)
             .sum();
         assert_eq!(total, 3);
+    }
+
+    #[test]
+    fn source_machine_produces_without_inputs() {
+        let mut pool = MachinePool::new();
+        let (_, e1) = make_entity();
+        pool.add(e1, MachineType::Source);
+        let recipes = RecipeIndex::new();
+
+        // Find the source recipe for NullSet
+        let source_recipes = recipes.recipes_for_machine(MachineType::Source);
+        let (null_set_idx, _) = source_recipes
+            .iter()
+            .find(|(_, r)| r.output == ItemId::NullSet)
+            .unwrap();
+        pool.set_recipe(e1, Some(*null_set_idx));
+
+        // Tick once: should go straight to Working (no inputs needed)
+        pool.tick(&recipes);
+        assert_eq!(pool.state(e1), Some(MachineState::Working));
+
+        // Run through SOURCE_CRAFT_TICKS + 1 to complete the craft
+        for _ in 0..SOURCE_CRAFT_TICKS {
+            pool.tick(&recipes);
+        }
+
+        // Should have produced a NullSet and immediately started working again
+        let slots = pool.output_slots(e1).unwrap();
+        let total: u16 = slots
+            .iter()
+            .filter(|s| s.item == ItemId::NullSet)
+            .map(|s| s.count)
+            .sum();
+        assert_eq!(total, 1);
+    }
+
+    #[test]
+    fn source_machine_uses_shorter_craft_time() {
+        let mut pool = MachinePool::new();
+        let (_, e1) = make_entity();
+        pool.add(e1, MachineType::Source);
+        let recipes = RecipeIndex::new();
+
+        let source_recipes = recipes.recipes_for_machine(MachineType::Source);
+        let (idx, _) = source_recipes
+            .iter()
+            .find(|(_, r)| r.output == ItemId::Point)
+            .unwrap();
+        pool.set_recipe(e1, Some(*idx));
+
+        pool.tick(&recipes); // Idle -> Working
+        let i = pool.index_of(e1).unwrap();
+        assert_eq!(pool.hot.recipe_ticks[i], SOURCE_CRAFT_TICKS);
+        assert_eq!(pool.hot.recipe_total_ticks[i], SOURCE_CRAFT_TICKS);
     }
 }

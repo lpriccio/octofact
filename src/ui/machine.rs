@@ -156,6 +156,10 @@ fn slot_grid(
 
 /// Format a recipe as a label for the dropdown.
 fn recipe_label(recipe: &crate::game::items::Recipe) -> String {
+    if recipe.inputs.is_empty() {
+        // Source machine: just show the output item name
+        return recipe.output.display_name().to_string();
+    }
     let inputs: Vec<String> = recipe
         .inputs
         .iter()

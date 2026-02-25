@@ -57,6 +57,9 @@ pub fn port_layout(machine_type: MachineType) -> &'static [PortDef] {
             PortDef { side: West, kind: Input, slot: 1 },
             PortDef { side: North, kind: Output, slot: 0 },
         ],
+        MachineType::Source => &[
+            PortDef { side: North, kind: Output, slot: 0 },
+        ],
     }
 }
 
@@ -224,6 +227,7 @@ mod tests {
             MachineType::Embedder,
             MachineType::Quotient,
             MachineType::Transformer,
+            MachineType::Source,
         ] {
             for dir in [
                 Direction::North,

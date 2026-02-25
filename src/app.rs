@@ -169,31 +169,6 @@ struct RunningState {
     icon_atlas: IconAtlas,
 }
 
-pub struct App {
-    cfg: TilingConfig,
-    running: Option<RunningState>,
-    camera: Camera,
-    game_loop: GameLoop,
-    input_state: InputState,
-    config: GameConfig,
-    inventory: Inventory,
-    recipes: RecipeIndex,
-    world: WorldState,
-    placement_mode: Option<PlacementMode>,
-    placement_open: bool,
-    cursor_pos: Option<winit::dpi::PhysicalPosition<f64>>,
-    settings_open: bool,
-    inventory_open: bool,
-    rebinding: Option<GameAction>,
-    grid_enabled: bool,
-    klein_half_side: f64,
-    flash_screen_pos: Option<(f32, f32)>,
-    flash_label: String,
-    flash_timer: f32,
-    /// Active drag-to-place state: tile address, axis constraint, last placed grid coord
-    belt_drag: Option<BeltDrag>,
-}
-
 /// State for dragging belts along a gridline.
 struct BeltDrag {
     tile_idx: usize,
@@ -204,6 +179,58 @@ struct BeltDrag {
     fixed_coord: i32,
     /// The last grid coordinate placed along the free axis
     last_free: i32,
+}
+
+/// UI-only state extracted from App: flash notifications, drag state, cursor,
+/// panel open flags, key rebinding, and placement mode.
+pub struct UiState {
+    pub placement_mode: Option<PlacementMode>,
+    pub placement_open: bool,
+    pub cursor_pos: Option<winit::dpi::PhysicalPosition<f64>>,
+    pub settings_open: bool,
+    pub inventory_open: bool,
+    pub rebinding: Option<GameAction>,
+    pub flash_screen_pos: Option<(f32, f32)>,
+    pub flash_label: String,
+    pub flash_timer: f32,
+    /// Active drag-to-place state: tile address, axis constraint, last placed grid coord
+    belt_drag: Option<BeltDrag>,
+}
+
+impl UiState {
+    fn new() -> Self {
+        Self {
+            placement_mode: None,
+            placement_open: false,
+            cursor_pos: None,
+            settings_open: false,
+            inventory_open: false,
+            rebinding: None,
+            flash_screen_pos: None,
+            flash_label: String::new(),
+            flash_timer: 0.0,
+            belt_drag: None,
+        }
+    }
+
+    fn is_panel_open(&self) -> bool {
+        self.settings_open || self.inventory_open
+    }
+}
+
+pub struct App {
+    cfg: TilingConfig,
+    running: Option<RunningState>,
+    camera: Camera,
+    game_loop: GameLoop,
+    input_state: InputState,
+    config: GameConfig,
+    inventory: Inventory,
+    recipes: RecipeIndex,
+    world: WorldState,
+    ui: UiState,
+    grid_enabled: bool,
+    klein_half_side: f64,
 }
 
 impl App {
@@ -220,12 +247,7 @@ impl App {
             inventory: Inventory::starting_inventory(),
             recipes: RecipeIndex::new(),
             world: WorldState::new(),
-            placement_mode: None,
-            placement_open: false,
-            cursor_pos: None,
-            settings_open: false,
-            inventory_open: false,
-            rebinding: None,
+            ui: UiState::new(),
             grid_enabled: false,
             klein_half_side: {
                 // For {4,n} squares: Klein half-side = r_klein / sqrt(2)
@@ -234,15 +256,11 @@ impl App {
                 let r_k = 2.0 * r_p / (1.0 + r_p * r_p);
                 r_k / std::f64::consts::SQRT_2
             },
-            flash_screen_pos: None,
-            flash_label: String::new(),
-            flash_timer: 0.0,
-            belt_drag: None,
         }
     }
 
     fn ui_is_open(&self) -> bool {
-        self.settings_open || self.inventory_open
+        self.ui.is_panel_open()
     }
 
     fn find_clicked_tile(&self, sx: f64, sy: f64) -> Option<ClickResult> {
@@ -335,14 +353,14 @@ impl App {
 
         if let Some((px, py)) = project_to_screen(world_pos, &view_proj, width, height) {
             let tile = &running.tiling.tiles[result.tile_idx];
-            self.flash_label = format!(
+            self.ui.flash_label = format!(
                 "{};{},{}",
                 format_address(&tile.address),
                 result.grid_xy.0,
                 result.grid_xy.1,
             );
-            self.flash_screen_pos = Some((px / scale, py / scale));
-            self.flash_timer = 0.4;
+            self.ui.flash_screen_pos = Some((px / scale, py / scale));
+            self.ui.flash_timer = 0.4;
         }
     }
 
@@ -383,19 +401,19 @@ impl App {
         let world_pos = glam::Vec3::new(bowl[0], bowl[1] + elevation, bowl[2]);
 
         if let Some((px, py)) = project_to_screen(world_pos, &view_proj, width, height) {
-            self.flash_label = format!(
+            self.ui.flash_label = format!(
                 "{} {}",
                 mode.item.display_name(),
                 mode.direction.arrow_char(),
             );
-            self.flash_screen_pos = Some((px / scale, py / scale));
-            self.flash_timer = 0.4;
+            self.ui.flash_screen_pos = Some((px / scale, py / scale));
+            self.ui.flash_timer = 0.4;
         }
         true
     }
 
     fn handle_placement_click(&mut self, sx: f64, sy: f64) {
-        let mode = match self.placement_mode.as_ref() {
+        let mode = match self.ui.placement_mode.as_ref() {
             Some(m) => m.clone(),
             None => return,
         };
@@ -416,7 +434,7 @@ impl App {
             } else {
                 (result.grid_xy.0, result.grid_xy.1) // fixed gx, free gy
             };
-            self.belt_drag = Some(BeltDrag {
+            self.ui.belt_drag = Some(BeltDrag {
                 tile_idx: result.tile_idx,
                 address,
                 horizontal,
@@ -427,12 +445,12 @@ impl App {
     }
 
     fn handle_placement_drag(&mut self, sx: f64, sy: f64) {
-        let mode = match self.placement_mode.as_ref() {
+        let mode = match self.ui.placement_mode.as_ref() {
             Some(m) => m.clone(),
-            None => { self.belt_drag = None; return; },
+            None => { self.ui.belt_drag = None; return; },
         };
 
-        let drag = match self.belt_drag.as_ref() {
+        let drag = match self.ui.belt_drag.as_ref() {
             Some(d) => d,
             None => return,
         };
@@ -490,7 +508,7 @@ impl App {
                 current += step;
             }
 
-            if let Some(d) = self.belt_drag.as_mut() {
+            if let Some(d) = self.ui.belt_drag.as_mut() {
                 d.last_free = target_free;
             }
         } else {
@@ -515,14 +533,14 @@ impl App {
                 let result = match self.find_clicked_tile(sx, sy) {
                     Some(r) => r,
                     None => {
-                        if let Some(d) = self.belt_drag.as_mut() { d.last_free = old_target; }
+                        if let Some(d) = self.ui.belt_drag.as_mut() { d.last_free = old_target; }
                         return;
                     }
                 };
 
                 if result.tile_idx == old_tile_idx {
                     // Cursor resolved to the same tile; just stay at edge
-                    if let Some(d) = self.belt_drag.as_mut() { d.last_free = old_target; }
+                    if let Some(d) = self.ui.belt_drag.as_mut() { d.last_free = old_target; }
                     return;
                 }
 
@@ -548,7 +566,7 @@ impl App {
                 }
 
                 // Switch drag to the new tile
-                self.belt_drag = Some(BeltDrag {
+                self.ui.belt_drag = Some(BeltDrag {
                     tile_idx: new_tile_idx,
                     address: new_address,
                     horizontal,
@@ -557,7 +575,7 @@ impl App {
                 });
             } else {
                 // Haven't reached edge yet; update position
-                if let Some(d) = self.belt_drag.as_mut() {
+                if let Some(d) = self.ui.belt_drag.as_mut() {
                     d.last_free = old_target;
                 }
             }
@@ -675,16 +693,16 @@ impl App {
         // Settings menu
         crate::ui::settings::settings_menu(
             &running.egui.ctx.clone(),
-            &mut self.settings_open,
+            &mut self.ui.settings_open,
             &mut self.config,
             &mut self.input_state,
-            &mut self.rebinding,
+            &mut self.ui.rebinding,
         );
 
         // Inventory window
         crate::ui::inventory::inventory_window(
             &running.egui.ctx.clone(),
-            &mut self.inventory_open,
+            &mut self.ui.inventory_open,
             &self.inventory,
             &running.icon_atlas,
             &self.recipes,
@@ -693,16 +711,16 @@ impl App {
         // Placement panel
         crate::ui::placement::placement_panel(
             &running.egui.ctx.clone(),
-            &mut self.placement_open,
+            &mut self.ui.placement_open,
             &self.inventory,
             &running.icon_atlas,
-            &mut self.placement_mode,
+            &mut self.ui.placement_mode,
         );
 
         // Debug click flash
-        if self.flash_timer > 0.0 {
-            if let Some((fx, fy)) = self.flash_screen_pos {
-                let alpha = (self.flash_timer / 0.4).clamp(0.0, 1.0);
+        if self.ui.flash_timer > 0.0 {
+            if let Some((fx, fy)) = self.ui.flash_screen_pos {
+                let alpha = (self.ui.flash_timer / 0.4).clamp(0.0, 1.0);
                 let a = (alpha * 255.0) as u8;
                 let egui_ctx = running.egui.ctx.clone();
                 egui::Area::new(egui::Id::new("debug_flash"))
@@ -716,11 +734,11 @@ impl App {
                             6.0,
                             egui::Color32::from_rgba_unmultiplied(255, 255, 255, a),
                         );
-                        if !self.flash_label.is_empty() {
+                        if !self.ui.flash_label.is_empty() {
                             painter.text(
                                 egui::pos2(fx, fy - 12.0),
                                 egui::Align2::CENTER_BOTTOM,
-                                &self.flash_label,
+                                &self.ui.flash_label,
                                 egui::FontId::monospace(13.0),
                                 egui::Color32::from_rgba_unmultiplied(255, 255, 255, a),
                             );
@@ -1099,7 +1117,7 @@ impl ApplicationHandler for App {
                 }
 
                 // Handle rebinding mode
-                if let Some(action) = self.rebinding {
+                if let Some(action) = self.ui.rebinding {
                     if event.state.is_pressed() {
                         // Don't bind bare modifier keys
                         if code == winit::keyboard::KeyCode::ShiftLeft || code == winit::keyboard::KeyCode::ShiftRight {
@@ -1113,7 +1131,7 @@ impl ApplicationHandler for App {
                         self.input_state.rebind(action, bind);
                         self.config.key_bindings.insert(action, bind);
                         self.config.save();
-                        self.rebinding = None;
+                        self.ui.rebinding = None;
                     }
                     return;
                 }
@@ -1123,10 +1141,10 @@ impl ApplicationHandler for App {
                 // Handle toggle actions on press (before egui eats them)
                 if event.state.is_pressed() {
                     if self.input_state.just_pressed(GameAction::OpenSettings) {
-                        self.settings_open = !self.settings_open;
+                        self.ui.settings_open = !self.ui.settings_open;
                     }
                     if self.input_state.just_pressed(GameAction::OpenInventory) {
-                        self.inventory_open = !self.inventory_open;
+                        self.ui.inventory_open = !self.ui.inventory_open;
                     }
                     if self.input_state.just_pressed(GameAction::ToggleLabels) {
                         if let Some(running) = &mut self.running {
@@ -1143,23 +1161,23 @@ impl ApplicationHandler for App {
                         log::info!("grid: {}", if self.grid_enabled { "ON" } else { "OFF" });
                     }
                     if self.input_state.just_pressed(GameAction::OpenPlacement) {
-                        self.placement_open = !self.placement_open;
-                        if !self.placement_open {
-                            self.placement_mode = None;
+                        self.ui.placement_open = !self.ui.placement_open;
+                        if !self.ui.placement_open {
+                            self.ui.placement_mode = None;
                         }
                     }
                     if self.input_state.just_pressed(GameAction::RotateStructure) {
-                        if let Some(mode) = &mut self.placement_mode {
+                        if let Some(mode) = &mut self.ui.placement_mode {
                             mode.direction = mode.direction.rotate_cw();
                         }
                     }
                     if self.input_state.just_pressed(GameAction::RaiseTerrain) {
-                        if let Some(pos) = self.cursor_pos {
+                        if let Some(pos) = self.ui.cursor_pos {
                             self.modify_terrain(pos.x, pos.y, 0.04);
                         }
                     }
                     if self.input_state.just_pressed(GameAction::LowerTerrain) {
-                        if let Some(pos) = self.cursor_pos {
+                        if let Some(pos) = self.ui.cursor_pos {
                             self.modify_terrain(pos.x, pos.y, -0.04);
                         }
                     }
@@ -1186,17 +1204,17 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
-                self.cursor_pos = Some(position);
+                self.ui.cursor_pos = Some(position);
                 // Continue drag-to-place if active
-                if self.belt_drag.is_some() {
+                if self.ui.belt_drag.is_some() {
                     self.handle_placement_drag(position.x, position.y);
                 }
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 if button == winit::event::MouseButton::Left {
                     if state == winit::event::ElementState::Pressed {
-                        if let Some(pos) = self.cursor_pos {
-                            if self.placement_mode.is_some() {
+                        if let Some(pos) = self.ui.cursor_pos {
+                            if self.ui.placement_mode.is_some() {
                                 self.handle_placement_click(pos.x, pos.y);
                             } else if !self.ui_is_open() {
                                 self.handle_debug_click(pos.x, pos.y);
@@ -1204,7 +1222,7 @@ impl ApplicationHandler for App {
                         }
                     } else {
                         // Mouse released — end drag
-                        self.belt_drag = None;
+                        self.ui.belt_drag = None;
                     }
                 }
             }
@@ -1258,8 +1276,8 @@ impl ApplicationHandler for App {
         }
 
         // Flash timer uses real frame dt for smooth fadeout
-        if self.flash_timer > 0.0 {
-            self.flash_timer = (self.flash_timer - frame_dt as f32).max(0.0);
+        if self.ui.flash_timer > 0.0 {
+            self.ui.flash_timer = (self.ui.flash_timer - frame_dt as f32).max(0.0);
         }
 
         self.input_state.end_frame();

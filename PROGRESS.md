@@ -24,7 +24,7 @@
 - [x] Define `StructureKind` enum: `Belt(BeltId)`, `Machine(MachineId)`, `PowerNode`, etc.
 - [x] Update all callers in `app.rs`: `try_place_at`, `handle_placement_click`, `handle_placement_drag`
 - [x] Update belt overlay rendering to use new world queries
-- [ ] Extract `UiState` struct from `App` (flash, drag, cursor, panel open flags)
+- [x] Extract `UiState` struct from `App` (flash, drag, cursor, panel open flags)
 
 ## Phase 3: Belt Simulation
 

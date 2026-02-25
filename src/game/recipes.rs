@@ -4,7 +4,6 @@ use super::items::{all_recipes, ItemId, MachineType, Recipe};
 pub struct RecipeIndex {
     pub all: Vec<Recipe>,
     by_output: HashMap<ItemId, Vec<usize>>,
-    #[allow(dead_code)] // used in tests; will be used by machine simulation
     by_machine: HashMap<MachineType, Vec<usize>>,
 }
 
@@ -29,6 +28,13 @@ impl RecipeIndex {
             .unwrap_or_default()
     }
 
+    /// Get all recipes for a specific machine type, returned as (recipe_index, &Recipe) pairs.
+    pub fn recipes_for_machine(&self, machine: MachineType) -> Vec<(usize, &Recipe)> {
+        self.by_machine
+            .get(&machine)
+            .map(|indices| indices.iter().map(|&i| (i, &self.all[i])).collect())
+            .unwrap_or_default()
+    }
 }
 
 #[cfg(test)]

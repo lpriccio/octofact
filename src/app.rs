@@ -196,6 +196,8 @@ pub struct UiState {
     pub flash_timer: f32,
     /// Active drag-to-place state: tile address, axis constraint, last placed grid coord
     belt_drag: Option<BeltDrag>,
+    /// Currently inspected machine entity (opens the machine panel).
+    pub machine_panel_entity: Option<EntityId>,
 }
 
 impl UiState {
@@ -211,11 +213,12 @@ impl UiState {
             flash_label: String::new(),
             flash_timer: 0.0,
             belt_drag: None,
+            machine_panel_entity: None,
         }
     }
 
     fn is_panel_open(&self) -> bool {
-        self.settings_open || self.inventory_open
+        self.settings_open || self.inventory_open || self.machine_panel_entity.is_some()
     }
 }
 
@@ -793,6 +796,33 @@ impl App {
         self.belt_network.spawn_item_on_entity(entity, crate::game::items::ItemId::NullSet);
     }
 
+    /// Try to open the machine panel if the clicked grid cell contains a machine.
+    /// Returns true if a machine was found and the panel was opened.
+    fn try_open_machine_panel(&mut self, sx: f64, sy: f64) -> bool {
+        let result = match self.find_clicked_tile(sx, sy) {
+            Some(r) => r,
+            None => return false,
+        };
+        let address = {
+            let running = self.running.as_ref().unwrap();
+            running.tiling.tiles[result.tile_idx].address.clone()
+        };
+        let entities = match self.world.tile_entities(&address) {
+            Some(e) => e,
+            None => return false,
+        };
+        let &entity = match entities.get(&result.grid_xy) {
+            Some(e) => e,
+            None => return false,
+        };
+        if let Some(StructureKind::Machine(_)) = self.world.kind(entity) {
+            self.ui.machine_panel_entity = Some(entity);
+            true
+        } else {
+            false
+        }
+    }
+
     fn modify_terrain(&mut self, sx: f64, sy: f64, delta: f32) {
         let result = match self.find_clicked_tile(sx, sy) {
             Some(r) => r,
@@ -928,6 +958,27 @@ impl App {
             &mut self.ui.placement_mode,
             self.config.debug.free_placement,
         );
+
+        // Machine inspection panel
+        if let Some(entity) = self.ui.machine_panel_entity {
+            let egui_ctx = running.egui.ctx.clone();
+            if let Some(action) = crate::ui::machine::machine_panel(
+                &egui_ctx,
+                entity,
+                &self.machine_pool,
+                &self.recipes,
+                &running.icon_atlas,
+            ) {
+                match action {
+                    crate::ui::machine::MachineAction::SetRecipe(e, recipe_idx) => {
+                        self.machine_pool.set_recipe(e, recipe_idx);
+                    }
+                    crate::ui::machine::MachineAction::Close => {
+                        self.ui.machine_panel_entity = None;
+                    }
+                }
+            }
+        }
 
         // Debug click flash
         if self.ui.flash_timer > 0.0 {
@@ -1452,7 +1503,15 @@ impl ApplicationHandler for App {
                             } else if self.ui.placement_mode.is_some() {
                                 self.handle_placement_click(pos.x, pos.y);
                             } else if !self.ui_is_open() {
-                                self.handle_debug_click(pos.x, pos.y);
+                                if !self.try_open_machine_panel(pos.x, pos.y) {
+                                    self.handle_debug_click(pos.x, pos.y);
+                                }
+                            } else if self.ui.machine_panel_entity.is_some() {
+                                // Clicking outside while machine panel is open:
+                                // try to click another machine, else close panel
+                                if !self.try_open_machine_panel(pos.x, pos.y) {
+                                    self.ui.machine_panel_entity = None;
+                                }
                             }
                         }
                     } else {

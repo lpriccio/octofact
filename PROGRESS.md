@@ -51,8 +51,8 @@
 - [x] Implement inserter grab/place logic with two-phase transfer
 - [x] Wire machines and inserters into simulation tick
 - [x] Auto-create inserters when machine placed adjacent to belt (or: separate placeable item)
-- [ ] Machine UI: click machine to see recipe, progress, input/output slots
-- [ ] Recipe selection UI for placed machines
+- [x] Machine UI: click machine to see recipe, progress, input/output slots
+- [x] Recipe selection UI for placed machines
 
 ## Phase 5: Power Network
 

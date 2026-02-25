@@ -53,7 +53,7 @@
 - [x] Auto-create inserters when machine placed adjacent to belt (or: separate placeable item)
 - [x] Machine UI: click machine to see recipe, progress, input/output slots
 - [x] Recipe selection UI for placed machines
-- [ ] Source machine, debug-only, for producing any item the user chooses
+- [x] Source machine, debug-only, for producing any item the user chooses
 
 ## Phase 5: Power Network
 

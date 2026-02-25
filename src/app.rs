@@ -11,17 +11,14 @@ use crate::game::input::{GameAction, InputState};
 use crate::game::inventory::Inventory;
 use crate::game::recipes::RecipeIndex;
 use crate::game::world::{Direction, EntityId, StructureKind, WorldState};
-use crate::hyperbolic::poincare::{canonical_polygon, polygon_disk_radius, Complex, Mobius, TilingConfig};
-use crate::hyperbolic::tiling::{format_address, TileAddr, TilingState};
+use crate::hyperbolic::poincare::{canonical_polygon, polygon_disk_radius, Complex, TilingConfig};
+use crate::hyperbolic::tiling::{format_address, TileAddr};
 use crate::render::camera::Camera;
+use crate::render::engine::{project_to_screen, project_to_screen_unclamped, RenderEngine};
 use crate::render::mesh::build_polygon_mesh;
-use crate::render::pipeline::{RenderState, Uniforms};
 use crate::sim::belt::BeltNetwork;
 use crate::sim::tick::GameLoop;
-use crate::ui::icons::IconAtlas;
-use crate::ui::integration::EguiIntegration;
 use crate::ui::placement::PlacementMode;
-use crate::ui::style::apply_octofact_style;
 
 struct ClickResult {
     tile_idx: usize,
@@ -29,146 +26,7 @@ struct ClickResult {
     local_disk: Complex,
 }
 
-fn project_to_screen(world_pos: glam::Vec3, view_proj: &glam::Mat4, width: f32, height: f32) -> Option<(f32, f32)> {
-    let clip = *view_proj * glam::Vec4::new(world_pos.x, world_pos.y, world_pos.z, 1.0);
-    if clip.w <= 0.0 {
-        return None;
-    }
-    let ndc = glam::Vec3::new(clip.x / clip.w, clip.y / clip.w, clip.z / clip.w);
-    if ndc.x < -1.0 || ndc.x > 1.0 || ndc.y < -1.0 || ndc.y > 1.0 {
-        return None;
-    }
-    let screen_x = (ndc.x + 1.0) * 0.5 * width;
-    let screen_y = (1.0 - ndc.y) * 0.5 * height;
-    Some((screen_x, screen_y))
-}
 
-/// Like project_to_screen but allows points outside the viewport (for partially visible geometry).
-/// Like project_to_screen but allows points slightly outside the viewport
-/// (for partially visible geometry). Coordinates are clamped to 2x viewport
-/// to prevent degenerate polygons when clip.w is near zero.
-fn project_to_screen_unclamped(world_pos: glam::Vec3, view_proj: &glam::Mat4, width: f32, height: f32) -> Option<(f32, f32)> {
-    let clip = *view_proj * glam::Vec4::new(world_pos.x, world_pos.y, world_pos.z, 1.0);
-    if clip.w <= 0.01 {
-        return None;
-    }
-    let ndc_x = (clip.x / clip.w).clamp(-3.0, 3.0);
-    let ndc_y = (clip.y / clip.w).clamp(-3.0, 3.0);
-    let screen_x = (ndc_x + 1.0) * 0.5 * width;
-    let screen_y = (1.0 - ndc_y) * 0.5 * height;
-    Some((screen_x, screen_y))
-}
-
-fn render_egui_pass(
-    encoder: &mut wgpu::CommandEncoder,
-    renderer: &egui_wgpu::Renderer,
-    view: &wgpu::TextureView,
-    paint_jobs: &[egui::ClippedPrimitive],
-    screen: &egui_wgpu::ScreenDescriptor,
-) {
-    let mut pass = encoder
-        .begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("egui pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
-                },
-                depth_slice: None,
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-        })
-        .forget_lifetime();
-    renderer.render(&mut pass, paint_jobs, screen);
-}
-
-pub struct GpuState {
-    pub surface: wgpu::Surface<'static>,
-    pub device: wgpu::Device,
-    pub queue: wgpu::Queue,
-    pub config: wgpu::SurfaceConfiguration,
-    pub window: Arc<Window>,
-}
-
-impl GpuState {
-    pub fn new(window: Arc<Window>) -> Self {
-        let size = window.inner_size();
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::METAL,
-            ..Default::default()
-        });
-
-        let surface = instance
-            .create_surface(window.clone())
-            .expect("create surface");
-
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            compatible_surface: Some(&surface),
-            force_fallback_adapter: false,
-        }))
-        .expect("request adapter");
-
-        let (device, queue) = pollster::block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                label: Some("octofact device"),
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::default(),
-                ..Default::default()
-            },
-        ))
-        .expect("request device");
-
-        let surface_caps = surface.get_capabilities(&adapter);
-        let surface_format = surface_caps
-            .formats
-            .iter()
-            .find(|f| f.is_srgb())
-            .copied()
-            .unwrap_or(surface_caps.formats[0]);
-
-        let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: surface_format,
-            width: size.width.max(1),
-            height: size.height.max(1),
-            present_mode: wgpu::PresentMode::Fifo,
-            alpha_mode: surface_caps.alpha_modes[0],
-            view_formats: vec![],
-            desired_maximum_frame_latency: 2,
-        };
-        surface.configure(&device, &config);
-
-        Self {
-            surface,
-            device,
-            queue,
-            config,
-            window,
-        }
-    }
-
-    pub fn resize(&mut self, width: u32, height: u32) {
-        if width > 0 && height > 0 {
-            self.config.width = width;
-            self.config.height = height;
-            self.surface.configure(&self.device, &self.config);
-        }
-    }
-}
-
-struct RunningState {
-    gpu: GpuState,
-    render: RenderState,
-    tiling: TilingState,
-    extra_elevation: std::collections::HashMap<usize, f32>,
-    egui: EguiIntegration,
-    icon_atlas: IconAtlas,
-}
 
 /// State for dragging belts along a gridline.
 struct BeltDrag {
@@ -224,7 +82,7 @@ impl UiState {
 
 pub struct App {
     cfg: TilingConfig,
-    running: Option<RunningState>,
+    renderer: Option<RenderEngine>,
     camera: Camera,
     game_loop: GameLoop,
     input_state: InputState,
@@ -246,7 +104,7 @@ impl App {
         let input_state = InputState::new(config.key_bindings.clone());
         Self {
             cfg,
-            running: None,
+            renderer: None,
             camera: Camera::new(),
             game_loop: GameLoop::new(),
             input_state,
@@ -274,7 +132,7 @@ impl App {
     }
 
     fn find_clicked_tile(&self, sx: f64, sy: f64) -> Option<ClickResult> {
-        let running = self.running.as_ref()?;
+        let running = self.renderer.as_ref()?;
         let inv_view = self.camera.local.inverse();
         let khs = self.klein_half_side;
         let width = running.gpu.config.width as f32;
@@ -335,7 +193,7 @@ impl App {
         };
 
         if self.config.debug.log_clicks {
-            let tile = &self.running.as_ref().unwrap().tiling.tiles[result.tile_idx];
+            let tile = &self.renderer.as_ref().unwrap().tiling.tiles[result.tile_idx];
             log::info!(
                 "{};{},{}",
                 format_address(&tile.address),
@@ -345,7 +203,7 @@ impl App {
         }
 
         // Flash at snapped grid intersection projected to screen
-        let running = self.running.as_ref().unwrap();
+        let running = self.renderer.as_ref().unwrap();
         let width = running.gpu.config.width as f32;
         let height = running.gpu.config.height as f32;
         let scale = running.gpu.window.scale_factor() as f32;
@@ -449,7 +307,7 @@ impl App {
         }
 
         // Flash feedback
-        let running = self.running.as_ref().unwrap();
+        let running = self.renderer.as_ref().unwrap();
         let width = running.gpu.config.width as f32;
         let height = running.gpu.config.height as f32;
         let scale = running.gpu.window.scale_factor() as f32;
@@ -520,7 +378,7 @@ impl App {
         if check_ahead {
             let edge = direction.tiling_edge_index();
             let mirror = cross_tile_mirror(ahead);
-            let running = self.running.as_ref().unwrap();
+            let running = self.renderer.as_ref().unwrap();
             if let Some(neighbor_addr) = running.tiling.neighbor_tile_addr(tile_idx, edge) {
                 if let Some(neighbor_entity) = find_same_dir_belt_at(
                     &self.world, &neighbor_addr, mirror, direction,
@@ -534,7 +392,7 @@ impl App {
         if check_behind {
             let edge = direction.opposite().tiling_edge_index();
             let mirror = cross_tile_mirror(behind);
-            let running = self.running.as_ref().unwrap();
+            let running = self.renderer.as_ref().unwrap();
             if let Some(neighbor_addr) = running.tiling.neighbor_tile_addr(tile_idx, edge) {
                 if let Some(neighbor_entity) = find_same_dir_belt_at(
                     &self.world, &neighbor_addr, mirror, direction,
@@ -648,7 +506,7 @@ impl App {
             None => return,
         };
 
-        let running = self.running.as_ref().unwrap();
+        let running = self.renderer.as_ref().unwrap();
         let address = running.tiling.tiles[result.tile_idx].address.clone();
 
         if self.try_place_at(result.tile_idx, &address, result.grid_xy, &mode) {
@@ -691,7 +549,7 @@ impl App {
         // Compute cursor's virtual (unclamped) grid position on the drag tile.
         // If the cursor has moved beyond ±32, it's past the tile edge.
         let virtual_free = {
-            let running = self.running.as_ref().unwrap();
+            let running = self.renderer.as_ref().unwrap();
             let width = running.gpu.config.width as f32;
             let height = running.gpu.config.height as f32;
 
@@ -771,7 +629,7 @@ impl App {
 
                 // Get new tile info (immutable borrow, then drop before mutable ops)
                 let (new_tile_idx, new_address) = {
-                    let running = self.running.as_ref().unwrap();
+                    let running = self.renderer.as_ref().unwrap();
                     (result.tile_idx, running.tiling.tiles[result.tile_idx].address.clone())
                 };
 
@@ -819,7 +677,7 @@ impl App {
             None => return,
         };
         let address = {
-            let running = self.running.as_ref().unwrap();
+            let running = self.renderer.as_ref().unwrap();
             running.tiling.tiles[result.tile_idx].address.clone()
         };
         let entities = match self.world.tile_entities(&address) {
@@ -844,7 +702,7 @@ impl App {
             None => return false,
         };
         let address = {
-            let running = self.running.as_ref().unwrap();
+            let running = self.renderer.as_ref().unwrap();
             running.tiling.tiles[result.tile_idx].address.clone()
         };
         let entities = match self.world.tile_entities(&address) {
@@ -869,7 +727,7 @@ impl App {
             None => return,
         };
 
-        *self.running.as_mut().unwrap().extra_elevation.entry(result.tile_idx).or_insert(0.0) += delta;
+        *self.renderer.as_mut().unwrap().extra_elevation.entry(result.tile_idx).or_insert(0.0) += delta;
     }
 
     fn render_frame(&mut self) -> Result<(), wgpu::SurfaceError> {
@@ -877,83 +735,41 @@ impl App {
         let render_camera = self.game_loop.interpolated_camera()
             .unwrap_or_else(|| self.camera.snapshot());
 
-        let aspect = {
-            let gpu = &self.running.as_ref().unwrap().gpu;
-            gpu.config.width as f32 / gpu.config.height as f32
-        };
+        let re = self.renderer.as_mut().unwrap();
+        let aspect = re.width() / re.height();
         let view_proj = render_camera.build_view_proj(aspect);
-
-        let running = self.running.as_mut().unwrap();
-        let window = running.gpu.window.clone();
-
-        let output = running.gpu.surface.get_current_texture()?;
-        let view = output
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-
-        let width = running.gpu.config.width as f32;
-        let height = running.gpu.config.height as f32;
-
         let inv_view = render_camera.local.inverse();
 
-        let running = self.running.as_mut().unwrap();
-
-        // Collect visible tile indices with cached Mobius composition
-        let visible: Vec<(usize, Mobius)> = running.tiling
-            .tiles
-            .iter()
-            .enumerate()
-            .filter_map(|(i, tile)| {
-                let combined = inv_view.compose(&tile.transform);
-                let center = combined.apply(Complex::ZERO);
-                if center.abs() < 0.98 { Some((i, combined)) } else { None }
-            })
-            .take(crate::render::pipeline::MAX_TILES)
-            .collect();
+        // Visibility culling + uniform upload via RenderEngine
+        let visible = re.visible_tiles(&inv_view);
         let tile_count = visible.len();
+        re.upload_tile_uniforms(&visible, &view_proj, self.grid_enabled, self.klein_half_side as f32);
 
-        // Upload uniforms only for visible tiles
-        for (slot, &(tile_idx, combined)) in visible.iter().enumerate() {
-            let tile = &running.tiling.tiles[tile_idx];
-            let elevation = running.extra_elevation.get(&tile_idx).copied().unwrap_or(0.0);
-            let uniforms = Uniforms {
-                view_proj: view_proj.to_cols_array_2d(),
-                mobius_a: [combined.a.re as f32, combined.a.im as f32, 0.0, 0.0],
-                mobius_b: [combined.b.re as f32, combined.b.im as f32, 0.0, 0.0],
-                disk_params: [tile.depth as f32, elevation, slot as f32 * 1e-6, 13.0],
-                grid_params: [
-                    if self.grid_enabled { 1.0 } else { 0.0 },
-                    64.0,  // 64 grid divisions per cell edge
-                    0.03,  // line width in grid-cell units
-                    self.klein_half_side as f32,
-                ],
-                ..Default::default()
-            };
-            running.render.write_tile_uniforms(&running.gpu.queue, slot, &uniforms);
-        }
+        let window = re.gpu.window.clone();
+        let width = re.width();
+        let height = re.height();
+        let scale = re.scale_factor();
 
         // --- egui frame ---
-        running.egui.begin_frame(&window);
+        re.egui.begin_frame(&window);
 
-        // Label overlay (replaces glyphon)
-        if running.render.labels_enabled {
-            let egui_ctx = running.egui.ctx.clone();
-            let scale = window.scale_factor() as f32;
+        // Label overlay
+        if re.render.labels_enabled {
+            let egui_ctx = re.egui.ctx.clone();
             let area = egui::Area::new(egui::Id::new("tile_labels"))
                 .order(egui::Order::Background)
                 .interactable(false);
             area.show(&egui_ctx, |ui| {
                 for &(tile_idx, combined) in &visible {
-                    let tile = &running.tiling.tiles[tile_idx];
+                    let tile = &re.tiling.tiles[tile_idx];
                     let disk_center = combined.apply(Complex::ZERO);
                     if disk_center.abs() > 0.9 {
                         continue;
                     }
-                    let elevation = running.extra_elevation.get(&tile_idx).copied().unwrap_or(0.0);
+                    let elevation = re.extra_elevation.get(&tile_idx).copied().unwrap_or(0.0);
                     let hyp = crate::hyperbolic::embedding::disk_to_bowl(disk_center);
                     let world_pos = glam::Vec3::new(hyp[0], hyp[1] + elevation, hyp[2]);
                     if let Some((sx, sy)) = project_to_screen(world_pos, &view_proj, width, height) {
-                        // Convert physical pixels to logical points for egui
                         let lx = sx / scale;
                         let ly = sy / scale;
                         let text = format_address(&tile.address);
@@ -973,7 +789,7 @@ impl App {
 
         // Settings menu
         crate::ui::settings::settings_menu(
-            &running.egui.ctx.clone(),
+            &re.egui.ctx.clone(),
             &mut self.ui.settings_open,
             &mut self.config,
             &mut self.input_state,
@@ -982,32 +798,32 @@ impl App {
 
         // Inventory window
         crate::ui::inventory::inventory_window(
-            &running.egui.ctx.clone(),
+            &re.egui.ctx.clone(),
             &mut self.ui.inventory_open,
             &self.inventory,
-            &running.icon_atlas,
+            &re.icon_atlas,
             &self.recipes,
         );
 
         // Placement panel
         crate::ui::placement::placement_panel(
-            &running.egui.ctx.clone(),
+            &re.egui.ctx.clone(),
             &mut self.ui.placement_open,
             &self.inventory,
-            &running.icon_atlas,
+            &re.icon_atlas,
             &mut self.ui.placement_mode,
             self.config.debug.free_placement,
         );
 
         // Machine inspection panel
         if let Some(entity) = self.ui.machine_panel_entity {
-            let egui_ctx = running.egui.ctx.clone();
+            let egui_ctx = re.egui.ctx.clone();
             if let Some(action) = crate::ui::machine::machine_panel(
                 &egui_ctx,
                 entity,
                 &self.machine_pool,
                 &self.recipes,
-                &running.icon_atlas,
+                &re.icon_atlas,
             ) {
                 match action {
                     crate::ui::machine::MachineAction::SetRecipe(e, recipe_idx) => {
@@ -1025,7 +841,7 @@ impl App {
             if let Some((fx, fy)) = self.ui.flash_screen_pos {
                 let alpha = (self.ui.flash_timer / 0.4).clamp(0.0, 1.0);
                 let a = (alpha * 255.0) as u8;
-                let egui_ctx = running.egui.ctx.clone();
+                let egui_ctx = re.egui.ctx.clone();
                 egui::Area::new(egui::Id::new("debug_flash"))
                     .order(egui::Order::Foreground)
                     .fixed_pos(egui::pos2(fx, fy))
@@ -1052,7 +868,7 @@ impl App {
 
         // FPS / UPS debug overlay
         {
-            let egui_ctx = running.egui.ctx.clone();
+            let egui_ctx = re.egui.ctx.clone();
             egui::Area::new(egui::Id::new("fps_ups_overlay"))
                 .order(egui::Order::Foreground)
                 .fixed_pos(egui::pos2(8.0, 8.0))
@@ -1071,8 +887,7 @@ impl App {
 
         // Belt overlay — projected flat on tile surface
         {
-            let egui_ctx = running.egui.ctx.clone();
-            let scale = window.scale_factor() as f32;
+            let egui_ctx = re.egui.ctx.clone();
             let khs = self.klein_half_side;
             let divisions = 64.0_f64;
             egui::Area::new(egui::Id::new("belt_overlay"))
@@ -1081,7 +896,7 @@ impl App {
                 .show(&egui_ctx, |ui| {
                     let painter = ui.painter();
                     for &(tile_idx, combined) in &visible {
-                        let tile = &running.tiling.tiles[tile_idx];
+                        let tile = &re.tiling.tiles[tile_idx];
                         let disk_center = combined.apply(Complex::ZERO);
                         if disk_center.abs() > 0.9 {
                             continue;
@@ -1090,7 +905,7 @@ impl App {
                             Some(e) => e,
                             None => continue,
                         };
-                        let elevation = running.extra_elevation.get(&tile_idx).copied().unwrap_or(0.0);
+                        let elevation = re.extra_elevation.get(&tile_idx).copied().unwrap_or(0.0);
                         let dist = disk_center.abs();
                         let alpha = ((1.0 - dist / 0.9) * 1.5).clamp(0.0, 1.0);
                         if alpha < 0.01 {
@@ -1132,7 +947,6 @@ impl App {
                             };
 
                             // Project fractional grid coords through the full 3D pipeline
-                            // Uses unclamped projection so partially offscreen structures still render
                             let grid_to_screen = |fx: f64, fy: f64| -> Option<egui::Pos2> {
                                 let skx = (fx / divisions) * 2.0 * khs;
                                 let sky = (fy / divisions) * 2.0 * khs;
@@ -1215,7 +1029,6 @@ impl App {
                             // Kind-specific symbol
                             match kind {
                                 StructureKind::Belt => {
-                                    // Direction arrow for belts
                                     let dir = match self.world.direction(entity) {
                                         Some(d) => d,
                                         None => continue,
@@ -1253,11 +1066,9 @@ impl App {
                                     }
                                 }
                                 StructureKind::PowerNode | StructureKind::PowerSource => {
-                                    // "+" cross symbol for power structures
                                     let arm = 0.28;
                                     let w = 0.08;
                                     let cross_color = egui::Color32::from_rgba_unmultiplied(60, 50, 10, a);
-                                    // Horizontal bar
                                     if let (Some(a0), Some(a1), Some(a2), Some(a3)) = (
                                         grid_to_screen(cx - arm, cy - w),
                                         grid_to_screen(cx + arm, cy - w),
@@ -1270,7 +1081,6 @@ impl App {
                                             egui::Stroke::NONE,
                                         ));
                                     }
-                                    // Vertical bar
                                     if let (Some(a0), Some(a1), Some(a2), Some(a3)) = (
                                         grid_to_screen(cx - w, cy - arm),
                                         grid_to_screen(cx + w, cy - arm),
@@ -1285,7 +1095,6 @@ impl App {
                                     }
                                 }
                                 StructureKind::Machine(_) => {
-                                    // Gear-like circle for machines
                                     let dir = match self.world.direction(entity) {
                                         Some(d) => d,
                                         None => continue,
@@ -1304,26 +1113,24 @@ impl App {
                                 }
                             }
 
-                            // Power satisfaction indicator pip (machines and dynamos, not relays)
-                            // Relays (Quadrupoles) show no pip; Dynamos show a bright producer pip
+                            // Power satisfaction indicator pip
                             if matches!(kind, StructureKind::Machine(_) | StructureKind::PowerSource) {
                                 if let Some(sat) = self.power_network.satisfaction(entity) {
                                     let pip_color = if sat >= 1.0 {
-                                        egui::Color32::from_rgba_unmultiplied(50, 200, 50, a) // green
+                                        egui::Color32::from_rgba_unmultiplied(50, 200, 50, a)
                                     } else if sat >= 0.5 {
-                                        let t = (sat - 0.5) * 2.0; // 0..1
+                                        let t = (sat - 0.5) * 2.0;
                                         let r = (230.0 - t * 180.0) as u8;
                                         let g = (180.0 + t * 20.0) as u8;
-                                        egui::Color32::from_rgba_unmultiplied(r, g, 50, a) // yellow->green
+                                        egui::Color32::from_rgba_unmultiplied(r, g, 50, a)
                                     } else {
-                                        let t = sat * 2.0; // 0..1
+                                        let t = sat * 2.0;
                                         let r = 200;
                                         let g = (50.0 + t * 130.0) as u8;
-                                        egui::Color32::from_rgba_unmultiplied(r, g, 50, a) // red->yellow
+                                        egui::Color32::from_rgba_unmultiplied(r, g, 50, a)
                                     };
 
                                     if let Some(pip_pos) = grid_to_screen(cx + 0.35, cy + 0.35) {
-                                        // Dynamos get a larger, brighter pip to indicate they're generators
                                         let radius = if matches!(kind, StructureKind::PowerSource) { 3.5 } else { 2.5 };
                                         painter.circle_filled(pip_pos, radius, pip_color);
                                     }
@@ -1334,76 +1141,10 @@ impl App {
                 });
         }
 
-        let full_output = running.egui.end_frame(&window);
+        let full_output = re.egui.end_frame(&window);
 
-        // --- Render ---
-        let mut encoder = running.gpu
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("render encoder"),
-            });
-
-        let screen = egui_wgpu::ScreenDescriptor {
-            size_in_pixels: [running.gpu.config.width, running.gpu.config.height],
-            pixels_per_point: window.scale_factor() as f32,
-        };
-
-        // Prepare egui (tessellate, update textures/buffers)
-        let paint_jobs = running.egui.prepare(
-            &running.gpu.device,
-            &running.gpu.queue,
-            &mut encoder,
-            &screen,
-            &full_output,
-        );
-
-        // Main render pass (tiles + egui overlay)
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("main pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.02,
-                            g: 0.02,
-                            b: 0.05,
-                            a: 1.0,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &running.render.depth_view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-
-            // Draw tiles
-            pass.set_pipeline(&running.render.pipeline);
-            pass.set_vertex_buffer(0, running.render.vertex_buffer.slice(..));
-            pass.set_index_buffer(running.render.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-
-            for i in 0..tile_count {
-                let offset = RenderState::dynamic_offset(i);
-                pass.set_bind_group(0, &running.render.bind_group, &[offset]);
-                pass.draw_indexed(0..running.render.num_indices, 0, 0..1);
-            }
-        }
-
-        // Egui render pass (separate helper to unify encoder/renderer lifetimes)
-        render_egui_pass(&mut encoder, &running.egui.renderer, &view, &paint_jobs, &screen);
-
-        running.gpu.queue.submit(std::iter::once(encoder.finish()));
-        running.egui.cleanup(&full_output);
+        // GPU render passes + submit
+        let output = re.draw_and_submit(tile_count, &full_output)?;
         output.present();
         Ok(())
     }
@@ -1411,7 +1152,7 @@ impl App {
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.running.is_some() {
+        if self.renderer.is_some() {
             return;
         }
         let window_attrs = Window::default_attributes()
@@ -1422,36 +1163,11 @@ impl ApplicationHandler for App {
                 .create_window(window_attrs)
                 .expect("create window"),
         );
-        let gpu = GpuState::new(window.clone());
 
         let polygon = canonical_polygon(&self.cfg);
         let (verts, indices) = build_polygon_mesh(&polygon);
 
-        let render = RenderState::new(
-            &gpu.device,
-            &gpu.queue,
-            gpu.config.format,
-            gpu.config.width,
-            gpu.config.height,
-            &verts,
-            &indices,
-        );
-
-        let mut tiling = TilingState::new(self.cfg);
-        tiling.ensure_coverage(Complex::ZERO, 3);
-
-        let egui = EguiIntegration::new(&gpu.device, gpu.config.format, window);
-        apply_octofact_style(&egui.ctx);
-        let icon_atlas = IconAtlas::generate(&egui.ctx);
-
-        self.running = Some(RunningState {
-            gpu,
-            render,
-            tiling,
-            extra_elevation: std::collections::HashMap::new(),
-            egui,
-            icon_atlas,
-        });
+        self.renderer = Some(RenderEngine::new(window, self.cfg, &verts, &indices));
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
@@ -1496,7 +1212,7 @@ impl ApplicationHandler for App {
                         self.ui.inventory_open = !self.ui.inventory_open;
                     }
                     if self.input_state.just_pressed(GameAction::ToggleLabels) {
-                        if let Some(running) = &mut self.running {
+                        if let Some(running) = &mut self.renderer {
                             running.render.labels_enabled = !running.render.labels_enabled;
                             log::info!("labels: {}", if running.render.labels_enabled { "ON" } else { "OFF" });
                         }
@@ -1535,7 +1251,7 @@ impl ApplicationHandler for App {
         }
 
         // Let egui handle events (for pointer, text input, etc.)
-        if let Some(running) = &mut self.running {
+        if let Some(running) = &mut self.renderer {
             let consumed = running.egui.on_window_event(&running.gpu.window, &event);
             if consumed {
                 return;
@@ -1547,7 +1263,7 @@ impl ApplicationHandler for App {
                 event_loop.exit();
             }
             WindowEvent::Resized(new_size) => {
-                if let Some(running) = &mut self.running {
+                if let Some(running) = &mut self.renderer {
                     running.gpu.resize(new_size.width, new_size.height);
                     running.render.resize_depth(&running.gpu.device, new_size.width, new_size.height);
                 }
@@ -1587,11 +1303,11 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::RedrawRequested => {
-                if self.running.is_some() {
+                if self.renderer.is_some() {
                     match self.render_frame() {
                         Ok(_) => {}
                         Err(wgpu::SurfaceError::Lost) => {
-                            let gpu = &self.running.as_ref().unwrap().gpu;
+                            let gpu = &self.renderer.as_ref().unwrap().gpu;
                             gpu.surface.configure(&gpu.device, &gpu.config);
                         }
                         Err(wgpu::SurfaceError::OutOfMemory) => event_loop.exit(),
@@ -1609,7 +1325,7 @@ impl ApplicationHandler for App {
             None => {
                 // First frame — just initialize timing, don't sim yet
                 self.input_state.end_frame();
-                if let Some(running) = &self.running {
+                if let Some(running) = &self.renderer {
                     running.gpu.window.request_redraw();
                 }
                 return;
@@ -1635,7 +1351,7 @@ impl ApplicationHandler for App {
             self.machine_pool.tick(&self.recipes);
             self.belt_network.tick();
             self.belt_network.tick_port_transfers(&mut self.machine_pool);
-            if let Some(running) = &mut self.running {
+            if let Some(running) = &mut self.renderer {
                 self.camera.process_movement(
                     &self.input_state,
                     &mut running.tiling,
@@ -1653,7 +1369,7 @@ impl ApplicationHandler for App {
 
         self.input_state.end_frame();
 
-        if let Some(running) = &self.running {
+        if let Some(running) = &self.renderer {
             running.gpu.window.request_redraw();
         }
     }

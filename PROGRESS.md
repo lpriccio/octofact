@@ -82,7 +82,7 @@
 
 - [x] Define instance buffer types: `TileInstance`, `BeltInstance`, `MachineInstance`, `ItemInstance`
 - [x] Create `InstanceBuffer<T>` helper (staging Vec + GPU buffer + upload)
-- [ ] Create `RenderEngine` struct, extract rendering from `app.rs`
+- [x] Create `RenderEngine` struct, extract rendering from `app.rs`
 - [ ] Write `tile.wgsl` shader with per-instance Mobius from vertex buffer
 - [ ] Write `belt.wgsl` shader: position rectangle on tile surface via instance data
 - [ ] Write `machine.wgsl` shader with machine-type-specific visuals

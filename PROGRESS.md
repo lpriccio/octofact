@@ -66,6 +66,16 @@
 - [x] Power overlay visualization (satisfaction ratio as color)
 - [x] Power info in machine UI
 
+## Phase 5b: Split Power Production from Distribution
+
+> Quadrupoles transmit power, Dynamos produce it. Quadrupoles alone don't generate energy.
+
+- [ ] Change Quadrupole from Producer to Relay (transmits but produces 0 power)
+- [ ] Dynamo is the sole power producer (rate 8.0)
+- [ ] Relay nodes extend the power graph: machines connect to relays, relays connect to relays and dynamos
+- [ ] Update power overlay to distinguish relays (no pip) from producers (bright pip)
+- [ ] Update item descriptions to reflect Quadrupole=transmitter, Dynamo=generator
+
 ## Phase 6: Instanced Rendering
 
 > Replace per-tile draw calls and egui belt overlay with instanced rendering.

@@ -16,6 +16,7 @@ use crate::hyperbolic::tiling::{format_address, TileAddr, TilingState};
 use crate::render::camera::Camera;
 use crate::render::mesh::build_polygon_mesh;
 use crate::render::pipeline::{RenderState, Uniforms};
+use crate::sim::belt::BeltNetwork;
 use crate::sim::tick::GameLoop;
 use crate::ui::icons::IconAtlas;
 use crate::ui::integration::EguiIntegration;
@@ -228,6 +229,7 @@ pub struct App {
     inventory: Inventory,
     recipes: RecipeIndex,
     world: WorldState,
+    belt_network: BeltNetwork,
     ui: UiState,
     grid_enabled: bool,
     klein_half_side: f64,
@@ -247,6 +249,7 @@ impl App {
             inventory: Inventory::starting_inventory(),
             recipes: RecipeIndex::new(),
             world: WorldState::new(),
+            belt_network: BeltNetwork::new(),
             ui: UiState::new(),
             grid_enabled: false,
             klein_half_side: {
@@ -370,10 +373,18 @@ impl App {
         if self.inventory.count(mode.item) == 0 {
             return false;
         }
-        if !self.world.place(address, grid_xy, mode.item, mode.direction) {
-            return false; // occupied
-        }
+        let entity = match self.world.place(address, grid_xy, mode.item, mode.direction) {
+            Some(e) => e,
+            None => return false, // occupied or not placeable
+        };
         self.inventory.remove(mode.item, 1);
+
+        // Register belt with simulation network
+        if mode.item == crate::game::items::ItemId::Belt {
+            self.belt_network.on_belt_placed(
+                entity, address, grid_xy.0, grid_xy.1, mode.direction, &self.world,
+            );
+        }
 
         // Flash feedback
         let running = self.running.as_ref().unwrap();
@@ -580,6 +591,30 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Debug: spawn a NullSet item on the belt at the clicked grid position.
+    fn debug_spawn_item(&mut self, sx: f64, sy: f64) {
+        let result = match self.find_clicked_tile(sx, sy) {
+            Some(r) => r,
+            None => return,
+        };
+        let address = {
+            let running = self.running.as_ref().unwrap();
+            running.tiling.tiles[result.tile_idx].address.clone()
+        };
+        let entities = match self.world.tile_entities(&address) {
+            Some(e) => e,
+            None => return,
+        };
+        let &entity = match entities.get(&result.grid_xy) {
+            Some(e) => e,
+            None => return,
+        };
+        if self.world.kind(entity) != Some(StructureKind::Belt) {
+            return;
+        }
+        self.belt_network.spawn_item_on_entity(entity, crate::game::items::ItemId::NullSet);
     }
 
     fn modify_terrain(&mut self, sx: f64, sy: f64, delta: f32) {
@@ -928,6 +963,26 @@ impl App {
                                             egui::Stroke::NONE,
                                         ));
                                     }
+
+                                    // Draw items riding on this belt
+                                    if let Some(belt_items) = self.belt_network.entity_items(entity) {
+                                        for bi in belt_items {
+                                            let pos_frac = bi.pos as f64 / crate::sim::belt::FP_SCALE as f64;
+                                            let ix = cx + dx * (0.5 - pos_frac);
+                                            let iy = cy + dy * (0.5 - pos_frac);
+                                            if let Some(center) = grid_to_screen(ix, iy) {
+                                                let colors = bi.item.icon_params().primary_color;
+                                                let r = (colors[0] * 255.0) as u8;
+                                                let g = (colors[1] * 255.0) as u8;
+                                                let b = (colors[2] * 255.0) as u8;
+                                                painter.circle_filled(
+                                                    center,
+                                                    3.0,
+                                                    egui::Color32::from_rgba_unmultiplied(r, g, b, a),
+                                                );
+                                            }
+                                        }
+                                    }
                                 }
                                 StructureKind::PowerNode | StructureKind::PowerSource => {
                                     // "+" cross symbol for power structures
@@ -1214,7 +1269,10 @@ impl ApplicationHandler for App {
                 if button == winit::event::MouseButton::Left {
                     if state == winit::event::ElementState::Pressed {
                         if let Some(pos) = self.ui.cursor_pos {
-                            if self.ui.placement_mode.is_some() {
+                            if self.input_state.shift_held {
+                                // Shift+click: debug spawn item on belt
+                                self.debug_spawn_item(pos.x, pos.y);
+                            } else if self.ui.placement_mode.is_some() {
                                 self.handle_placement_click(pos.x, pos.y);
                             } else if !self.ui_is_open() {
                                 self.handle_debug_click(pos.x, pos.y);
@@ -1264,6 +1322,7 @@ impl ApplicationHandler for App {
             // Save per-tick so prev/curr are always one SIM_DT apart
             // and in adjacent coordinate frames (at most one tile crossing)
             self.game_loop.save_prev_camera(self.camera.snapshot());
+            self.belt_network.tick();
             if let Some(running) = &mut self.running {
                 self.camera.process_movement(
                     &self.input_state,

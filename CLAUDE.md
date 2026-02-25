@@ -33,6 +33,21 @@ These differ from older wgpu tutorials/examples:
 ```
 src/
   app.rs                    # GpuState + App (ApplicationHandler), WASD, per-frame rebase
+  sim/                      # (planned) simulation engine
+    tick.rs                 # FixedTimestep, GameLoop with accumulator
+    belt.rs                 # TransportLine, BeltNetwork (gap-based)
+    machine.rs              # MachinePool (SoA hot/cold split)
+    inserter.rs             # InserterPool, transfer logic
+    power.rs                # PowerNetwork (graph solve)
+  game/
+    config.rs               # Settings persistence (TOML)
+    input.rs                # Action-based input layer
+    items.rs                # Item definitions
+    inventory.rs            # Player inventory
+    recipes.rs              # Recipe definitions
+    world.rs                # WorldState (to be rewritten: EntityId, TileAddr, typed pools)
+    chunk.rs                # (planned) ChunkManager, streaming, freeze/thaw
+    save.rs                 # (planned) Serialization
   hyperbolic/
     poincare.rs             # Complex, Mobius, canonical_polygon, neighbor_transforms
     tiling.rs               # Tile (canonical Vec<u8> address), TilingState (BFS + spatial dedup)
@@ -42,6 +57,7 @@ src/
     pipeline.rs             # Uniforms (view_proj + mobius_a_b + disk_params), RenderPipeline
     camera.rs               # First-person Camera with view_mobius, rebase support
     shader.wgsl             # Mobius + hyperboloid in vertex, eldritch palette + lighting in fragment
+  ui/                       # egui windows (build selector, inventory, tech tree, settings)
 ```
 
 ## Tiling
@@ -73,6 +89,10 @@ Center-to-center distance: `D = 2 * psi`, `cosh(D) = 2*cosh(psi)^2 - 1`
 
 ## Project Tracking
 
+- `GAME_PLAN.md` — master architecture blueprint for factory game implementation
 - `concept.md` — original vision and subgoals
-- `PRD.md` — detailed product requirements (create if missing)
-- `STATUS.md` — current project status (create if missing)
+- `PRD.md` — detailed product requirements
+- `GAME.md` — game design (resources, mechanics, aesthetics)
+- `GRAPHICS.md` — rendering implementation details
+- `ITEMS.md` — item and recipe definitions
+- `STATUS.md` — current project status

@@ -92,7 +92,7 @@ Quotients and Transformers enable higher-tier production chains. The endgame ite
 
 Three physical transport systems, unlocked in sequence. No long-range teleportation, no abstracted logistics towers — everything moves through space, and the space is hyperbolic, so everything is harder than it looks.
 
-**Belts** are the backbone. They follow grid edges, one hop per tick. Items travel in Klein Bottles. Belts connect directly into buildings — no inserters, no loader arms. A belt entering a Shaper's footprint feeds it; a belt exiting carries product. Buildings have designated input/output faces (marked on placement). This is the Satisfactory model: the belt *is* the interface.
+**Belts** are the backbone. They follow grid edges, one hop per tick. Items travel in Klein Bottles. **Inserters** bridge belts and machines — small animated arms that grab items from a source (belt or machine output) and place them into a destination (belt or machine input). Buildings have designated input/output faces (marked on placement). Inserters are placed adjacent to both a belt and a building face, transferring items between them.
 
 **Tunnel belts** are short-range quantum tunnels. Place an entrance and an exit up to 16 grid squares apart (in a straight line), and items phase through the intervening space underground. Same throughput as a surface belt, same tick rate — the item enters the tunnel entrance and exits 16 ticks later at the other end. Visually, the entrance and exit are matching portal frames with a faint shimmer between them. The intervening grid squares are free for other buildings or belt crossings.
 
@@ -135,6 +135,7 @@ Structures are placed on the 64x64 internal grid of a cell. Sizes below are in g
 | Miner | 3x3 | Extracts raw resource. Must be placed on a deposit within the cell. |
 | Belt | 1x1 | Moves solid items one grid square per tick. Connects directly into buildings. Manufactured item (Composer + Line Segment). |
 | Tunnel Belt | 1x1 | Quantum tunnel entrance/exit pair. Items phase underground for up to 16 grid squares. |
+| Inserter | 1x1 | Transfers items between belts and machines. Animated grab/place arm. |
 | Splitter | 2x2 | 4-port junction. Configurable as 1-in/3-out, 3-in/1-out, or 2-in/2-out. See below. |
 | Pipe | 1x1 | Carries fluids. Can layer under belts on the same grid square. |
 | Pump | 2x2 | Drives fluid pressure through pipes. Required every ~40 grid squares. |
@@ -150,7 +151,7 @@ Structures are placed on the 64x64 internal grid of a cell. Sizes below are in g
 | Dynamo | 5x5 | Power generator. Composed from 2x Quadrupole. |
 | Extraction Beacon | 21x21 | Endgame structure. Folds goods into flat-space-compatible form. |
 
-**Belt I/O.** No inserters. Belts plug directly into building faces. Each building has designated input and output faces shown during placement preview. A Miner has output faces only. A Composer has one input face and one output face. A Quotient has two input faces and two output faces. The player rotates the building to align its faces with the belt layout. This keeps logistics visually legible — you can trace the flow by following the belts, no invisible arm mechanics.
+**Belt I/O.** Inserters bridge belts and machines. Each building has designated input and output faces shown during placement preview. A Miner has output faces only. A Composer has one input face and one output face. A Quotient has two input faces and two output faces. The player rotates the building to align its faces with the belt layout, and places inserters to connect belts to building faces. Inserters are visible animated arms — you can trace the flow by following the belts and seeing where inserters grab and place items.
 
 **Splitters** are 4-port junctions (DSP-style). Each port is configurable as input or output. The three standard modes:
 

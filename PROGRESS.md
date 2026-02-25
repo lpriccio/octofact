@@ -35,7 +35,7 @@
 - [x] Implement `fast_forward(elapsed_ticks)` for chunk catch-up
 - [x] Build transport line topology when belts are placed/removed
 - [x] Same-direction consecutive segments within a tile merge into one line
-- [ ] Cross-tile connections via `BeltEnd::Belt` links
+- [x] Cross-tile connections via `BeltEnd::Belt` links
 - [x] Add belt input/output: items can be placed on belt input end, taken from output end
 - [x] Wire belt simulation into simulation tick
 - [x] Debug visualization: show item positions on belts

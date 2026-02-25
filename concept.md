@@ -35,6 +35,27 @@ Let the user walk around with WASD.
 
 Give user a keystroke to turn on rendered text on each cell with its canonical representationw written on it.
 
+## Subgoal: factory simulation
+
+Fixed-timestep (60 UPS) simulation with gap-based belt transport, machine crafting, inserter transfers, and power networks. See GAME_PLAN.md for full architecture.
+
+## Subgoal: instanced rendering
+
+Replace per-tile draw calls with instanced rendering (~10 draw calls total). Per-instance Mobius transforms in vertex buffers.
+
+## Subgoal: chunk streaming
+
+Address-prefix chunks with ring loading around the player, LRU eviction, and freeze/thaw with fast-forward catch-up.
+
+## Subgoal: save/load
+
+Persist discovered cells, structures, belt contents, inventory, camera position. Undiscovered cells generated from deterministic seed.
+
 ## Keeping Track:
 
-PRD.md is a file with detailed product req document, STATUS.md documents current project status.  If these files do not exist, ask the user if they want to creat them.
+- `GAME_PLAN.md` — master architecture blueprint for factory game implementation
+- `PRD.md` — detailed product requirements
+- `GAME.md` — game design (resources, mechanics, aesthetics)
+- `GRAPHICS.md` — rendering implementation details
+- `ITEMS.md` — item and recipe definitions
+- `STATUS.md` — current project status

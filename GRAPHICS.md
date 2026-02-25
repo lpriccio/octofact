@@ -27,7 +27,7 @@ Pre-bake a small set of belt mesh templates at startup. Each is a procedural fun
 | Entrance | Belt tapering into a building face | Visual cue that the belt connects directly to a structure input. |
 | Exit | Belt emerging from a building face | Matching output visual. |
 
-Each template is a shallow trough or channel — geometric, clean, a handful of triangles. No organic shapes, no rounded bevels. The belt *is* the groove in the grid. Belts connect directly into buildings (Satisfactory-style, no inserters) — the entrance/exit templates make the connection point visually explicit.
+Each template is a shallow trough or channel — geometric, clean, a handful of triangles. No organic shapes, no rounded bevels. The belt *is* the groove in the grid. Belts connect to buildings via inserters — the entrance/exit templates make the connection point visually explicit.
 
 **Splitters** are separate 2x2 structures, not belt templates. They have their own procedural mesh: a flat junction box with 4 ports, each showing directional arrows indicating input/output configuration. The arrows update when the player reconfigures the splitter mode (1/3 split, 3/1 merge, 2/2 balance). Rendered as a single instanced mesh type with per-instance data encoding the port configuration.
 
@@ -64,15 +64,24 @@ Klein Bottles riding belts are separate mesh instances positioned along the belt
 
 ### Hyperbolic Curvature
 
-Within a cell, belts live on a flat 128x128 grid — standard factory game rendering. The existing vertex shader already applies the Mobius transform to all geometry in Poincare disk coordinates, so belt meshes defined in local cell coordinates warp correctly into the disk automatically. No special handling needed.
+Within a cell, belts live on a flat 64x64 grid — standard factory game rendering. The existing vertex shader already applies the Mobius transform to all geometry in Poincare disk coordinates, so belt meshes defined in local cell coordinates warp correctly into the disk automatically. No special handling needed.
 
 Belts near the disk boundary will visibly compress and curve. This is correct behavior and visually striking — the curvature of the belt reveals the curvature of the space. Long belt runs across multiple cells will show the geodesic bending that makes hyperbolic logistics hard.
 
 ### Cell Boundary Crossings
 
-When a belt exits one cell and enters a neighbor, the two segments are in different local coordinate systems related by the neighbor's Mobius transform. Visually, the shader handles this — each cell's geometry is transformed independently and they meet at the boundary. The seam should be imperceptible if the belt endpoints are snapped to the shared cell edge (128 grid units wide, so alignment is at discrete grid positions along the edge).
+When a belt exits one cell and enters a neighbor, the two segments are in different local coordinate systems related by the neighbor's Mobius transform. Visually, the shader handles this — each cell's geometry is transformed independently and they meet at the boundary. The seam should be imperceptible if the belt endpoints are snapped to the shared cell edge (64 grid units wide, so alignment is at discrete grid positions along the edge).
 
 **Cell corners are exclusion zones.** Building is banned in a small region around each cell corner (a few grid squares). At a vertex of the {4, n} tiling, n cells meet — the geometry is ambiguous and there's no clean way to assign corner grid squares to a single cell. Transport crosses cell boundaries only along edges, never through corners. Visually, the exclusion zone can be rendered as darkened or cracked ground — the curvature concentrates at these points, and the Surface shows the strain.
+
+### Inserters
+
+Inserters bridge belts and machines. Each inserter is a small animated arm mesh:
+- **Grab pose:** arm extended toward source (belt output or machine output slot)
+- **Place pose:** arm extended toward destination (belt input or machine input slot)
+- **Swing animation:** arm_progress [0..1] interpolates between poses
+- Instanced like other entities: one draw call for all visible inserters
+- Per-instance data: source/dest positions, arm_progress, held_item type
 
 ---
 

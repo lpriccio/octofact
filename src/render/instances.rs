@@ -191,7 +191,7 @@ impl BeltInstance {
 /// Per-machine instance data. Positions a machine visual on the tile
 /// surface at a grid cell, with type and crafting state for the shader.
 ///
-/// 32 bytes (8 floats). Shader locations 5–11.
+/// 36 bytes (9 floats). Shader locations 5–11.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct MachineInstance {
@@ -202,11 +202,13 @@ pub struct MachineInstance {
     /// Grid cell position within the tile (0..63, 0..63).
     pub grid_pos: [f32; 2],
     /// Machine type: 0=Composer, 1=Inverter, 2=Embedder, 3=Quotient,
-    /// 4=Transformer, 5=Source.
+    /// 4=Transformer, 5=Source, 6=Quadrupole, 7=Dynamo.
     pub machine_type: f32,
     /// Crafting progress 0.0–1.0, or negative for special states
     /// (-1.0 = idle, -2.0 = no power).
     pub progress: f32,
+    /// Power satisfaction ratio 0.0–1.0, or -1.0 if not connected to power.
+    pub power_sat: f32,
 }
 
 impl MachineInstance {
@@ -243,6 +245,12 @@ impl MachineInstance {
                 wgpu::VertexAttribute {
                     offset: 28,
                     shader_location: 9,
+                    format: wgpu::VertexFormat::Float32,
+                },
+                // power_sat
+                wgpu::VertexAttribute {
+                    offset: 32,
+                    shader_location: 10,
                     format: wgpu::VertexFormat::Float32,
                 },
             ],

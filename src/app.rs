@@ -14,7 +14,7 @@ use crate::game::world::{Direction, EntityId, StructureKind, WorldState};
 use crate::hyperbolic::poincare::{canonical_polygon, polygon_disk_radius, Complex, TilingConfig};
 use crate::hyperbolic::tiling::{format_address, TileAddr};
 use crate::render::camera::Camera;
-use crate::render::engine::{project_to_screen, project_to_screen_unclamped, RenderEngine};
+use crate::render::engine::{project_to_screen, RenderEngine};
 use crate::render::instances::{BeltInstance, ItemInstance, MachineInstance};
 use crate::render::mesh::build_polygon_mesh;
 use crate::sim::belt::BeltNetwork;
@@ -819,12 +819,15 @@ impl App {
                     -1.0 // Power nodes are always "idle" visually
                 };
 
+                let power_sat = self.power_network.satisfaction(entity).unwrap_or(-1.0);
+
                 re.machine_instances.push(MachineInstance {
                     mobius_a: [combined.a.re as f32, combined.a.im as f32],
                     mobius_b: [combined.b.re as f32, combined.b.im as f32],
                     grid_pos: [gx as f32, gy as f32],
                     machine_type: machine_type_float,
                     progress,
+                    power_sat,
                 });
             }
         }
@@ -1011,262 +1014,6 @@ impl App {
                             .size(13.0)
                             .font(egui::FontId::monospace(13.0)),
                     );
-                });
-        }
-
-        // Belt overlay — projected flat on tile surface
-        {
-            let egui_ctx = re.egui.ctx.clone();
-            let khs = self.klein_half_side;
-            let divisions = 64.0_f64;
-            egui::Area::new(egui::Id::new("belt_overlay"))
-                .order(egui::Order::Background)
-                .interactable(false)
-                .show(&egui_ctx, |ui| {
-                    let painter = ui.painter();
-                    for &(tile_idx, combined) in &visible {
-                        let tile = &re.tiling.tiles[tile_idx];
-                        let disk_center = combined.apply(Complex::ZERO);
-                        if disk_center.abs() > 0.9 {
-                            continue;
-                        }
-                        let entities = match self.world.tile_entities(&tile.address) {
-                            Some(e) => e,
-                            None => continue,
-                        };
-                        let elevation = re.extra_elevation.get(&tile_idx).copied().unwrap_or(0.0);
-                        let dist = disk_center.abs();
-                        let alpha = ((1.0 - dist / 0.9) * 1.5).clamp(0.0, 1.0);
-                        if alpha < 0.01 {
-                            continue;
-                        }
-
-                        for (&(gx, gy), &entity) in entities {
-                            let kind = match self.world.kind(entity) {
-                                Some(k) => k,
-                                None => continue,
-                            };
-
-                            // Per-kind colors
-                            let (face_rgb, hilite_rgb, shadow_rgb, edge_rgb) = match kind {
-                                StructureKind::Belt => (
-                                    (140, 140, 145),
-                                    (180, 180, 185),
-                                    (60, 60, 60),
-                                    (20, 20, 20),
-                                ),
-                                StructureKind::PowerNode => (
-                                    (200, 180, 50),
-                                    (230, 210, 100),
-                                    (120, 100, 20),
-                                    (60, 50, 10),
-                                ),
-                                StructureKind::PowerSource => (
-                                    (220, 200, 60),
-                                    (250, 230, 120),
-                                    (140, 120, 30),
-                                    (70, 60, 15),
-                                ),
-                                StructureKind::Machine(_) => (
-                                    (100, 130, 180),
-                                    (140, 170, 210),
-                                    (40, 60, 90),
-                                    (15, 25, 45),
-                                ),
-                            };
-
-                            // Project fractional grid coords through the full 3D pipeline
-                            let grid_to_screen = |fx: f64, fy: f64| -> Option<egui::Pos2> {
-                                let skx = (fx / divisions) * 2.0 * khs;
-                                let sky = (fy / divisions) * 2.0 * khs;
-                                let kr2 = skx * skx + sky * sky;
-                                let d = 1.0 + (1.0 - kr2).max(0.0).sqrt();
-                                let ld = Complex::new(skx / d, sky / d);
-                                let wd = combined.apply(ld);
-                                let b = crate::hyperbolic::embedding::disk_to_bowl(wd);
-                                let wp = glam::Vec3::new(b[0], b[1] + elevation, b[2]);
-                                project_to_screen_unclamped(wp, &view_proj, width, height)
-                                    .map(|(px, py)| egui::pos2(px / scale, py / scale))
-                            };
-
-                            let cx = gx as f64;
-                            let cy = gy as f64;
-                            let h = 0.48; // slightly inset from full grid cell
-
-                            // Four corners, projected flat on the surface
-                            let c0 = grid_to_screen(cx - h, cy - h);
-                            let c1 = grid_to_screen(cx + h, cy - h);
-                            let c2 = grid_to_screen(cx + h, cy + h);
-                            let c3 = grid_to_screen(cx - h, cy + h);
-
-                            let corners = match (c0, c1, c2, c3) {
-                                (Some(a), Some(b), Some(c), Some(d)) => [a, b, c, d],
-                                _ => continue,
-                            };
-
-                            let a = (alpha * 255.0) as u8;
-
-                            // Dark outer edge (slightly larger quad)
-                            let centroid = egui::pos2(
-                                corners.iter().map(|p| p.x).sum::<f32>() / 4.0,
-                                corners.iter().map(|p| p.y).sum::<f32>() / 4.0,
-                            );
-                            let edge_corners: Vec<egui::Pos2> = corners.iter().map(|p| {
-                                let dx = p.x - centroid.x;
-                                let dy = p.y - centroid.y;
-                                egui::pos2(centroid.x + dx * 1.12, centroid.y + dy * 1.12)
-                            }).collect();
-                            painter.add(egui::Shape::convex_polygon(
-                                edge_corners,
-                                egui::Color32::from_rgba_unmultiplied(edge_rgb.0, edge_rgb.1, edge_rgb.2, a),
-                                egui::Stroke::NONE,
-                            ));
-
-                            // Light bevel highlight (top-left bias)
-                            let hilite_corners: Vec<egui::Pos2> = corners.iter().enumerate().map(|(i, p)| {
-                                let dx = p.x - centroid.x;
-                                let dy = p.y - centroid.y;
-                                let shrink = if i == 0 || i == 1 { 1.04 } else { 0.96 };
-                                egui::pos2(centroid.x + dx * shrink, centroid.y + dy * shrink)
-                            }).collect();
-                            painter.add(egui::Shape::convex_polygon(
-                                hilite_corners,
-                                egui::Color32::from_rgba_unmultiplied(hilite_rgb.0, hilite_rgb.1, hilite_rgb.2, a),
-                                egui::Stroke::NONE,
-                            ));
-
-                            // Main face
-                            painter.add(egui::Shape::convex_polygon(
-                                corners.to_vec(),
-                                egui::Color32::from_rgba_unmultiplied(face_rgb.0, face_rgb.1, face_rgb.2, a),
-                                egui::Stroke::NONE,
-                            ));
-
-                            // Dark bevel shadow (bottom-right bias)
-                            let shadow_corners: Vec<egui::Pos2> = corners.iter().enumerate().map(|(i, p)| {
-                                let dx = p.x - centroid.x;
-                                let dy = p.y - centroid.y;
-                                let shrink = if i == 2 || i == 3 { 1.0 } else { 0.88 };
-                                egui::pos2(centroid.x + dx * shrink, centroid.y + dy * shrink)
-                            }).collect();
-                            painter.add(egui::Shape::convex_polygon(
-                                shadow_corners,
-                                egui::Color32::from_rgba_unmultiplied(shadow_rgb.0, shadow_rgb.1, shadow_rgb.2, a),
-                                egui::Stroke::NONE,
-                            ));
-
-                            // Kind-specific symbol
-                            match kind {
-                                StructureKind::Belt => {
-                                    let dir = match self.world.direction(entity) {
-                                        Some(d) => d,
-                                        None => continue,
-                                    };
-                                    let (dx, dy) = dir.grid_offset();
-                                    let tip = grid_to_screen(cx + dx * 0.35, cy + dy * 0.35);
-                                    let bl = grid_to_screen(cx - dx * 0.25 - dy * 0.2, cy - dy * 0.25 + dx * 0.2);
-                                    let br = grid_to_screen(cx - dx * 0.25 + dy * 0.2, cy - dy * 0.25 - dx * 0.2);
-                                    if let (Some(t), Some(l), Some(r)) = (tip, bl, br) {
-                                        painter.add(egui::Shape::convex_polygon(
-                                            vec![t, l, r],
-                                            egui::Color32::from_rgba_unmultiplied(30, 30, 30, a),
-                                            egui::Stroke::NONE,
-                                        ));
-                                    }
-
-                                    // Draw items riding on this belt
-                                    if let Some((belt_items, offset)) = self.belt_network.entity_items(entity) {
-                                        for bi in belt_items {
-                                            let pos_frac = (bi.pos - offset) as f64 / crate::sim::belt::FP_SCALE as f64;
-                                            let ix = cx + dx * (0.5 - pos_frac);
-                                            let iy = cy + dy * (0.5 - pos_frac);
-                                            if let Some(center) = grid_to_screen(ix, iy) {
-                                                let colors = bi.item.icon_params().primary_color;
-                                                let r = (colors[0] * 255.0) as u8;
-                                                let g = (colors[1] * 255.0) as u8;
-                                                let b = (colors[2] * 255.0) as u8;
-                                                painter.circle_filled(
-                                                    center,
-                                                    3.0,
-                                                    egui::Color32::from_rgba_unmultiplied(r, g, b, a),
-                                                );
-                                            }
-                                        }
-                                    }
-                                }
-                                StructureKind::PowerNode | StructureKind::PowerSource => {
-                                    let arm = 0.28;
-                                    let w = 0.08;
-                                    let cross_color = egui::Color32::from_rgba_unmultiplied(60, 50, 10, a);
-                                    if let (Some(a0), Some(a1), Some(a2), Some(a3)) = (
-                                        grid_to_screen(cx - arm, cy - w),
-                                        grid_to_screen(cx + arm, cy - w),
-                                        grid_to_screen(cx + arm, cy + w),
-                                        grid_to_screen(cx - arm, cy + w),
-                                    ) {
-                                        painter.add(egui::Shape::convex_polygon(
-                                            vec![a0, a1, a2, a3],
-                                            cross_color,
-                                            egui::Stroke::NONE,
-                                        ));
-                                    }
-                                    if let (Some(a0), Some(a1), Some(a2), Some(a3)) = (
-                                        grid_to_screen(cx - w, cy - arm),
-                                        grid_to_screen(cx + w, cy - arm),
-                                        grid_to_screen(cx + w, cy + arm),
-                                        grid_to_screen(cx - w, cy + arm),
-                                    ) {
-                                        painter.add(egui::Shape::convex_polygon(
-                                            vec![a0, a1, a2, a3],
-                                            cross_color,
-                                            egui::Stroke::NONE,
-                                        ));
-                                    }
-                                }
-                                StructureKind::Machine(_) => {
-                                    let dir = match self.world.direction(entity) {
-                                        Some(d) => d,
-                                        None => continue,
-                                    };
-                                    let (dx, dy) = dir.grid_offset();
-                                    let tip = grid_to_screen(cx + dx * 0.35, cy + dy * 0.35);
-                                    let bl = grid_to_screen(cx - dx * 0.25 - dy * 0.2, cy - dy * 0.25 + dx * 0.2);
-                                    let br = grid_to_screen(cx - dx * 0.25 + dy * 0.2, cy - dy * 0.25 - dx * 0.2);
-                                    if let (Some(t), Some(l), Some(r)) = (tip, bl, br) {
-                                        painter.add(egui::Shape::convex_polygon(
-                                            vec![t, l, r],
-                                            egui::Color32::from_rgba_unmultiplied(15, 25, 45, a),
-                                            egui::Stroke::NONE,
-                                        ));
-                                    }
-                                }
-                            }
-
-                            // Power satisfaction indicator pip
-                            if matches!(kind, StructureKind::Machine(_) | StructureKind::PowerSource) {
-                                if let Some(sat) = self.power_network.satisfaction(entity) {
-                                    let pip_color = if sat >= 1.0 {
-                                        egui::Color32::from_rgba_unmultiplied(50, 200, 50, a)
-                                    } else if sat >= 0.5 {
-                                        let t = (sat - 0.5) * 2.0;
-                                        let r = (230.0 - t * 180.0) as u8;
-                                        let g = (180.0 + t * 20.0) as u8;
-                                        egui::Color32::from_rgba_unmultiplied(r, g, 50, a)
-                                    } else {
-                                        let t = sat * 2.0;
-                                        let r = 200;
-                                        let g = (50.0 + t * 130.0) as u8;
-                                        egui::Color32::from_rgba_unmultiplied(r, g, 50, a)
-                                    };
-
-                                    if let Some(pip_pos) = grid_to_screen(cx + 0.35, cy + 0.35) {
-                                        let radius = if matches!(kind, StructureKind::PowerSource) { 3.5 } else { 2.5 };
-                                        painter.circle_filled(pip_pos, radius, pip_color);
-                                    }
-                                }
-                            }
-                        }
-                    }
                 });
         }
 

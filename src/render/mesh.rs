@@ -204,3 +204,40 @@ pub fn build_quad_mesh() -> (Vec<QuadVertex>, Vec<u16>) {
     let indices = vec![0, 1, 2, 0, 2, 3];
     (verts, indices)
 }
+
+/// Build a box mesh: top face + 4 side walls extending down to the tile surface.
+/// Top face uses uv.y in [0, 1]. Side walls use uv.y in [2, 3]:
+///   uv.y = 2.0 → side wall top edge (lifted)
+///   uv.y = 3.0 → side wall bottom edge (tile surface)
+/// The shader checks uv.y > 1.5 to detect side wall fragments.
+pub fn build_box_mesh() -> (Vec<QuadVertex>, Vec<u16>) {
+    let mut verts = Vec::new();
+    let mut indices = Vec::new();
+
+    // Top face: 4 vertices, 2 triangles
+    verts.push(QuadVertex { pos: [-0.5, -0.5], uv: [0.0, 0.0] });
+    verts.push(QuadVertex { pos: [ 0.5, -0.5], uv: [1.0, 0.0] });
+    verts.push(QuadVertex { pos: [ 0.5,  0.5], uv: [1.0, 1.0] });
+    verts.push(QuadVertex { pos: [-0.5,  0.5], uv: [0.0, 1.0] });
+    indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
+
+    // 4 side walls, each connecting two adjacent top-face corners
+    let corners: [[f32; 2]; 4] = [
+        [-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5],
+    ];
+
+    for i in 0..4usize {
+        let j = (i + 1) % 4;
+        let base = verts.len() as u16;
+
+        // Top-left, top-right (at lifted height), bottom-right, bottom-left (at tile surface)
+        verts.push(QuadVertex { pos: corners[i], uv: [0.0, 2.0] });
+        verts.push(QuadVertex { pos: corners[j], uv: [1.0, 2.0] });
+        verts.push(QuadVertex { pos: corners[j], uv: [1.0, 3.0] });
+        verts.push(QuadVertex { pos: corners[i], uv: [0.0, 3.0] });
+
+        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+
+    (verts, indices)
+}

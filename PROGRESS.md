@@ -89,8 +89,8 @@
 - [x] Write `item.wgsl` shader: billboard or sprite at belt position
 - [x] Shared WGSL functions: `apply_mobius()`, `disk_to_bowl()`, `klein_to_poincare()`
 - [x] Build instance buffers each frame from visible tiles + world state
-- [ ] Delete egui belt overlay code
-- [ ] Delete per-tile uniform buffer and dynamic offset system
+- [x] Delete egui belt overlay code
+- [x] Delete per-tile uniform buffer and dynamic offset system
 
 ## Phase 7: Multi-Cell Machines
 

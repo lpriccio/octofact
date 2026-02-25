@@ -129,8 +129,9 @@ fn fs_tile(in: VertexOutput) -> @location(0) vec4<f32> {
         // Normalize so edges map to +/-0.5
         let norm = local_k / (2.0 * globals.grid_params.w);
 
-        // Grid at N divisions
-        let gp = norm * globals.grid_params.y;
+        // Grid at N divisions (offset +0.5 so grid lines fall between cells,
+        // centering structures visually inside grid cells)
+        let gp = norm * globals.grid_params.y + 0.5;
         let fx = fract(gp.x);
         let fy = fract(gp.y);
         let nearest = min(min(fx, 1.0 - fx), min(fy, 1.0 - fy));

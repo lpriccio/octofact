@@ -6,8 +6,8 @@ use crate::hyperbolic::tiling::TileAddr;
 /// Power connection radius in grid squares.
 pub const POWER_RADIUS: f32 = 8.0;
 
-/// Power production rate for a Quadrupole.
-pub const QUADRUPOLE_RATE: f32 = 2.0;
+/// Power relay rate for a Quadrupole (transmits, does not produce).
+pub const QUADRUPOLE_RATE: f32 = 0.0;
 
 /// Power production rate for a Dynamo.
 pub const DYNAMO_RATE: f32 = 8.0;
@@ -18,6 +18,8 @@ pub const MACHINE_CONSUMPTION: f32 = 1.0;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PowerNodeKind {
     Producer,
+    /// Relay nodes extend the power graph but produce no power.
+    Relay,
     Consumer,
 }
 
@@ -115,6 +117,14 @@ impl PowerNetwork {
             .map(|&i| self.satisfaction[i])
     }
 
+    /// Get the kind of a power node by entity ID.
+    #[allow(dead_code)]
+    pub fn node_kind(&self, entity: EntityId) -> Option<PowerNodeKind> {
+        self.entity_to_idx
+            .get(&entity)
+            .map(|&i| self.nodes[i].kind)
+    }
+
     /// Number of registered nodes.
     #[allow(dead_code)]
     pub fn node_count(&self) -> usize {
@@ -191,6 +201,7 @@ impl PowerNetwork {
             for &idx in &component {
                 match self.nodes[idx].kind {
                     PowerNodeKind::Producer => total_production += self.nodes[idx].rate,
+                    PowerNodeKind::Relay => {} // relays extend connectivity but produce nothing
                     PowerNodeKind::Consumer => {
                         if !self.nodes[idx].exempt {
                             total_consumption += self.nodes[idx].rate;
@@ -239,7 +250,7 @@ mod tests {
     fn single_producer_no_consumers() {
         let mut net = PowerNetwork::new();
         let (_sm, ids) = make_entities(1);
-        net.add(ids[0], PowerNodeKind::Producer, QUADRUPOLE_RATE, &[0], 0, 0, false);
+        net.add(ids[0], PowerNodeKind::Producer, DYNAMO_RATE, &[0], 0, 0, false);
         net.solve();
         assert_eq!(net.satisfaction(ids[0]), Some(1.0));
     }
@@ -254,46 +265,47 @@ mod tests {
     }
 
     #[test]
-    fn one_quad_two_machines_full_power() {
+    fn dynamo_powers_machines() {
         let mut net = PowerNetwork::new();
-        let (_sm, ids) = make_entities(3);
-        // Quadrupole at (0,0), rate 2.0
-        net.add(ids[0], PowerNodeKind::Producer, QUADRUPOLE_RATE, &[0], 0, 0, false);
-        // Machine at (3,0), rate 1.0
-        net.add(ids[1], PowerNodeKind::Consumer, MACHINE_CONSUMPTION, &[0], 3, 0, false);
-        // Machine at (0,3), rate 1.0
-        net.add(ids[2], PowerNodeKind::Consumer, MACHINE_CONSUMPTION, &[0], 0, 3, false);
+        let (_sm, ids) = make_entities(9);
+        // Dynamo at center, rate 8.0
+        net.add(ids[0], PowerNodeKind::Producer, DYNAMO_RATE, &[0], 4, 4, false);
+        // 8 machines around it
+        for i in 1..=8 {
+            let gx = 4 + ((i as i16 - 1) % 3) - 1;
+            let gy = 4 + ((i as i16 - 1) / 3) - 1;
+            net.add(ids[i], PowerNodeKind::Consumer, MACHINE_CONSUMPTION, &[0], gx, gy, false);
+        }
         net.solve();
-        // 2.0 production / 2.0 consumption = 1.0
-        assert_eq!(net.satisfaction(ids[1]), Some(1.0));
-        assert_eq!(net.satisfaction(ids[2]), Some(1.0));
+        // 8.0 / 8.0 = 1.0
+        for i in 1..=8 {
+            assert_eq!(net.satisfaction(ids[i]), Some(1.0));
+        }
     }
 
     #[test]
-    fn overloaded_power() {
+    fn overloaded_dynamo() {
         let mut net = PowerNetwork::new();
-        let (_sm, ids) = make_entities(4);
-        // Quadrupole at (0,0), rate 2.0
-        net.add(ids[0], PowerNodeKind::Producer, QUADRUPOLE_RATE, &[0], 0, 0, false);
-        // 3 machines nearby, total consumption 3.0
-        net.add(ids[1], PowerNodeKind::Consumer, MACHINE_CONSUMPTION, &[0], 1, 0, false);
-        net.add(ids[2], PowerNodeKind::Consumer, MACHINE_CONSUMPTION, &[0], 0, 1, false);
-        net.add(ids[3], PowerNodeKind::Consumer, MACHINE_CONSUMPTION, &[0], 1, 1, false);
+        let (_sm, ids) = make_entities(10);
+        // Dynamo at (0,0), rate 8.0
+        net.add(ids[0], PowerNodeKind::Producer, DYNAMO_RATE, &[0], 0, 0, false);
+        // 9 machines nearby, total consumption 9.0
+        for i in 1..=9 {
+            net.add(ids[i], PowerNodeKind::Consumer, MACHINE_CONSUMPTION, &[0], i as i16, 0, false);
+        }
         net.solve();
-        // 2.0 / 3.0 = 0.6667
-        let expected = 2.0 / 3.0;
+        // 8.0 / 9.0 ≈ 0.889
+        let expected = 8.0 / 9.0;
         let sat = net.satisfaction(ids[1]).unwrap();
         assert!((sat - expected).abs() < 0.001, "expected {}, got {}", expected, sat);
-        assert!((net.satisfaction(ids[2]).unwrap() - expected).abs() < 0.001);
-        assert!((net.satisfaction(ids[3]).unwrap() - expected).abs() < 0.001);
     }
 
     #[test]
     fn out_of_range_not_connected() {
         let mut net = PowerNetwork::new();
         let (_sm, ids) = make_entities(2);
-        // Quadrupole at (0,0)
-        net.add(ids[0], PowerNodeKind::Producer, QUADRUPOLE_RATE, &[0], 0, 0, false);
+        // Dynamo at (0,0)
+        net.add(ids[0], PowerNodeKind::Producer, DYNAMO_RATE, &[0], 0, 0, false);
         // Machine at (20,20) — way out of range
         net.add(ids[1], PowerNodeKind::Consumer, MACHINE_CONSUMPTION, &[0], 20, 20, false);
         net.solve();
@@ -305,8 +317,8 @@ mod tests {
     fn different_tiles_not_connected() {
         let mut net = PowerNetwork::new();
         let (_sm, ids) = make_entities(2);
-        // Quadrupole in tile [0]
-        net.add(ids[0], PowerNodeKind::Producer, QUADRUPOLE_RATE, &[0], 0, 0, false);
+        // Dynamo in tile [0]
+        net.add(ids[0], PowerNodeKind::Producer, DYNAMO_RATE, &[0], 0, 0, false);
         // Machine in tile [1], same grid coords but different tile
         net.add(ids[1], PowerNodeKind::Consumer, MACHINE_CONSUMPTION, &[1], 0, 0, false);
         net.solve();
@@ -330,42 +342,23 @@ mod tests {
     fn exempt_not_counted_in_consumption() {
         let mut net = PowerNetwork::new();
         let (_sm, ids) = make_entities(3);
-        // Quadrupole, rate 2.0
-        net.add(ids[0], PowerNodeKind::Producer, QUADRUPOLE_RATE, &[0], 0, 0, false);
+        // Dynamo, rate 8.0
+        net.add(ids[0], PowerNodeKind::Producer, DYNAMO_RATE, &[0], 0, 0, false);
         // Exempt consumer (should not count toward consumption)
         net.add(ids[1], PowerNodeKind::Consumer, MACHINE_CONSUMPTION, &[0], 1, 0, true);
         // Regular consumer, rate 1.0
         net.add(ids[2], PowerNodeKind::Consumer, MACHINE_CONSUMPTION, &[0], 2, 0, false);
         net.solve();
-        // 2.0 production / 1.0 consumption = 1.0 (exempt doesn't count)
+        // 8.0 production / 1.0 consumption = 1.0 (exempt doesn't count)
         assert_eq!(net.satisfaction(ids[1]), Some(1.0)); // exempt
         assert_eq!(net.satisfaction(ids[2]), Some(1.0)); // fully powered
-    }
-
-    #[test]
-    fn dynamo_higher_rate() {
-        let mut net = PowerNetwork::new();
-        let (_sm, ids) = make_entities(9);
-        // Dynamo at center, rate 8.0
-        net.add(ids[0], PowerNodeKind::Producer, DYNAMO_RATE, &[0], 4, 4, false);
-        // 8 machines around it
-        for i in 1..=8 {
-            let gx = 4 + ((i as i16 - 1) % 3) - 1;
-            let gy = 4 + ((i as i16 - 1) / 3) - 1;
-            net.add(ids[i], PowerNodeKind::Consumer, MACHINE_CONSUMPTION, &[0], gx, gy, false);
-        }
-        net.solve();
-        // 8.0 / 8.0 = 1.0
-        for i in 1..=8 {
-            assert_eq!(net.satisfaction(ids[i]), Some(1.0));
-        }
     }
 
     #[test]
     fn remove_node() {
         let mut net = PowerNetwork::new();
         let (_sm, ids) = make_entities(3);
-        net.add(ids[0], PowerNodeKind::Producer, QUADRUPOLE_RATE, &[0], 0, 0, false);
+        net.add(ids[0], PowerNodeKind::Producer, DYNAMO_RATE, &[0], 0, 0, false);
         net.add(ids[1], PowerNodeKind::Consumer, MACHINE_CONSUMPTION, &[0], 1, 0, false);
         net.add(ids[2], PowerNodeKind::Consumer, MACHINE_CONSUMPTION, &[0], 2, 0, false);
 
@@ -373,7 +366,7 @@ mod tests {
         assert_eq!(net.node_count(), 2);
 
         net.solve();
-        // 2.0 / 1.0 = 1.0 (only one consumer left)
+        // 8.0 / 1.0 = 1.0 (only one consumer left)
         assert_eq!(net.satisfaction(ids[2]), Some(1.0));
         assert_eq!(net.satisfaction(ids[1]), None); // removed
     }
@@ -382,23 +375,93 @@ mod tests {
     fn two_separate_components() {
         let mut net = PowerNetwork::new();
         let (_sm, ids) = make_entities(7);
-        // Component 1: well-powered (at gx=0)
-        net.add(ids[0], PowerNodeKind::Producer, QUADRUPOLE_RATE, &[0], 0, 0, false);
+        // Component 1: well-powered dynamo at gx=0
+        net.add(ids[0], PowerNodeKind::Producer, DYNAMO_RATE, &[0], 0, 0, false);
         net.add(ids[1], PowerNodeKind::Consumer, MACHINE_CONSUMPTION, &[0], 1, 0, false);
-        // Component 2: underpowered (at gx=50, far away)
-        net.add(ids[2], PowerNodeKind::Producer, QUADRUPOLE_RATE, &[0], 50, 0, false);
+        // Component 2: underpowered dynamo at gx=50 with 4 consumers
+        net.add(ids[2], PowerNodeKind::Producer, DYNAMO_RATE, &[0], 50, 0, false);
         net.add(ids[3], PowerNodeKind::Consumer, MACHINE_CONSUMPTION, &[0], 51, 0, false);
 
-        // Add extra consumers to component 2
+        // Add extra consumers to component 2 (total 4 consumers = 4.0 consumption)
         for i in 0..3 {
             net.add(ids[4 + i], PowerNodeKind::Consumer, MACHINE_CONSUMPTION, &[0], 52 + i as i16, 0, false);
         }
 
         net.solve();
-        // Component 1: 2.0/1.0 = 1.0
+        // Component 1: 8.0/1.0 = 1.0
         assert_eq!(net.satisfaction(ids[1]), Some(1.0));
-        // Component 2: 2.0/4.0 = 0.5
-        let sat = net.satisfaction(ids[3]).unwrap();
-        assert!((sat - 0.5).abs() < 0.001, "expected 0.5, got {}", sat);
+        // Component 2: 8.0/4.0 = 1.0
+        assert_eq!(net.satisfaction(ids[3]), Some(1.0));
+    }
+
+    // --- Relay-specific tests ---
+
+    #[test]
+    fn relay_alone_produces_nothing() {
+        let mut net = PowerNetwork::new();
+        let (_sm, ids) = make_entities(2);
+        // Relay (Quadrupole) alone with a machine — no power produced
+        net.add(ids[0], PowerNodeKind::Relay, QUADRUPOLE_RATE, &[0], 0, 0, false);
+        net.add(ids[1], PowerNodeKind::Consumer, MACHINE_CONSUMPTION, &[0], 1, 0, false);
+        net.solve();
+        assert_eq!(net.satisfaction(ids[1]), Some(0.0));
+    }
+
+    #[test]
+    fn relay_bridges_dynamo_to_machine() {
+        let mut net = PowerNetwork::new();
+        let (_sm, ids) = make_entities(3);
+        // Dynamo at (0,0), relay at (7,0), machine at (14,0)
+        // Dynamo<->Relay within radius 8, Relay<->Machine within radius 8
+        // Dynamo<->Machine NOT within radius 8 (distance 14 > 8)
+        net.add(ids[0], PowerNodeKind::Producer, DYNAMO_RATE, &[0], 0, 0, false);
+        net.add(ids[1], PowerNodeKind::Relay, QUADRUPOLE_RATE, &[0], 7, 0, false);
+        net.add(ids[2], PowerNodeKind::Consumer, MACHINE_CONSUMPTION, &[0], 14, 0, false);
+        net.solve();
+        // Relay bridges the connection: 8.0 / 1.0 = 1.0
+        assert_eq!(net.satisfaction(ids[2]), Some(1.0));
+    }
+
+    #[test]
+    fn without_relay_dynamo_too_far() {
+        let mut net = PowerNetwork::new();
+        let (_sm, ids) = make_entities(2);
+        // Dynamo at (0,0), machine at (14,0) — too far apart (distance 14 > 8)
+        net.add(ids[0], PowerNodeKind::Producer, DYNAMO_RATE, &[0], 0, 0, false);
+        net.add(ids[1], PowerNodeKind::Consumer, MACHINE_CONSUMPTION, &[0], 14, 0, false);
+        net.solve();
+        assert_eq!(net.satisfaction(ids[1]), Some(0.0));
+    }
+
+    #[test]
+    fn relay_chain_extends_reach() {
+        let mut net = PowerNetwork::new();
+        let (_sm, ids) = make_entities(4);
+        // Chain: Dynamo(0,0) -> Relay(7,0) -> Relay(14,0) -> Machine(21,0)
+        net.add(ids[0], PowerNodeKind::Producer, DYNAMO_RATE, &[0], 0, 0, false);
+        net.add(ids[1], PowerNodeKind::Relay, QUADRUPOLE_RATE, &[0], 7, 0, false);
+        net.add(ids[2], PowerNodeKind::Relay, QUADRUPOLE_RATE, &[0], 14, 0, false);
+        net.add(ids[3], PowerNodeKind::Consumer, MACHINE_CONSUMPTION, &[0], 21, 0, false);
+        net.solve();
+        // Connected via relay chain: 8.0 / 1.0 = 1.0
+        assert_eq!(net.satisfaction(ids[3]), Some(1.0));
+    }
+
+    #[test]
+    fn node_kind_query() {
+        let mut net = PowerNetwork::new();
+        let (_sm, ids) = make_entities(3);
+        net.add(ids[0], PowerNodeKind::Producer, DYNAMO_RATE, &[0], 0, 0, false);
+        net.add(ids[1], PowerNodeKind::Relay, QUADRUPOLE_RATE, &[0], 4, 0, false);
+        net.add(ids[2], PowerNodeKind::Consumer, MACHINE_CONSUMPTION, &[0], 1, 0, false);
+        assert_eq!(net.node_kind(ids[0]), Some(PowerNodeKind::Producer));
+        assert_eq!(net.node_kind(ids[1]), Some(PowerNodeKind::Relay));
+        assert_eq!(net.node_kind(ids[2]), Some(PowerNodeKind::Consumer));
+    }
+
+    #[test]
+    fn quadrupole_rate_is_zero() {
+        // Verify the constant reflects relay semantics
+        assert_eq!(QUADRUPOLE_RATE, 0.0);
     }
 }

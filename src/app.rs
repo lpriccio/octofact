@@ -421,7 +421,7 @@ impl App {
             Some(crate::game::world::StructureKind::PowerNode) => {
                 self.power_network.add(
                     entity,
-                    crate::sim::power::PowerNodeKind::Producer,
+                    crate::sim::power::PowerNodeKind::Relay,
                     crate::sim::power::QUADRUPOLE_RATE,
                     address,
                     grid_xy.0 as i16,
@@ -1304,8 +1304,9 @@ impl App {
                                 }
                             }
 
-                            // Power satisfaction indicator pip (machines and power structures)
-                            if matches!(kind, StructureKind::Machine(_) | StructureKind::PowerNode | StructureKind::PowerSource) {
+                            // Power satisfaction indicator pip (machines and dynamos, not relays)
+                            // Relays (Quadrupoles) show no pip; Dynamos show a bright producer pip
+                            if matches!(kind, StructureKind::Machine(_) | StructureKind::PowerSource) {
                                 if let Some(sat) = self.power_network.satisfaction(entity) {
                                     let pip_color = if sat >= 1.0 {
                                         egui::Color32::from_rgba_unmultiplied(50, 200, 50, a) // green
@@ -1322,7 +1323,9 @@ impl App {
                                     };
 
                                     if let Some(pip_pos) = grid_to_screen(cx + 0.35, cy + 0.35) {
-                                        painter.circle_filled(pip_pos, 2.5, pip_color);
+                                        // Dynamos get a larger, brighter pip to indicate they're generators
+                                        let radius = if matches!(kind, StructureKind::PowerSource) { 3.5 } else { 2.5 };
+                                        painter.circle_filled(pip_pos, radius, pip_color);
                                     }
                                 }
                             }

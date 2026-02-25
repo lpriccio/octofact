@@ -1722,6 +1722,8 @@ dependencies = [
  "log",
  "pollster",
  "serde",
+ "slotmap",
+ "smallvec",
  "toml",
  "wgpu",
  "winit",

@@ -47,10 +47,10 @@
 
 - [x] Create `sim/machine.rs` with `MachinePool` (SoA hot/cold split)
 - [x] Implement machine state machine: Idle -> Working -> OutputFull / NoInput / NoPower
-- [ ] Create `sim/inserter.rs` with `InserterPool`
-- [ ] Implement inserter grab/place logic with two-phase transfer
-- [ ] Wire machines and inserters into simulation tick
-- [ ] Auto-create inserters when machine placed adjacent to belt (or: separate placeable item)
+- [x] Create `sim/inserter.rs` with `InserterPool`
+- [x] Implement inserter grab/place logic with two-phase transfer
+- [x] Wire machines and inserters into simulation tick
+- [x] Auto-create inserters when machine placed adjacent to belt (or: separate placeable item)
 - [ ] Machine UI: click machine to see recipe, progress, input/output slots
 - [ ] Recipe selection UI for placed machines
 

@@ -2,6 +2,7 @@ use slotmap::{new_key_type, SlotMap, SecondaryMap};
 
 use crate::game::items::ItemId;
 use crate::game::world::{Direction, EntityId, StructureKind, WorldState};
+use crate::sim::machine::MachinePool;
 
 new_key_type! {
     /// Identifies a transport line in the belt network.
@@ -28,11 +29,9 @@ pub enum BeltEnd {
     Belt(TransportLineId),
     /// Belt output feeds into a machine's input port.
     /// `entity` is the machine's EntityId, `slot` is the input slot index.
-    #[allow(dead_code)]
     MachineInput { entity: EntityId, slot: usize },
     /// Machine output port feeds into belt input.
     /// `entity` is the machine's EntityId, `slot` is the output slot index.
-    #[allow(dead_code)]
     MachineOutput { entity: EntityId, slot: usize },
 }
 
@@ -331,6 +330,108 @@ impl BeltNetwork {
         }
         if let Some(line) = self.lines.get_mut(target_line_id) {
             line.input_end = BeltEnd::Belt(source_line_id);
+        }
+    }
+
+    /// Connect a belt's transport line output to a machine input port.
+    /// Only succeeds if the belt entity is at the output end of its line.
+    pub fn connect_belt_to_machine_input(
+        &mut self,
+        belt_entity: EntityId,
+        machine_entity: EntityId,
+        slot: usize,
+    ) {
+        let seg = match self.segments.get(belt_entity) {
+            Some(s) => *s,
+            None => return,
+        };
+        // Only connect if this belt is at the output end of its line (offset 0)
+        if seg.offset != 0 {
+            return;
+        }
+        if let Some(line) = self.lines.get_mut(seg.line) {
+            line.output_end = BeltEnd::MachineInput {
+                entity: machine_entity,
+                slot,
+            };
+        }
+    }
+
+    /// Connect a belt's transport line input to a machine output port.
+    /// Only succeeds if the belt entity is at the input end of its line.
+    pub fn connect_machine_output_to_belt(
+        &mut self,
+        belt_entity: EntityId,
+        machine_entity: EntityId,
+        slot: usize,
+    ) {
+        let seg = match self.segments.get(belt_entity) {
+            Some(s) => *s,
+            None => return,
+        };
+        let line_len = match self.lines.get(seg.line) {
+            Some(l) => l.length,
+            None => return,
+        };
+        // Only connect if this belt is at the input end of its line
+        if seg.offset != line_len - FP_SCALE {
+            return;
+        }
+        if let Some(line) = self.lines.get_mut(seg.line) {
+            line.input_end = BeltEnd::MachineOutput {
+                entity: machine_entity,
+                slot,
+            };
+        }
+    }
+
+    /// Run port transfers: move items between belt endpoints and machine ports.
+    /// Call this each tick after belt advance and machine tick.
+    pub fn tick_port_transfers(&mut self, machine_pool: &mut MachinePool) {
+        let line_ids: Vec<TransportLineId> = self.lines.keys().collect();
+
+        // Phase 1: Belt → Machine (input ports)
+        // Items at a belt's output end (pos=0) transfer into machine input slots.
+        let mut belt_to_machine: Vec<(TransportLineId, ItemId, EntityId, usize)> = Vec::new();
+        for &line_id in &line_ids {
+            let line = match self.lines.get(line_id) {
+                Some(l) => l,
+                None => continue,
+            };
+            if let BeltEnd::MachineInput { entity, slot } = line.output_end {
+                if !line.items.is_empty() && line.items[0].pos == 0 {
+                    belt_to_machine.push((line_id, line.items[0].item, entity, slot));
+                }
+            }
+        }
+        for (line_id, item, entity, slot) in belt_to_machine {
+            if machine_pool.insert_input_at_slot(entity, slot, item, 1) {
+                if let Some(line) = self.lines.get_mut(line_id) {
+                    line.items.remove(0);
+                }
+            }
+        }
+
+        // Phase 2: Machine → Belt (output ports)
+        // Machine output slots feed into a belt's input end.
+        let mut machine_to_belt: Vec<(TransportLineId, EntityId, usize)> = Vec::new();
+        for &line_id in &line_ids {
+            let line = match self.lines.get(line_id) {
+                Some(l) => l,
+                None => continue,
+            };
+            if let BeltEnd::MachineOutput { entity, slot } = line.input_end {
+                if line.can_accept_at_input() {
+                    machine_to_belt.push((line_id, entity, slot));
+                }
+            }
+        }
+        for (line_id, entity, slot) in machine_to_belt {
+            if let Some(item) = machine_pool.take_output_from_slot(entity, slot) {
+                if let Some(line) = self.lines.get_mut(line_id) {
+                    line.insert_at_input(item);
+                }
+            }
         }
     }
 
@@ -708,5 +809,150 @@ mod tests {
         assert_eq!(items3[0].0, ItemId::NullSet);
         assert_eq!(items2.len(), 1);
         assert_eq!(items2[0].0, ItemId::Point);
+    }
+
+    // --- Port transfer tests ---
+
+    use crate::game::items::MachineType;
+    use crate::game::recipes::RecipeIndex;
+    use crate::sim::machine::{MachinePool, DEFAULT_CRAFT_TICKS};
+
+    #[test]
+    fn belt_to_machine_input_transfer() {
+        let mut world = WorldState::new();
+        let mut net = BeltNetwork::new();
+        let mut machines = MachinePool::new();
+        let addr: &[u8] = &[0];
+
+        // Belt at (0,0) flowing East, machine at (1,0)
+        let belt = place_belt(&mut world, &mut net, addr, 0, 0, Direction::East);
+        let machine_entity = world.place(addr, (1, 0), ItemId::Composer, Direction::West).unwrap();
+        machines.add(machine_entity, MachineType::Composer);
+
+        // Connect belt output to machine input slot 0
+        net.connect_belt_to_machine_input(belt, machine_entity, 0);
+
+        // Spawn item on belt
+        net.spawn_item_on_entity(belt, ItemId::Point);
+
+        // Run belt ticks until item reaches output end (pos=0)
+        for _ in 0..500 {
+            net.tick();
+        }
+        let items = local_items(&net, belt);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].1, 0); // stuck at output end
+
+        // Now run port transfers — item should move into machine
+        net.tick_port_transfers(&mut machines);
+        let items = local_items(&net, belt);
+        assert_eq!(items.len(), 0); // item left the belt
+        let slots = machines.input_slots(machine_entity).unwrap();
+        assert_eq!(slots[0].item, ItemId::Point);
+        assert_eq!(slots[0].count, 1);
+    }
+
+    #[test]
+    fn machine_output_to_belt_transfer() {
+        let mut world = WorldState::new();
+        let mut net = BeltNetwork::new();
+        let mut machines = MachinePool::new();
+        let addr: &[u8] = &[0];
+
+        // Machine at (0,0), belt at (1,0) flowing East
+        let machine_entity = world.place(addr, (0, 0), ItemId::Composer, Direction::East).unwrap();
+        machines.add(machine_entity, MachineType::Composer);
+        let belt = place_belt(&mut world, &mut net, addr, 1, 0, Direction::East);
+
+        // Connect machine output slot 0 to belt input
+        net.connect_machine_output_to_belt(belt, machine_entity, 0);
+
+        // Put an item in machine output
+        let i = machines.index_of(machine_entity).unwrap();
+        machines.cold.output_slots[i][0] = crate::sim::machine::ItemStack {
+            item: ItemId::LineSegment,
+            count: 1,
+        };
+
+        // Run port transfers — item should appear on belt
+        net.tick_port_transfers(&mut machines);
+        let seg = *net.segments.get(belt).unwrap();
+        let line = net.lines.get(seg.line).unwrap();
+        assert_eq!(line.items.len(), 1);
+        assert_eq!(line.items[0].item, ItemId::LineSegment);
+        assert_eq!(line.items[0].pos, line.length); // at input end
+    }
+
+    #[test]
+    fn full_production_chain_belt_machine_belt() {
+        let mut world = WorldState::new();
+        let mut net = BeltNetwork::new();
+        let mut machines = MachinePool::new();
+        let recipes = RecipeIndex::new();
+        let addr: &[u8] = &[0];
+
+        // Input belt → machine → output belt
+        // Belt at (-1,0) East feeds into machine at (0,0) facing East
+        // Machine at (0,0) outputs to belt at (1,0) East
+        let input_belt = place_belt(&mut world, &mut net, addr, -1, 0, Direction::East);
+        let machine_entity = world.place(addr, (0, 0), ItemId::Composer, Direction::East).unwrap();
+        machines.add(machine_entity, MachineType::Composer);
+        machines.set_recipe(machine_entity, Some(0)); // 2x Point -> LineSegment
+        let output_belt = place_belt(&mut world, &mut net, addr, 1, 0, Direction::East);
+
+        // Connect: input belt output → machine input slot 0
+        net.connect_belt_to_machine_input(input_belt, machine_entity, 0);
+        // Connect: machine output slot 0 → output belt input
+        net.connect_machine_output_to_belt(output_belt, machine_entity, 0);
+
+        // Spawn 2 Points on input belt (enough for one craft)
+        net.spawn_item_on_entity(input_belt, ItemId::Point);
+        // Need a second item — insert at a different position
+        {
+            let seg = *net.segments.get(input_belt).unwrap();
+            let line = net.lines.get_mut(seg.line).unwrap();
+            line.items.push(BeltItem { item: ItemId::Point, pos: FP_SCALE });
+            line.items.sort_by_key(|i| i.pos);
+        }
+
+        // Run the full cycle: belt tick + port transfer + machine tick
+        for _ in 0..(500 + DEFAULT_CRAFT_TICKS as u32 + 100) {
+            net.tick();
+            net.tick_port_transfers(&mut machines);
+            machines.tick(&recipes);
+        }
+
+        // The machine should have crafted and output a LineSegment onto the output belt
+        let output_items: Vec<_> = {
+            let seg = *net.segments.get(output_belt).unwrap();
+            let line = net.lines.get(seg.line).unwrap();
+            line.items.iter().map(|i| i.item).collect()
+        };
+        assert!(
+            output_items.contains(&ItemId::LineSegment),
+            "Expected LineSegment on output belt, got: {:?}",
+            output_items
+        );
+    }
+
+    #[test]
+    fn connection_only_at_line_endpoint() {
+        let mut world = WorldState::new();
+        let mut net = BeltNetwork::new();
+        let addr: &[u8] = &[0];
+
+        // Three merged belts: (0,0), (1,0), (2,0) East
+        let _e1 = place_belt(&mut world, &mut net, addr, 0, 0, Direction::East);
+        let e2 = place_belt(&mut world, &mut net, addr, 1, 0, Direction::East);
+        let _e3 = place_belt(&mut world, &mut net, addr, 2, 0, Direction::East);
+
+        let machine_entity = world.place(addr, (1, 1), ItemId::Composer, Direction::North).unwrap();
+
+        // Try connecting e2 (middle of line, offset=FP_SCALE) as output endpoint
+        // Should NOT connect because e2 is not at offset=0
+        net.connect_belt_to_machine_input(e2, machine_entity, 0);
+        let seg = *net.segments.get(e2).unwrap();
+        let line = net.lines.get(seg.line).unwrap();
+        assert_eq!(line.output_end, BeltEnd::Open, "Middle belt should not connect at output end");
     }
 }

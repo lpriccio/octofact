@@ -205,6 +205,34 @@ impl MachinePool {
         self.index_of(entity).map(|i| self.hot.progress[i])
     }
 
+    /// Try to insert an item into a specific input slot. Returns true if accepted.
+    /// Used by the port transfer system where each port maps to a specific slot.
+    pub fn insert_input_at_slot(
+        &mut self,
+        entity: EntityId,
+        slot: usize,
+        item: ItemId,
+        count: u16,
+    ) -> bool {
+        let Some(i) = self.index_of(entity) else {
+            return false;
+        };
+        if slot >= MAX_SLOTS {
+            return false;
+        }
+        let s = &mut self.cold.input_slots[i][slot];
+        if s.count == 0 {
+            s.item = item;
+            s.count = count;
+            true
+        } else if s.item == item {
+            s.count += count;
+            true
+        } else {
+            false // slot occupied by different item
+        }
+    }
+
     /// Try to insert an item into a machine's input slots. Returns true if accepted.
     pub fn insert_input(&mut self, entity: EntityId, item: ItemId, count: u16) -> bool {
         let Some(i) = self.index_of(entity) else {
@@ -228,6 +256,26 @@ impl MachinePool {
             }
         }
         false // all slots occupied by different items
+    }
+
+    /// Try to take an item from a specific output slot. Returns the item taken, if any.
+    /// Used by the port transfer system where each port maps to a specific slot.
+    pub fn take_output_from_slot(&mut self, entity: EntityId, slot: usize) -> Option<ItemId> {
+        let i = self.index_of(entity)?;
+        if slot >= MAX_SLOTS {
+            return None;
+        }
+        let s = &mut self.cold.output_slots[i][slot];
+        if s.count > 0 {
+            let item = s.item;
+            s.count -= 1;
+            if self.hot.state[i] == MachineState::OutputFull {
+                self.hot.state[i] = MachineState::Idle;
+            }
+            Some(item)
+        } else {
+            None
+        }
     }
 
     /// Try to take an item from a machine's output slots. Returns the item taken, if any.
@@ -516,6 +564,75 @@ mod tests {
 
         // Nothing left
         assert_eq!(pool.take_output(e1), None);
+    }
+
+    #[test]
+    fn insert_input_at_slot_empty() {
+        let mut pool = MachinePool::new();
+        let (_, e1) = make_entity();
+        pool.add(e1, MachineType::Composer);
+        assert!(pool.insert_input_at_slot(e1, 0, ItemId::Point, 2));
+        let slots = pool.input_slots(e1).unwrap();
+        assert_eq!(slots[0].item, ItemId::Point);
+        assert_eq!(slots[0].count, 2);
+    }
+
+    #[test]
+    fn insert_input_at_slot_stacks() {
+        let mut pool = MachinePool::new();
+        let (_, e1) = make_entity();
+        pool.add(e1, MachineType::Composer);
+        assert!(pool.insert_input_at_slot(e1, 0, ItemId::Point, 2));
+        assert!(pool.insert_input_at_slot(e1, 0, ItemId::Point, 3));
+        let slots = pool.input_slots(e1).unwrap();
+        assert_eq!(slots[0].count, 5);
+    }
+
+    #[test]
+    fn insert_input_at_slot_rejects_different_item() {
+        let mut pool = MachinePool::new();
+        let (_, e1) = make_entity();
+        pool.add(e1, MachineType::Composer);
+        assert!(pool.insert_input_at_slot(e1, 0, ItemId::Point, 1));
+        assert!(!pool.insert_input_at_slot(e1, 0, ItemId::NullSet, 1));
+    }
+
+    #[test]
+    fn take_output_from_slot() {
+        let mut pool = MachinePool::new();
+        let (_, e1) = make_entity();
+        pool.add(e1, MachineType::Composer);
+        let i = pool.index_of(e1).unwrap();
+        pool.cold.output_slots[i][0] = ItemStack {
+            item: ItemId::LineSegment,
+            count: 2,
+        };
+        pool.hot.state[i] = MachineState::OutputFull;
+
+        assert_eq!(pool.take_output_from_slot(e1, 0), Some(ItemId::LineSegment));
+        assert_eq!(pool.cold.output_slots[i][0].count, 1);
+        assert_eq!(pool.hot.state[i], MachineState::Idle);
+
+        assert_eq!(pool.take_output_from_slot(e1, 0), Some(ItemId::LineSegment));
+        assert_eq!(pool.cold.output_slots[i][0].count, 0);
+
+        assert_eq!(pool.take_output_from_slot(e1, 0), None);
+    }
+
+    #[test]
+    fn take_output_from_slot_wrong_slot() {
+        let mut pool = MachinePool::new();
+        let (_, e1) = make_entity();
+        pool.add(e1, MachineType::Composer);
+        let i = pool.index_of(e1).unwrap();
+        pool.cold.output_slots[i][0] = ItemStack {
+            item: ItemId::LineSegment,
+            count: 1,
+        };
+        // Slot 1 is empty
+        assert_eq!(pool.take_output_from_slot(e1, 1), None);
+        // Slot 0 still has the item
+        assert_eq!(pool.take_output_from_slot(e1, 0), Some(ItemId::LineSegment));
     }
 
     // --- Tick state machine tests ---

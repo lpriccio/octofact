@@ -392,11 +392,17 @@ impl App {
             self.check_cross_tile_belt_link(entity, tile_idx, address, grid_xy, mode.direction);
         }
 
-        // Register machine with simulation pool
+        // Register machine with simulation pool and auto-connect ports
         if let Some(crate::game::world::StructureKind::Machine(mt)) =
             crate::game::world::StructureKind::from_item(mode.item)
         {
             self.machine_pool.add(entity, mt);
+            self.auto_connect_machine_ports(entity, address, grid_xy, mode.direction, mt);
+        }
+
+        // Auto-connect belt to adjacent machines
+        if mode.item == crate::game::items::ItemId::Belt {
+            self.auto_connect_belt_to_machines(entity, address, grid_xy, mode.direction);
         }
 
         // Flash feedback
@@ -491,6 +497,98 @@ impl App {
                     &self.world, &neighbor_addr, mirror, direction,
                 ) {
                     self.belt_network.link_output_to_input(neighbor_entity, entity);
+                }
+            }
+        }
+    }
+
+    /// When a machine is placed, check all its ports for adjacent belts and connect them.
+    fn auto_connect_machine_ports(
+        &mut self,
+        machine_entity: EntityId,
+        tile_addr: &[u8],
+        grid_xy: (i32, i32),
+        facing: Direction,
+        machine_type: crate::game::items::MachineType,
+    ) {
+        use crate::sim::inserter::{belt_compatible_with_port, rotated_ports, PortKind};
+
+        for port in rotated_ports(machine_type, facing) {
+            let (dx, dy) = port.side.grid_offset_i32();
+            let adj = (grid_xy.0 + dx, grid_xy.1 + dy);
+
+            if let Some(entities) = self.world.tile_entities(tile_addr) {
+                if let Some(&belt_entity) = entities.get(&adj) {
+                    if self.world.kind(belt_entity) == Some(StructureKind::Belt) {
+                        if let Some(belt_dir) = self.world.direction(belt_entity) {
+                            if belt_compatible_with_port(&port, belt_dir) {
+                                match port.kind {
+                                    PortKind::Input => {
+                                        self.belt_network.connect_belt_to_machine_input(
+                                            belt_entity,
+                                            machine_entity,
+                                            port.slot,
+                                        );
+                                    }
+                                    PortKind::Output => {
+                                        self.belt_network.connect_machine_output_to_belt(
+                                            belt_entity,
+                                            machine_entity,
+                                            port.slot,
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// When a belt is placed, check all 4 adjacent cells for machines and connect ports.
+    fn auto_connect_belt_to_machines(
+        &mut self,
+        belt_entity: EntityId,
+        tile_addr: &[u8],
+        grid_xy: (i32, i32),
+        belt_dir: Direction,
+    ) {
+        use crate::sim::inserter::{belt_compatible_with_port, port_on_side, PortKind};
+
+        for &check_dir in &[Direction::North, Direction::East, Direction::South, Direction::West] {
+            let (dx, dy) = check_dir.grid_offset_i32();
+            let adj = (grid_xy.0 + dx, grid_xy.1 + dy);
+
+            if let Some(entities) = self.world.tile_entities(tile_addr) {
+                if let Some(&adj_entity) = entities.get(&adj) {
+                    if let Some(StructureKind::Machine(mt)) = self.world.kind(adj_entity) {
+                        if let Some(facing) = self.world.direction(adj_entity) {
+                            // Machine's port on the side facing the belt
+                            if let Some(port) =
+                                port_on_side(mt, facing, check_dir.opposite())
+                            {
+                                if belt_compatible_with_port(&port, belt_dir) {
+                                    match port.kind {
+                                        PortKind::Input => {
+                                            self.belt_network.connect_belt_to_machine_input(
+                                                belt_entity,
+                                                adj_entity,
+                                                port.slot,
+                                            );
+                                        }
+                                        PortKind::Output => {
+                                            self.belt_network.connect_machine_output_to_belt(
+                                                belt_entity,
+                                                adj_entity,
+                                                port.slot,
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1403,6 +1501,7 @@ impl ApplicationHandler for App {
             self.game_loop.save_prev_camera(self.camera.snapshot());
             self.machine_pool.tick(&self.recipes);
             self.belt_network.tick();
+            self.belt_network.tick_port_transfers(&mut self.machine_pool);
             if let Some(running) = &mut self.running {
                 self.camera.process_movement(
                     &self.input_state,

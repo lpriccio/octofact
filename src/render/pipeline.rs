@@ -1,6 +1,8 @@
+use super::instances::TileInstance;
 use super::mesh::Vertex;
 
 /// Uniforms: 112 bytes, padded to 256 for dynamic offset alignment.
+/// Used by the legacy per-tile pipeline (shader.wgsl).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Uniforms {
@@ -23,6 +25,23 @@ impl Default for Uniforms {
             _pad: [[0.0; 4]; 8],
         }
     }
+}
+
+/// Global uniforms shared across all instanced draw calls.
+/// Per-tile data (Mobius, depth, elevation) lives in instance buffers.
+///
+/// WGSL layout (96 bytes):
+///   view_proj: mat4x4<f32>  (64)
+///   grid_params: vec4<f32>  (16) — enabled, divisions, line_width, klein_half_side
+///   color_cycle: f32        (4)
+///   _pad: 12 bytes          (align to 16)
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct Globals {
+    pub view_proj: [[f32; 4]; 4],
+    pub grid_params: [f32; 4],
+    pub color_cycle: f32,
+    pub _pad: [f32; 3],
 }
 
 /// Aligned size of one uniform slot (must be multiple of 256 for dynamic offsets).
@@ -194,5 +213,120 @@ impl RenderState {
     /// Get the dynamic offset for tile at `index`.
     pub fn dynamic_offset(index: usize) -> u32 {
         (index as u64 * UNIFORM_ALIGN) as u32
+    }
+}
+
+/// Instanced tile pipeline: single draw call for all visible tiles.
+/// Uses Globals uniform (bind group 0) + per-instance TileInstance (vertex slot 1).
+pub struct TilePipeline {
+    pub pipeline: wgpu::RenderPipeline,
+    pub globals_buffer: wgpu::Buffer,
+    pub globals_bind_group: wgpu::BindGroup,
+}
+
+impl TilePipeline {
+    pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+        let common_src = include_str!("common.wgsl");
+        let tile_src = include_str!("tile.wgsl");
+        let full_src = format!("{}\n{}", common_src, tile_src);
+
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("tile instanced shader"),
+            source: wgpu::ShaderSource::Wgsl(full_src.into()),
+        });
+
+        let globals_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("globals uniform buffer"),
+            size: std::mem::size_of::<Globals>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("globals bind group layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(
+                            std::mem::size_of::<Globals>() as u64,
+                        ),
+                    },
+                    count: None,
+                }],
+            });
+
+        let globals_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("globals bind group"),
+            layout: &bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: globals_buffer.as_entire_binding(),
+            }],
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("tile instanced pipeline layout"),
+            bind_group_layouts: &[&bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("tile instanced pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_tile"),
+                buffers: &[Vertex::desc(), TileInstance::desc()],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_tile"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview: None,
+            cache: None,
+        });
+
+        Self {
+            pipeline,
+            globals_buffer,
+            globals_bind_group,
+        }
+    }
+
+    /// Upload global uniforms for this frame.
+    pub fn upload_globals(&self, queue: &wgpu::Queue, globals: &Globals) {
+        queue.write_buffer(&self.globals_buffer, 0, bytemuck::bytes_of(globals));
     }
 }

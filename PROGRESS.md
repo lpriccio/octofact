@@ -83,12 +83,12 @@
 - [x] Define instance buffer types: `TileInstance`, `BeltInstance`, `MachineInstance`, `ItemInstance`
 - [x] Create `InstanceBuffer<T>` helper (staging Vec + GPU buffer + upload)
 - [x] Create `RenderEngine` struct, extract rendering from `app.rs`
-- [ ] Write `tile.wgsl` shader with per-instance Mobius from vertex buffer
+- [x] Write `tile.wgsl` shader with per-instance Mobius from vertex buffer
 - [ ] Write `belt.wgsl` shader: position rectangle on tile surface via instance data
 - [ ] Write `machine.wgsl` shader with machine-type-specific visuals
 - [ ] Write `item.wgsl` shader: billboard or sprite at belt position
-- [ ] Shared WGSL functions: `apply_mobius()`, `disk_to_bowl()`, `klein_to_poincare()`
-- [ ] Build instance buffers each frame from visible tiles + world state
+- [x] Shared WGSL functions: `apply_mobius()`, `disk_to_bowl()`, `klein_to_poincare()`
+- [x] Build instance buffers each frame from visible tiles + world state
 - [ ] Delete egui belt overlay code
 - [ ] Delete per-tile uniform buffer and dynamic offset system
 

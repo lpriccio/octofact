@@ -3,7 +3,8 @@ use winit::window::Window;
 
 use crate::hyperbolic::poincare::{Complex, Mobius};
 use crate::hyperbolic::tiling::TilingState;
-use crate::render::pipeline::{RenderState, Uniforms, MAX_TILES};
+use crate::render::instances::{InstanceBuffer, TileInstance};
+use crate::render::pipeline::{Globals, RenderState, TilePipeline, MAX_TILES};
 use crate::ui::icons::IconAtlas;
 use crate::ui::integration::EguiIntegration;
 use crate::ui::style::apply_octofact_style;
@@ -88,6 +89,8 @@ impl GpuState {
 pub struct RenderEngine {
     pub gpu: GpuState,
     pub render: RenderState,
+    pub tile_pipeline: TilePipeline,
+    pub tile_instances: InstanceBuffer<TileInstance>,
     pub tiling: TilingState,
     pub extra_elevation: std::collections::HashMap<usize, f32>,
     pub egui: EguiIntegration,
@@ -116,6 +119,9 @@ impl RenderEngine {
         let mut tiling = TilingState::new(cfg);
         tiling.ensure_coverage(Complex::ZERO, 3);
 
+        let tile_pipeline = TilePipeline::new(&gpu.device, gpu.config.format);
+        let tile_instances = InstanceBuffer::new(&gpu.device, "tile instances", 256);
+
         let egui = EguiIntegration::new(&gpu.device, gpu.config.format, window);
         apply_octofact_style(&egui.ctx);
         let icon_atlas = IconAtlas::generate(&egui.ctx);
@@ -123,6 +129,8 @@ impl RenderEngine {
         Self {
             gpu,
             render,
+            tile_pipeline,
+            tile_instances,
             tiling,
             extra_elevation: std::collections::HashMap::new(),
             egui,
@@ -149,39 +157,47 @@ impl RenderEngine {
             .collect()
     }
 
-    /// Upload per-tile uniforms for all visible tiles.
-    pub fn upload_tile_uniforms(
-        &self,
+    /// Build tile instance buffer and upload globals for instanced rendering.
+    pub fn build_tile_instances(
+        &mut self,
         visible: &[(usize, Mobius)],
         view_proj: &glam::Mat4,
         grid_enabled: bool,
         klein_half_side: f32,
     ) {
-        for (slot, &(tile_idx, combined)) in visible.iter().enumerate() {
+        // Build instance data
+        self.tile_instances.clear();
+        for &(tile_idx, combined) in visible {
             let tile = &self.tiling.tiles[tile_idx];
             let elevation = self.extra_elevation.get(&tile_idx).copied().unwrap_or(0.0);
-            let uniforms = Uniforms {
-                view_proj: view_proj.to_cols_array_2d(),
-                mobius_a: [combined.a.re as f32, combined.a.im as f32, 0.0, 0.0],
-                mobius_b: [combined.b.re as f32, combined.b.im as f32, 0.0, 0.0],
-                disk_params: [tile.depth as f32, elevation, slot as f32 * 1e-6, 13.0],
-                grid_params: [
-                    if grid_enabled { 1.0 } else { 0.0 },
-                    64.0,
-                    0.03,
-                    klein_half_side,
-                ],
-                ..Default::default()
-            };
-            self.render.write_tile_uniforms(&self.gpu.queue, slot, &uniforms);
+            self.tile_instances.push(TileInstance {
+                mobius_a: [combined.a.re as f32, combined.a.im as f32],
+                mobius_b: [combined.b.re as f32, combined.b.im as f32],
+                depth: tile.depth as f32,
+                elevation,
+            });
         }
+        self.tile_instances.upload(&self.gpu.device, &self.gpu.queue);
+
+        // Upload global uniforms
+        let globals = Globals {
+            view_proj: view_proj.to_cols_array_2d(),
+            grid_params: [
+                if grid_enabled { 1.0 } else { 0.0 },
+                64.0,
+                0.03,
+                klein_half_side,
+            ],
+            color_cycle: 13.0,
+            _pad: [0.0; 3],
+        };
+        self.tile_pipeline.upload_globals(&self.gpu.queue, &globals);
     }
 
     /// Execute the main wgpu render pass (tiles) and egui render pass, then submit.
     /// `egui_output` should be the result of `egui.end_frame()`.
     pub fn draw_and_submit(
         &mut self,
-        tile_count: usize,
         egui_output: &egui::FullOutput,
     ) -> Result<wgpu::SurfaceTexture, wgpu::SurfaceError> {
         let output = self.gpu.surface.get_current_texture()?;
@@ -209,7 +225,8 @@ impl RenderEngine {
             egui_output,
         );
 
-        // Main render pass: draw tiles
+        // Main render pass: draw tiles (instanced)
+        let tile_count = self.tile_instances.count();
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("main pass"),
@@ -239,17 +256,16 @@ impl RenderEngine {
                 occlusion_query_set: None,
             });
 
-            pass.set_pipeline(&self.render.pipeline);
-            pass.set_vertex_buffer(0, self.render.vertex_buffer.slice(..));
-            pass.set_index_buffer(
-                self.render.index_buffer.slice(..),
-                wgpu::IndexFormat::Uint16,
-            );
-
-            for i in 0..tile_count {
-                let offset = RenderState::dynamic_offset(i);
-                pass.set_bind_group(0, &self.render.bind_group, &[offset]);
-                pass.draw_indexed(0..self.render.num_indices, 0, 0..1);
+            if tile_count > 0 {
+                pass.set_pipeline(&self.tile_pipeline.pipeline);
+                pass.set_bind_group(0, &self.tile_pipeline.globals_bind_group, &[]);
+                pass.set_vertex_buffer(0, self.render.vertex_buffer.slice(..));
+                pass.set_vertex_buffer(1, self.tile_instances.slice());
+                pass.set_index_buffer(
+                    self.render.index_buffer.slice(..),
+                    wgpu::IndexFormat::Uint16,
+                );
+                pass.draw_indexed(0..self.render.num_indices, 0, 0..tile_count);
             }
         }
 

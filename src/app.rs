@@ -740,10 +740,9 @@ impl App {
         let view_proj = render_camera.build_view_proj(aspect);
         let inv_view = render_camera.local.inverse();
 
-        // Visibility culling + uniform upload via RenderEngine
+        // Visibility culling + instanced tile rendering setup
         let visible = re.visible_tiles(&inv_view);
-        let tile_count = visible.len();
-        re.upload_tile_uniforms(&visible, &view_proj, self.grid_enabled, self.klein_half_side as f32);
+        re.build_tile_instances(&visible, &view_proj, self.grid_enabled, self.klein_half_side as f32);
 
         let window = re.gpu.window.clone();
         let width = re.width();
@@ -1144,7 +1143,7 @@ impl App {
         let full_output = re.egui.end_frame(&window);
 
         // GPU render passes + submit
-        let output = re.draw_and_submit(tile_count, &full_output)?;
+        let output = re.draw_and_submit(&full_output)?;
         output.present();
         Ok(())
     }

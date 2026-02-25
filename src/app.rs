@@ -12,7 +12,7 @@ use crate::game::inventory::Inventory;
 use crate::game::recipes::RecipeIndex;
 use crate::game::world::{Structure, WorldState};
 use crate::hyperbolic::poincare::{canonical_polygon, polygon_disk_radius, Complex, Mobius, TilingConfig};
-use crate::hyperbolic::tiling::{format_address, TilingState};
+use crate::hyperbolic::tiling::{format_address, TileAddr, TilingState};
 use crate::render::camera::Camera;
 use crate::render::mesh::build_polygon_mesh;
 use crate::render::pipeline::{RenderState, Uniforms};
@@ -197,7 +197,7 @@ pub struct App {
 /// State for dragging belts along a gridline.
 struct BeltDrag {
     tile_idx: usize,
-    address: Vec<u8>,
+    address: TileAddr,
     /// Fixed axis: true = horizontal (fixed gy), false = vertical (fixed gx)
     horizontal: bool,
     /// The fixed coordinate on the constrained axis

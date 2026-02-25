@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use super::items::ItemId;
+use crate::hyperbolic::tiling::TileAddr;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Direction {
@@ -51,7 +52,7 @@ pub struct CellState {
 }
 
 pub struct WorldState {
-    cells: HashMap<Vec<u8>, CellState>,
+    cells: HashMap<TileAddr, CellState>,
 }
 
 impl WorldState {
@@ -62,7 +63,7 @@ impl WorldState {
     }
 
     pub fn place(&mut self, address: &[u8], grid_xy: (i32, i32), structure: Structure) -> bool {
-        let cell = self.cells.entry(address.to_vec()).or_default();
+        let cell = self.cells.entry(TileAddr::from_slice(address)).or_default();
         if cell.structures.contains_key(&grid_xy) {
             return false;
         }

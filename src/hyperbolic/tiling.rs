@@ -1,13 +1,19 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
+use smallvec::SmallVec;
+
 use super::poincare::{Complex, Mobius, TilingConfig, center_to_center_distance, neighbor_transforms, poincare_distance};
+
+/// Tile address: sequence of direction indices from origin.
+/// 12 bytes inline covers depth 12 (~16M tiles) without heap allocation.
+pub type TileAddr = SmallVec<[u8; 12]>;
 
 /// A tile in the {p,q} tiling, identified by its canonical address.
 #[derive(Clone, Debug)]
 pub struct Tile {
     /// Canonical address: sequence of direction indices (0..p-1) from origin.
     /// Empty = origin tile.
-    pub address: Vec<u8>,
+    pub address: TileAddr,
     /// Mobius transform mapping the canonical polygon to this tile's position.
     pub transform: Mobius,
     /// BFS depth (= address length).
@@ -39,7 +45,7 @@ pub struct TilingState {
 impl TilingState {
     pub fn new(cfg: TilingConfig) -> Self {
         let origin = Tile {
-            address: vec![],
+            address: TileAddr::new(),
             transform: Mobius::identity(),
             depth: 0,
             parity: false,
@@ -245,7 +251,7 @@ mod tests {
     fn test_all_addresses_unique() {
         let mut state = TilingState::new(cfg83());
         state.ensure_coverage(Complex::ZERO, 2);
-        let mut addrs: HashSet<Vec<u8>> = HashSet::new();
+        let mut addrs: HashSet<TileAddr> = HashSet::new();
         for tile in &state.tiles {
             assert!(
                 addrs.insert(tile.address.clone()),

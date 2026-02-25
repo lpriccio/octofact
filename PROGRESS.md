@@ -17,8 +17,8 @@
 > Replace nested HashMaps with typed pools and stable entity IDs.
 
 - [x] Add `slotmap` and `smallvec` to Cargo.toml
-- [ ] Define `TileAddr = SmallVec<[u8; 12]>` type alias
-- [ ] Replace `Vec<u8>` with `TileAddr` in `Tile`, `WorldState`, `CellState`, `BeltDrag`, etc.
+- [x] Define `TileAddr = SmallVec<[u8; 12]>` type alias
+- [x] Replace `Vec<u8>` with `TileAddr` in `Tile`, `WorldState`, `CellState`, `BeltDrag`, etc.
 - [ ] Define `EntityId` via `slotmap::SlotMap`
 - [ ] Rewrite `WorldState`: `tile_grid` + `structures` SlotMap + `positions`/`directions` SecondaryMaps
 - [ ] Define `StructureKind` enum: `Belt(BeltId)`, `Machine(MachineId)`, `PowerNode`, etc.

@@ -1,9 +1,9 @@
 use crate::game::inventory::Inventory;
 use crate::game::items::ItemId;
-use crate::game::world::Direction;
+use crate::game::world::{Direction, StructureKind};
 use super::icons::IconAtlas;
 
-/// Items that can be placed on the grid.
+/// Items shown in the placement panel by default (when not in free-placement mode).
 const PLACEABLE_ITEMS: &[ItemId] = &[ItemId::Belt, ItemId::Quadrupole];
 
 #[derive(Clone, Debug)]
@@ -12,16 +12,32 @@ pub struct PlacementMode {
     pub direction: Direction,
 }
 
+/// All items that have a StructureKind (i.e. can be placed on the grid).
+fn all_placeable_items() -> Vec<ItemId> {
+    ItemId::all()
+        .iter()
+        .copied()
+        .filter(|id| StructureKind::from_item(*id).is_some())
+        .collect()
+}
+
 pub fn placement_panel(
     ctx: &egui::Context,
     open: &mut bool,
     inventory: &Inventory,
     icons: &IconAtlas,
     current_mode: &mut Option<PlacementMode>,
+    free_placement: bool,
 ) {
     if !*open {
         return;
     }
+
+    let items: Vec<ItemId> = if free_placement {
+        all_placeable_items()
+    } else {
+        PLACEABLE_ITEMS.to_vec()
+    };
 
     egui::Window::new("Placement")
         .anchor(egui::Align2::LEFT_TOP, egui::vec2(8.0, 8.0))
@@ -29,6 +45,16 @@ pub fn placement_panel(
         .resizable(false)
         .default_width(180.0)
         .show(ctx, |ui| {
+            if free_placement {
+                ui.label(
+                    egui::RichText::new("FREE PLACEMENT")
+                        .color(egui::Color32::from_rgb(255, 200, 50))
+                        .strong()
+                        .size(11.0),
+                );
+                ui.separator();
+            }
+
             // Current selection header
             if let Some(mode) = current_mode.as_ref() {
                 ui.horizontal(|ui| {
@@ -45,8 +71,9 @@ pub fn placement_panel(
             }
 
             // Placeable items list
-            for &item_id in PLACEABLE_ITEMS {
+            for &item_id in &items {
                 let count = inventory.count(item_id);
+                let can_place = free_placement || count > 0;
                 let selected = current_mode.as_ref().map(|m| m.item == item_id).unwrap_or(false);
 
                 let response = ui.horizontal(|ui| {
@@ -64,7 +91,7 @@ pub fn placement_panel(
                     } else {
                         egui::RichText::new(item_id.display_name())
                     };
-                    if ui.add(egui::Label::new(label).sense(egui::Sense::click())).clicked() && count > 0 {
+                    if ui.add(egui::Label::new(label).sense(egui::Sense::click())).clicked() && can_place {
                         *current_mode = Some(PlacementMode {
                             item: item_id,
                             direction: current_mode
@@ -75,9 +102,14 @@ pub fn placement_panel(
                     }
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let count_text = if free_placement {
+                            "\u{221e}".to_string() // infinity symbol
+                        } else {
+                            format!("x{count}")
+                        };
                         ui.label(
-                            egui::RichText::new(format!("x{count}"))
-                                .color(if count > 0 {
+                            egui::RichText::new(count_text)
+                                .color(if can_place {
                                     egui::Color32::from_gray(200)
                                 } else {
                                     egui::Color32::from_gray(80)

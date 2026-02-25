@@ -26,6 +26,9 @@ pub struct GameplayConfig {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct DebugConfig {
     pub log_clicks: bool,
+    /// Place any structure for free, ignoring inventory.
+    #[serde(default)]
+    pub free_placement: bool,
 }
 
 impl Default for GameConfig {

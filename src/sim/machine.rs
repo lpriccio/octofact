@@ -1,8 +1,7 @@
-#![allow(dead_code)] // Types defined here are wired in by later milestones.
-
 use std::collections::HashMap;
 
 use crate::game::items::{ItemId, MachineType};
+use crate::game::recipes::RecipeIndex;
 use crate::game::world::EntityId;
 
 /// Default crafting duration in ticks (60 UPS = 2 seconds).
@@ -249,6 +248,131 @@ impl MachinePool {
         }
         None
     }
+
+    /// Run one simulation tick for all machines.
+    ///
+    /// State machine per machine:
+    ///   Idle / NoInput  -> check inputs -> Working (consume inputs)
+    ///   Working         -> decrement ticks -> check output room -> Idle or OutputFull
+    ///   OutputFull      -> (woken by take_output setting state to Idle)
+    ///   NoPower         -> (woken by power network setting power_draw > 0)
+    pub fn tick(&mut self, recipes: &RecipeIndex) {
+        for i in 0..self.count {
+            let recipe_idx = match self.cold.recipe[i] {
+                Some(r) => r,
+                None => continue, // no recipe set — skip
+            };
+            let recipe = &recipes.all[recipe_idx];
+
+            match self.hot.state[i] {
+                MachineState::Idle | MachineState::NoInput => {
+                    // Try to start crafting if inputs are available
+                    if Self::has_inputs(&self.cold.input_slots[i], &recipe.inputs) {
+                        Self::consume_inputs(&mut self.cold.input_slots[i], &recipe.inputs);
+                        self.hot.recipe_ticks[i] = DEFAULT_CRAFT_TICKS;
+                        self.hot.recipe_total_ticks[i] = DEFAULT_CRAFT_TICKS;
+                        self.hot.progress[i] = 0.0;
+                        self.hot.state[i] = MachineState::Working;
+                    } else {
+                        self.hot.state[i] = MachineState::NoInput;
+                    }
+                }
+                MachineState::Working => {
+                    if self.hot.power_draw[i] <= 0.0 {
+                        self.hot.state[i] = MachineState::NoPower;
+                        continue;
+                    }
+                    self.hot.recipe_ticks[i] = self.hot.recipe_ticks[i].saturating_sub(1);
+                    let total = self.hot.recipe_total_ticks[i].max(1) as f32;
+                    self.hot.progress[i] = 1.0 - (self.hot.recipe_ticks[i] as f32 / total);
+
+                    if self.hot.recipe_ticks[i] == 0 {
+                        // Craft complete — try to deposit output
+                        if Self::try_produce_output(
+                            &mut self.cold.output_slots[i],
+                            recipe.output,
+                            recipe.output_count as u16,
+                        ) {
+                            self.hot.progress[i] = 0.0;
+                            self.hot.state[i] = MachineState::Idle;
+                        } else {
+                            self.hot.progress[i] = 1.0;
+                            self.hot.state[i] = MachineState::OutputFull;
+                        }
+                    }
+                }
+                MachineState::OutputFull => {
+                    // Try to deposit the pending output (inserter may have drained a slot)
+                    if Self::try_produce_output(
+                        &mut self.cold.output_slots[i],
+                        recipe.output,
+                        recipe.output_count as u16,
+                    ) {
+                        self.hot.progress[i] = 0.0;
+                        self.hot.state[i] = MachineState::Idle;
+                    }
+                }
+                MachineState::NoPower => {
+                    // Wake up if power has been restored
+                    if self.hot.power_draw[i] > 0.0 {
+                        self.hot.state[i] = MachineState::Working;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Check if input slots contain all required recipe ingredients.
+    fn has_inputs(slots: &[ItemStack; MAX_SLOTS], inputs: &[(ItemId, u32)]) -> bool {
+        inputs.iter().all(|&(item, count)| {
+            let have: u32 = slots
+                .iter()
+                .filter(|s| s.item == item && s.count > 0)
+                .map(|s| s.count as u32)
+                .sum();
+            have >= count
+        })
+    }
+
+    /// Consume recipe inputs from slots.
+    fn consume_inputs(slots: &mut [ItemStack; MAX_SLOTS], inputs: &[(ItemId, u32)]) {
+        for &(item, mut needed) in inputs {
+            for slot in slots.iter_mut() {
+                if slot.item == item && slot.count > 0 {
+                    let take = (slot.count as u32).min(needed);
+                    slot.count -= take as u16;
+                    needed -= take;
+                    if needed == 0 {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Try to place output items into output slots. Returns true on success.
+    fn try_produce_output(
+        slots: &mut [ItemStack; MAX_SLOTS],
+        item: ItemId,
+        count: u16,
+    ) -> bool {
+        // Try to stack into existing slot with same item
+        for slot in slots.iter_mut() {
+            if slot.item == item && slot.count > 0 {
+                slot.count += count;
+                return true;
+            }
+        }
+        // Try empty slot
+        for slot in slots.iter_mut() {
+            if slot.count == 0 {
+                slot.item = item;
+                slot.count = count;
+                return true;
+            }
+        }
+        false
+    }
 }
 
 #[cfg(test)]
@@ -392,5 +516,165 @@ mod tests {
 
         // Nothing left
         assert_eq!(pool.take_output(e1), None);
+    }
+
+    // --- Tick state machine tests ---
+
+    fn setup_composer_with_recipe() -> (MachinePool, EntityId, RecipeIndex) {
+        let mut pool = MachinePool::new();
+        let (_, e1) = make_entity();
+        pool.add(e1, MachineType::Composer);
+        let recipes = RecipeIndex::new();
+        // Recipe 0: Composer, 2x Point -> LineSegment
+        pool.set_recipe(e1, Some(0));
+        (pool, e1, recipes)
+    }
+
+    #[test]
+    fn tick_no_recipe_stays_idle() {
+        let mut pool = MachinePool::new();
+        let (_, e1) = make_entity();
+        pool.add(e1, MachineType::Composer);
+        let recipes = RecipeIndex::new();
+        // No recipe set
+        pool.tick(&recipes);
+        assert_eq!(pool.state(e1), Some(MachineState::Idle));
+    }
+
+    #[test]
+    fn tick_no_inputs_transitions_to_noinput() {
+        let (mut pool, e1, recipes) = setup_composer_with_recipe();
+        // No inputs provided
+        pool.tick(&recipes);
+        assert_eq!(pool.state(e1), Some(MachineState::NoInput));
+    }
+
+    #[test]
+    fn tick_with_inputs_starts_working() {
+        let (mut pool, e1, recipes) = setup_composer_with_recipe();
+        pool.insert_input(e1, ItemId::Point, 2);
+        pool.tick(&recipes);
+        assert_eq!(pool.state(e1), Some(MachineState::Working));
+        // Inputs should be consumed
+        let slots = pool.input_slots(e1).unwrap();
+        assert_eq!(slots[0].count, 0);
+    }
+
+    #[test]
+    fn tick_working_decrements_ticks() {
+        let (mut pool, e1, recipes) = setup_composer_with_recipe();
+        pool.insert_input(e1, ItemId::Point, 2);
+        pool.tick(&recipes); // Tick 1: Idle -> Working (recipe_ticks = 120)
+        let i = pool.index_of(e1).unwrap();
+        assert_eq!(pool.hot.recipe_ticks[i], DEFAULT_CRAFT_TICKS);
+        pool.tick(&recipes); // Tick 2: Working, decrement
+        assert_eq!(pool.hot.recipe_ticks[i], DEFAULT_CRAFT_TICKS - 1);
+        assert!(pool.hot.progress[i] > 0.0);
+    }
+
+    #[test]
+    fn tick_completes_after_full_duration() {
+        let (mut pool, e1, recipes) = setup_composer_with_recipe();
+        pool.insert_input(e1, ItemId::Point, 2);
+        // Tick 1: Idle -> Working. Ticks 2..121: decrement. Tick 121: completes -> Idle.
+        // Tick 122: Idle, no inputs -> NoInput.
+        for _ in 0..DEFAULT_CRAFT_TICKS + 2 {
+            pool.tick(&recipes);
+        }
+        // Should be NoInput (no more inputs after completing the craft)
+        assert_eq!(pool.state(e1), Some(MachineState::NoInput));
+        let slots = pool.output_slots(e1).unwrap();
+        assert_eq!(slots[0].item, ItemId::LineSegment);
+        assert_eq!(slots[0].count, 1);
+    }
+
+    #[test]
+    fn tick_output_full_blocks() {
+        let (mut pool, e1, recipes) = setup_composer_with_recipe();
+        let i = pool.index_of(e1).unwrap();
+        // Fill all 4 output slots with different items
+        for (j, item) in [ItemId::NullSet, ItemId::Preimage, ItemId::Wavelet, ItemId::Identity]
+            .iter()
+            .enumerate()
+        {
+            pool.cold.output_slots[i][j] = ItemStack { item: *item, count: 1 };
+        }
+        pool.insert_input(e1, ItemId::Point, 2);
+        // Run until craft would complete
+        for _ in 0..=DEFAULT_CRAFT_TICKS {
+            pool.tick(&recipes);
+        }
+        assert_eq!(pool.state(e1), Some(MachineState::OutputFull));
+    }
+
+    #[test]
+    fn tick_output_full_resolves_when_drained() {
+        let (mut pool, e1, recipes) = setup_composer_with_recipe();
+        let i = pool.index_of(e1).unwrap();
+        // Fill all output slots
+        for (j, item) in [ItemId::NullSet, ItemId::Preimage, ItemId::Wavelet, ItemId::Identity]
+            .iter()
+            .enumerate()
+        {
+            pool.cold.output_slots[i][j] = ItemStack { item: *item, count: 1 };
+        }
+        pool.insert_input(e1, ItemId::Point, 2);
+        for _ in 0..=DEFAULT_CRAFT_TICKS {
+            pool.tick(&recipes);
+        }
+        assert_eq!(pool.state(e1), Some(MachineState::OutputFull));
+
+        // Drain one output slot
+        pool.cold.output_slots[i][0].count = 0;
+        pool.tick(&recipes);
+        // Should have deposited output and returned to Idle (or NoInput)
+        assert!(
+            pool.state(e1) == Some(MachineState::Idle)
+                || pool.state(e1) == Some(MachineState::NoInput)
+        );
+        // LineSegment should be in the now-empty slot
+        let has_line_segment = pool.cold.output_slots[i]
+            .iter()
+            .any(|s| s.item == ItemId::LineSegment && s.count > 0);
+        assert!(has_line_segment);
+    }
+
+    #[test]
+    fn tick_no_power_pauses() {
+        let (mut pool, e1, recipes) = setup_composer_with_recipe();
+        pool.insert_input(e1, ItemId::Point, 2);
+        pool.tick(&recipes); // starts working
+        assert_eq!(pool.state(e1), Some(MachineState::Working));
+
+        // Cut power
+        let i = pool.index_of(e1).unwrap();
+        pool.hot.power_draw[i] = 0.0;
+        pool.tick(&recipes);
+        assert_eq!(pool.state(e1), Some(MachineState::NoPower));
+
+        // Restore power
+        pool.hot.power_draw[i] = 1.0;
+        pool.tick(&recipes);
+        assert_eq!(pool.state(e1), Some(MachineState::Working));
+    }
+
+    #[test]
+    fn tick_continuous_production() {
+        let (mut pool, e1, recipes) = setup_composer_with_recipe();
+        // Give enough inputs for 3 crafts (6 points)
+        pool.insert_input(e1, ItemId::Point, 6);
+
+        // Run for 3 full cycles + some extra
+        for _ in 0..(DEFAULT_CRAFT_TICKS as u32 + 1) * 3 + 10 {
+            pool.tick(&recipes);
+        }
+        // Should have produced 3 LineSegments
+        let slots = pool.output_slots(e1).unwrap();
+        let total: u16 = slots
+            .iter()
+            .filter(|s| s.item == ItemId::LineSegment)
+            .map(|s| s.count)
+            .sum();
+        assert_eq!(total, 3);
     }
 }

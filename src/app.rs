@@ -230,6 +230,7 @@ pub struct App {
     recipes: RecipeIndex,
     world: WorldState,
     belt_network: BeltNetwork,
+    machine_pool: crate::sim::machine::MachinePool,
     ui: UiState,
     grid_enabled: bool,
     klein_half_side: f64,
@@ -250,6 +251,7 @@ impl App {
             recipes: RecipeIndex::new(),
             world: WorldState::new(),
             belt_network: BeltNetwork::new(),
+            machine_pool: crate::sim::machine::MachinePool::new(),
             ui: UiState::new(),
             grid_enabled: false,
             klein_half_side: {
@@ -370,14 +372,16 @@ impl App {
     /// Place a single structure at the given tile address and grid position.
     /// Returns true if placement succeeded.
     fn try_place_at(&mut self, tile_idx: usize, address: &[u8], grid_xy: (i32, i32), mode: &PlacementMode) -> bool {
-        if self.inventory.count(mode.item) == 0 {
+        if !self.config.debug.free_placement && self.inventory.count(mode.item) == 0 {
             return false;
         }
         let entity = match self.world.place(address, grid_xy, mode.item, mode.direction) {
             Some(e) => e,
             None => return false, // occupied or not placeable
         };
-        self.inventory.remove(mode.item, 1);
+        if !self.config.debug.free_placement {
+            self.inventory.remove(mode.item, 1);
+        }
 
         // Register belt with simulation network
         if mode.item == crate::game::items::ItemId::Belt {
@@ -386,6 +390,13 @@ impl App {
             );
             // Establish cross-tile transport line links
             self.check_cross_tile_belt_link(entity, tile_idx, address, grid_xy, mode.direction);
+        }
+
+        // Register machine with simulation pool
+        if let Some(crate::game::world::StructureKind::Machine(mt)) =
+            crate::game::world::StructureKind::from_item(mode.item)
+        {
+            self.machine_pool.add(entity, mt);
         }
 
         // Flash feedback
@@ -817,6 +828,7 @@ impl App {
             &self.inventory,
             &running.icon_atlas,
             &mut self.ui.placement_mode,
+            self.config.debug.free_placement,
         );
 
         // Debug click flash
@@ -1389,6 +1401,7 @@ impl ApplicationHandler for App {
             // Save per-tick so prev/curr are always one SIM_DT apart
             // and in adjacent coordinate frames (at most one tile crossing)
             self.game_loop.save_prev_camera(self.camera.snapshot());
+            self.machine_pool.tick(&self.recipes);
             self.belt_network.tick();
             if let Some(running) = &mut self.running {
                 self.camera.process_movement(

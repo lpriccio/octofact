@@ -83,6 +83,7 @@ pub fn settings_menu(
                 }
                 SettingsTab::Debug => {
                     ui.checkbox(&mut config.debug.log_clicks, "Log click interactions to console");
+                    ui.checkbox(&mut config.debug.free_placement, "Free placement (ignore inventory)");
                 }
             }
 

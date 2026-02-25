@@ -15,7 +15,7 @@ use crate::hyperbolic::poincare::{canonical_polygon, polygon_disk_radius, Comple
 use crate::hyperbolic::tiling::{format_address, TileAddr};
 use crate::render::camera::Camera;
 use crate::render::engine::{project_to_screen, project_to_screen_unclamped, RenderEngine};
-use crate::render::instances::BeltInstance;
+use crate::render::instances::{BeltInstance, MachineInstance};
 use crate::render::mesh::build_polygon_mesh;
 use crate::sim::belt::BeltNetwork;
 use crate::sim::tick::GameLoop;
@@ -776,6 +776,59 @@ impl App {
             }
         }
         re.belt_instances.upload(&re.gpu.device, &re.gpu.queue);
+
+        // Build machine instances from visible tiles + world state
+        re.machine_instances.clear();
+        for &(tile_idx, combined) in &visible {
+            let tile = &re.tiling.tiles[tile_idx];
+            let entities = match self.world.tile_entities(&tile.address) {
+                Some(e) => e,
+                None => continue,
+            };
+            for (&(gx, gy), &entity) in entities {
+                let (machine_type_float, has_pool_entry) = match self.world.kind(entity) {
+                    Some(StructureKind::Machine(mt)) => {
+                        use crate::game::items::MachineType;
+                        let f = match mt {
+                            MachineType::Composer => 0.0,
+                            MachineType::Inverter => 1.0,
+                            MachineType::Embedder => 2.0,
+                            MachineType::Quotient => 3.0,
+                            MachineType::Transformer => 4.0,
+                            MachineType::Source => 5.0,
+                        };
+                        (f, true)
+                    }
+                    Some(StructureKind::PowerNode) => (6.0, false),
+                    Some(StructureKind::PowerSource) => (7.0, false),
+                    _ => continue,
+                };
+
+                let progress = if has_pool_entry {
+                    self.machine_pool
+                        .state(entity)
+                        .map(|s| match s {
+                            crate::sim::machine::MachineState::Working => {
+                                self.machine_pool.progress(entity).unwrap_or(0.0)
+                            }
+                            crate::sim::machine::MachineState::NoPower => -2.0,
+                            _ => -1.0, // Idle, NoInput, OutputFull
+                        })
+                        .unwrap_or(-1.0)
+                } else {
+                    -1.0 // Power nodes are always "idle" visually
+                };
+
+                re.machine_instances.push(MachineInstance {
+                    mobius_a: [combined.a.re as f32, combined.a.im as f32],
+                    mobius_b: [combined.b.re as f32, combined.b.im as f32],
+                    grid_pos: [gx as f32, gy as f32],
+                    machine_type: machine_type_float,
+                    progress,
+                });
+            }
+        }
+        re.machine_instances.upload(&re.gpu.device, &re.gpu.queue);
 
         let window = re.gpu.window.clone();
         let width = re.width();

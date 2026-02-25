@@ -3,8 +3,8 @@ use winit::window::Window;
 
 use crate::hyperbolic::poincare::{Complex, Mobius};
 use crate::hyperbolic::tiling::TilingState;
-use crate::render::instances::{BeltInstance, InstanceBuffer, TileInstance};
-use crate::render::pipeline::{BeltPipeline, Globals, RenderState, TilePipeline, MAX_TILES};
+use crate::render::instances::{BeltInstance, InstanceBuffer, MachineInstance, TileInstance};
+use crate::render::pipeline::{BeltPipeline, Globals, MachinePipeline, RenderState, TilePipeline, MAX_TILES};
 use crate::ui::icons::IconAtlas;
 use crate::ui::integration::EguiIntegration;
 use crate::ui::style::apply_octofact_style;
@@ -93,6 +93,8 @@ pub struct RenderEngine {
     pub tile_instances: InstanceBuffer<TileInstance>,
     pub belt_pipeline: BeltPipeline,
     pub belt_instances: InstanceBuffer<BeltInstance>,
+    pub machine_pipeline: MachinePipeline,
+    pub machine_instances: InstanceBuffer<MachineInstance>,
     pub tiling: TilingState,
     pub extra_elevation: std::collections::HashMap<usize, f32>,
     pub egui: EguiIntegration,
@@ -128,6 +130,9 @@ impl RenderEngine {
         let belt_pipeline = BeltPipeline::new(&gpu.device, gpu.config.format, &globals_layout);
         let belt_instances = InstanceBuffer::new(&gpu.device, "belt instances", 256);
 
+        let machine_pipeline = MachinePipeline::new(&gpu.device, gpu.config.format, &globals_layout);
+        let machine_instances = InstanceBuffer::new(&gpu.device, "machine instances", 64);
+
         let egui = EguiIntegration::new(&gpu.device, gpu.config.format, window);
         apply_octofact_style(&egui.ctx);
         let icon_atlas = IconAtlas::generate(&egui.ctx);
@@ -139,6 +144,8 @@ impl RenderEngine {
             tile_instances,
             belt_pipeline,
             belt_instances,
+            machine_pipeline,
+            machine_instances,
             tiling,
             extra_elevation: std::collections::HashMap::new(),
             egui,
@@ -288,6 +295,20 @@ impl RenderEngine {
                     wgpu::IndexFormat::Uint16,
                 );
                 pass.draw_indexed(0..self.belt_pipeline.num_indices, 0, 0..belt_count);
+            }
+
+            // Draw machines (instanced)
+            let machine_count = self.machine_instances.count();
+            if machine_count > 0 {
+                pass.set_pipeline(&self.machine_pipeline.pipeline);
+                pass.set_bind_group(0, &self.tile_pipeline.globals_bind_group, &[]);
+                pass.set_vertex_buffer(0, self.machine_pipeline.vertex_buffer.slice(..));
+                pass.set_vertex_buffer(1, self.machine_instances.slice());
+                pass.set_index_buffer(
+                    self.machine_pipeline.index_buffer.slice(..),
+                    wgpu::IndexFormat::Uint16,
+                );
+                pass.draw_indexed(0..self.machine_pipeline.num_indices, 0, 0..machine_count);
             }
         }
 

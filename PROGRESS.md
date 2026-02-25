@@ -85,10 +85,11 @@
 - [x] Create `RenderEngine` struct, extract rendering from `app.rs`
 - [x] Write `tile.wgsl` shader with per-instance Mobius from vertex buffer
 - [x] Write `belt.wgsl` shader: position rectangle on tile surface via instance data
-- [ ] Write `machine.wgsl` shader with machine-type-specific visuals
+- [x] Write `machine.wgsl` shader with machine-type-specific visuals
 - [ ] Write `item.wgsl` shader: billboard or sprite at belt position
 - [x] Shared WGSL functions: `apply_mobius()`, `disk_to_bowl()`, `klein_to_poincare()`
 - [x] Build instance buffers each frame from visible tiles + world state
+- [ ] Update belt/inserter connection logic for multi-cell machine footprints (1x1, 2x2, 3x2)
 - [ ] Delete egui belt overlay code
 - [ ] Delete per-tile uniform buffer and dynamic offset system
 

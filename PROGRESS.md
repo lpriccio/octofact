@@ -96,15 +96,19 @@
 
 > Support machines with footprints larger than 1x1 grid cells.
 
+
+- [x] Enable click sensitivity on non-occluded cuboid representing a machine.
 - [ ] Extend `PortDef` with grid offset for ports on non-origin cells
-- [ ] Update `WorldState` to register multi-cell machines across all occupied cells
-- [ ] Update placement logic to check entire footprint is free
+- [x] Update `WorldState` to register multi-cell machines across all occupied cells
+- [x] Update placement logic to check entire footprint is free
 - [ ] Update rotation to transform cell offsets as well as port directions
-- [ ] Define footprints per machine type (e.g., Embedder 1x2, Transformer 2x2)
-- [ ] Update belt connection logic to check ports on exterior cells only
+- [x] Define footprints per machine type (e.g., Embedder 1x2, Transformer 2x2)
+- [x] Update belt connection logic to check ports on exterior cells only
 - [ ] Update rendering for multi-cell machine meshes
 
-## Phase 8: Chunk Streaming
+
+
+## Phase 9: Chunk Streaming
 
 > Support unbounded world exploration without running out of memory.
 
@@ -118,7 +122,7 @@
 
 
 
-## Phase 9: Save/Load
+## Phase 10: Save/Load
 
 > Persist world state across sessions.
 

@@ -1,6 +1,13 @@
 use std::collections::HashMap;
-use super::items::ItemId;
+use slotmap::{new_key_type, SecondaryMap, SlotMap};
+use super::items::{ItemId, MachineType};
 use crate::hyperbolic::tiling::TileAddr;
+
+new_key_type! {
+    /// Stable handle into the world's entity storage. Generational index
+    /// via SlotMap — safe to hold across insertions and removals.
+    pub struct EntityId;
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Direction {
@@ -40,52 +47,143 @@ impl Direction {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct Structure {
-    #[allow(dead_code)] // read in tests; will be replaced by StructureKind in Phase 2
-    pub item: ItemId,
-    pub direction: Direction,
+/// Functional type of a placed structure. Determines which simulation
+/// system processes it. Simulation pool IDs (BeltId, MachineId, etc.)
+/// will be added in later phases.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StructureKind {
+    Belt,
+    Machine(MachineType),
+    PowerNode,   // Quadrupole
+    PowerSource, // Dynamo
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct CellState {
-    pub structures: HashMap<(i32, i32), Structure>,
+impl StructureKind {
+    /// Derive structure kind from the item being placed.
+    /// Returns `None` for non-placeable items (raw resources, intermediates).
+    pub fn from_item(item: ItemId) -> Option<Self> {
+        match item {
+            ItemId::Belt => Some(Self::Belt),
+            ItemId::Quadrupole => Some(Self::PowerNode),
+            ItemId::Dynamo => Some(Self::PowerSource),
+            ItemId::Composer => Some(Self::Machine(MachineType::Composer)),
+            ItemId::Inverter => Some(Self::Machine(MachineType::Inverter)),
+            ItemId::Embedder => Some(Self::Machine(MachineType::Embedder)),
+            ItemId::Quotient => Some(Self::Machine(MachineType::Quotient)),
+            ItemId::Transformer => Some(Self::Machine(MachineType::Transformer)),
+            _ => None,
+        }
+    }
+}
+
+/// Canonical position of a placed entity: tile address + grid coordinates.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct GridPos {
+    pub tile: TileAddr,
+    pub gx: i16,
+    pub gy: i16,
 }
 
 pub struct WorldState {
-    cells: HashMap<TileAddr, CellState>,
+    /// Spatial index: tile address → (grid position → entity). "What's at this square?"
+    tile_grid: HashMap<TileAddr, HashMap<(i32, i32), EntityId>>,
+    /// Primary storage: entity → structure kind.
+    structures: SlotMap<EntityId, StructureKind>,
+    /// Entity → canonical world position.
+    positions: SecondaryMap<EntityId, GridPos>,
+    /// Entity → facing direction.
+    directions: SecondaryMap<EntityId, Direction>,
+    /// Entity → source item (for inventory return on removal, display).
+    items: SecondaryMap<EntityId, ItemId>,
 }
 
 impl WorldState {
     pub fn new() -> Self {
         Self {
-            cells: HashMap::new(),
+            tile_grid: HashMap::new(),
+            structures: SlotMap::with_key(),
+            positions: SecondaryMap::new(),
+            directions: SecondaryMap::new(),
+            items: SecondaryMap::new(),
         }
     }
 
-    pub fn place(&mut self, address: &[u8], grid_xy: (i32, i32), structure: Structure) -> bool {
-        let cell = self.cells.entry(TileAddr::from_slice(address)).or_default();
-        if cell.structures.contains_key(&grid_xy) {
+    /// Place a structure at the given tile address and grid position.
+    /// Returns `true` if placement succeeded, `false` if the cell is
+    /// occupied or the item isn't a placeable structure.
+    pub fn place(
+        &mut self,
+        address: &[u8],
+        grid_xy: (i32, i32),
+        item: ItemId,
+        direction: Direction,
+    ) -> bool {
+        let kind = match StructureKind::from_item(item) {
+            Some(k) => k,
+            None => return false,
+        };
+        let tile_addr = TileAddr::from_slice(address);
+        let tile_slots = self.tile_grid.entry(tile_addr.clone()).or_default();
+        if tile_slots.contains_key(&grid_xy) {
             return false;
         }
-        cell.structures.insert(grid_xy, structure);
+        let entity = self.structures.insert(kind);
+        self.positions.insert(
+            entity,
+            GridPos {
+                tile: tile_addr,
+                gx: grid_xy.0 as i16,
+                gy: grid_xy.1 as i16,
+            },
+        );
+        self.directions.insert(entity, direction);
+        self.items.insert(entity, item);
+        tile_slots.insert(grid_xy, entity);
         true
     }
 
-    pub fn get_cell(&self, address: &[u8]) -> Option<&CellState> {
-        self.cells.get(address)
+    /// All entity positions within a tile. Returns the grid→entity map.
+    pub fn tile_entities(&self, address: &[u8]) -> Option<&HashMap<(i32, i32), EntityId>> {
+        self.tile_grid.get(address)
+    }
+
+    /// Look up an entity's facing direction.
+    pub fn direction(&self, entity: EntityId) -> Option<Direction> {
+        self.directions.get(entity).copied()
+    }
+
+    /// Look up an entity's structure kind.
+    #[allow(dead_code)]
+    pub fn kind(&self, entity: EntityId) -> Option<StructureKind> {
+        self.structures.get(entity).copied()
+    }
+
+    /// Look up the item an entity was placed from.
+    #[allow(dead_code)]
+    pub fn item(&self, entity: EntityId) -> Option<ItemId> {
+        self.items.get(entity).copied()
+    }
+
+    /// Look up an entity's canonical position.
+    #[allow(dead_code)]
+    pub fn position(&self, entity: EntityId) -> Option<&GridPos> {
+        self.positions.get(entity)
     }
 }
 
 #[cfg(test)]
 impl WorldState {
-    pub fn remove(&mut self, address: &[u8], grid_xy: (i32, i32)) -> Option<Structure> {
-        let cell = self.cells.get_mut(address)?;
-        let s = cell.structures.remove(&grid_xy);
-        if cell.structures.is_empty() {
-            self.cells.remove(address);
+    pub fn remove(&mut self, address: &[u8], grid_xy: (i32, i32)) -> Option<ItemId> {
+        let tile_slots = self.tile_grid.get_mut(address)?;
+        let entity = tile_slots.remove(&grid_xy)?;
+        let item = self.items.remove(entity);
+        self.structures.remove(entity);
+        self.positions.remove(entity);
+        self.directions.remove(entity);
+        if tile_slots.is_empty() {
+            self.tile_grid.remove(address);
         }
-        s
+        item
     }
 }
 
@@ -110,42 +208,85 @@ mod tests {
     }
 
     #[test]
-    fn test_place_and_get() {
+    fn test_place_and_query() {
         let mut world = WorldState::new();
         let addr = vec![0, 1];
-        let s = Structure { item: ItemId::Belt, direction: Direction::North };
-        assert!(world.place(&addr, (5, 10), s));
-        let cell = world.get_cell(&addr).unwrap();
-        assert_eq!(cell.structures.len(), 1);
-        assert_eq!(cell.structures[&(5, 10)].item, ItemId::Belt);
+        assert!(world.place(&addr, (5, 10), ItemId::Belt, Direction::North));
+
+        let entities = world.tile_entities(&addr).unwrap();
+        assert_eq!(entities.len(), 1);
+        let &entity = entities.get(&(5, 10)).unwrap();
+        assert_eq!(world.kind(entity), Some(StructureKind::Belt));
+        assert_eq!(world.direction(entity), Some(Direction::North));
+        assert_eq!(world.item(entity), Some(ItemId::Belt));
     }
 
     #[test]
     fn test_place_occupied() {
         let mut world = WorldState::new();
         let addr = vec![0];
-        let s1 = Structure { item: ItemId::Belt, direction: Direction::North };
-        let s2 = Structure { item: ItemId::Quadrupole, direction: Direction::East };
-        assert!(world.place(&addr, (0, 0), s1));
-        assert!(!world.place(&addr, (0, 0), s2));
+        assert!(world.place(&addr, (0, 0), ItemId::Belt, Direction::North));
+        assert!(!world.place(&addr, (0, 0), ItemId::Quadrupole, Direction::East));
     }
 
     #[test]
     fn test_remove() {
         let mut world = WorldState::new();
         let addr = vec![2];
-        let s = Structure { item: ItemId::Belt, direction: Direction::South };
-        world.place(&addr, (1, 1), s);
+        world.place(&addr, (1, 1), ItemId::Belt, Direction::South);
         let removed = world.remove(&addr, (1, 1));
-        assert!(removed.is_some());
-        assert_eq!(removed.unwrap().item, ItemId::Belt);
-        // Cell should be cleaned up
-        assert!(world.get_cell(&addr).is_none());
+        assert_eq!(removed, Some(ItemId::Belt));
+        // Tile grid should be cleaned up
+        assert!(world.tile_entities(&addr).is_none());
     }
 
     #[test]
     fn test_remove_nonexistent() {
         let mut world = WorldState::new();
         assert!(world.remove(&[0], (0, 0)).is_none());
+    }
+
+    #[test]
+    fn test_structure_kind_from_item() {
+        assert_eq!(StructureKind::from_item(ItemId::Belt), Some(StructureKind::Belt));
+        assert_eq!(StructureKind::from_item(ItemId::Quadrupole), Some(StructureKind::PowerNode));
+        assert_eq!(StructureKind::from_item(ItemId::Dynamo), Some(StructureKind::PowerSource));
+        assert_eq!(
+            StructureKind::from_item(ItemId::Composer),
+            Some(StructureKind::Machine(MachineType::Composer))
+        );
+        // Raw resources aren't placeable
+        assert_eq!(StructureKind::from_item(ItemId::NullSet), None);
+        assert_eq!(StructureKind::from_item(ItemId::Point), None);
+    }
+
+    #[test]
+    fn test_grid_pos_stored() {
+        let mut world = WorldState::new();
+        let addr = vec![3, 1, 4];
+        world.place(&addr, (32, -16), ItemId::Belt, Direction::East);
+
+        let entities = world.tile_entities(&addr).unwrap();
+        let &entity = entities.get(&(32, -16)).unwrap();
+        let pos = world.position(entity).unwrap();
+        assert_eq!(pos.gx, 32);
+        assert_eq!(pos.gy, -16);
+        assert_eq!(pos.tile.as_slice(), &[3, 1, 4]);
+    }
+
+    #[test]
+    fn test_entity_id_stable_after_other_inserts() {
+        let mut world = WorldState::new();
+        let addr = vec![0];
+        world.place(&addr, (0, 0), ItemId::Belt, Direction::North);
+        let &e1 = world.tile_entities(&addr).unwrap().get(&(0, 0)).unwrap();
+
+        // Place more entities
+        world.place(&addr, (1, 0), ItemId::Belt, Direction::East);
+        world.place(&addr, (2, 0), ItemId::Quadrupole, Direction::South);
+
+        // Original entity still valid
+        assert_eq!(world.kind(e1), Some(StructureKind::Belt));
+        assert_eq!(world.direction(e1), Some(Direction::North));
     }
 }

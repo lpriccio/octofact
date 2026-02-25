@@ -10,7 +10,7 @@ use crate::game::config::GameConfig;
 use crate::game::input::{GameAction, InputState};
 use crate::game::inventory::Inventory;
 use crate::game::recipes::RecipeIndex;
-use crate::game::world::{Structure, WorldState};
+use crate::game::world::{Direction, StructureKind, WorldState};
 use crate::hyperbolic::poincare::{canonical_polygon, polygon_disk_radius, Complex, Mobius, TilingConfig};
 use crate::hyperbolic::tiling::{format_address, TileAddr, TilingState};
 use crate::render::camera::Camera;
@@ -352,11 +352,7 @@ impl App {
         if self.inventory.count(mode.item) == 0 {
             return false;
         }
-        let structure = Structure {
-            item: mode.item,
-            direction: mode.direction,
-        };
-        if !self.world.place(address, grid_xy, structure) {
+        if !self.world.place(address, grid_xy, mode.item, mode.direction) {
             return false; // occupied
         }
         self.inventory.remove(mode.item, 1);
@@ -413,18 +409,20 @@ impl App {
         let address = running.tiling.tiles[result.tile_idx].address.clone();
 
         if self.try_place_at(result.tile_idx, &address, result.grid_xy, &mode) {
-            // Start drag state — axis determined on first move
+            // Lock drag axis parallel to the belt's facing direction
+            let horizontal = matches!(mode.direction, Direction::East | Direction::West);
+            let (fixed_coord, last_free) = if horizontal {
+                (result.grid_xy.1, result.grid_xy.0) // fixed gy, free gx
+            } else {
+                (result.grid_xy.0, result.grid_xy.1) // fixed gx, free gy
+            };
             self.belt_drag = Some(BeltDrag {
                 tile_idx: result.tile_idx,
                 address,
-                horizontal: true, // placeholder, set on first move
-                fixed_coord: 0,
-                last_free: 0,
+                horizontal,
+                fixed_coord,
+                last_free,
             });
-            // Store origin so first move can determine axis
-            let drag = self.belt_drag.as_mut().unwrap();
-            drag.last_free = result.grid_xy.0; // stash gx temporarily
-            drag.fixed_coord = result.grid_xy.1; // stash gy temporarily
         }
     }
 
@@ -439,83 +437,130 @@ impl App {
             None => return,
         };
 
-        let result = match self.find_clicked_tile(sx, sy) {
-            Some(r) => r,
-            None => return,
-        };
+        // Copy out drag state before any mutable operations
+        let horizontal = drag.horizontal;
+        let fixed_coord = drag.fixed_coord;
+        let last_free = drag.last_free;
+        let old_address = drag.address.clone();
+        let old_tile_idx = drag.tile_idx;
+        let khs = self.klein_half_side;
 
-        // Only drag within the same tile
-        if result.tile_idx != drag.tile_idx {
-            return;
-        }
+        // Compute cursor's virtual (unclamped) grid position on the drag tile.
+        // If the cursor has moved beyond ±32, it's past the tile edge.
+        let virtual_free = {
+            let running = self.running.as_ref().unwrap();
+            let width = running.gpu.config.width as f32;
+            let height = running.gpu.config.height as f32;
 
-        let (gx, gy) = result.grid_xy;
-        let origin_gx = drag.last_free;
-        let origin_gy = drag.fixed_coord;
-
-        // First real move: determine axis from the larger displacement
-        let dx_abs = (gx - origin_gx).abs();
-        let dy_abs = (gy - origin_gy).abs();
-        if dx_abs == 0 && dy_abs == 0 {
-            return;
-        }
-
-        // Copy out drag state so we can mutate self freely
-        let mut horizontal = drag.horizontal;
-        let mut fixed_coord = drag.fixed_coord;
-        let mut last_free = drag.last_free;
-        let address = drag.address.clone();
-        let tile_idx = drag.tile_idx;
-
-        // On first motion, lock axis based on which direction moved more
-        let first_motion = horizontal && fixed_coord == origin_gy && last_free == origin_gx
-            && (dx_abs > 0 || dy_abs > 0);
-        if first_motion {
-            if dx_abs >= dy_abs {
-                horizontal = true;
-                fixed_coord = origin_gy;
-                last_free = origin_gx;
-            } else {
-                horizontal = false;
-                fixed_coord = origin_gx;
-                last_free = origin_gy;
-            }
-        }
-
-        // Constrain to the locked axis
-        let target_free = if horizontal { gx } else { gy };
-
-        if target_free == last_free {
-            // Write back axis lock even if no new placement
-            if let Some(d) = self.belt_drag.as_mut() {
-                d.horizontal = horizontal;
-                d.fixed_coord = fixed_coord;
-                d.last_free = last_free;
-            }
-            return;
-        }
-
-        // Fill from last_free toward target_free
-        let step = if target_free > last_free { 1 } else { -1 };
-        let mut current = last_free + step;
-        loop {
-            let grid_xy = if horizontal {
-                (current, fixed_coord)
-            } else {
-                (fixed_coord, current)
+            let click_disk = match self.camera.unproject_to_disk(sx, sy, width, height) {
+                Some(d) => d,
+                None => return,
             };
-            self.try_place_at(tile_idx, &address, grid_xy, &mode);
-            if current == target_free {
-                break;
-            }
-            current += step;
-        }
 
-        // Update drag state
-        if let Some(d) = self.belt_drag.as_mut() {
-            d.horizontal = horizontal;
-            d.fixed_coord = fixed_coord;
-            d.last_free = target_free;
+            let inv_view = self.camera.local.inverse();
+            let tile_xform = running.tiling.tiles[old_tile_idx].transform;
+            let combined = inv_view.compose(&tile_xform);
+            let inv_combined = combined.inverse();
+            let local_p = inv_combined.apply(click_disk);
+            let r2 = local_p.re * local_p.re + local_p.im * local_p.im;
+            let local_kx = 2.0 * local_p.re / (1.0 + r2);
+            let local_ky = 2.0 * local_p.im / (1.0 + r2);
+            let norm_x = local_kx / (2.0 * khs);
+            let norm_y = local_ky / (2.0 * khs);
+            let divisions = 64.0_f64;
+            let vgx = (norm_x * divisions).round() as i32;
+            let vgy = (norm_y * divisions).round() as i32;
+            if horizontal { vgx } else { vgy }
+        }; // running borrow dropped
+
+        const MAX_DRAG_STEP: i32 = 4;
+
+        if virtual_free.abs() <= 32 {
+            // --- Same tile: cursor is within grid bounds ---
+            let mut target_free = virtual_free;
+            target_free = target_free.clamp(last_free - MAX_DRAG_STEP, last_free + MAX_DRAG_STEP);
+            if target_free == last_free { return; }
+
+            let step = if target_free > last_free { 1 } else { -1 };
+            let mut current = last_free + step;
+            loop {
+                let grid_xy = if horizontal { (current, fixed_coord) } else { (fixed_coord, current) };
+                self.try_place_at(old_tile_idx, &old_address, grid_xy, &mode);
+                if current == target_free { break; }
+                current += step;
+            }
+
+            if let Some(d) = self.belt_drag.as_mut() {
+                d.last_free = target_free;
+            }
+        } else {
+            // --- Cross-tile: cursor is beyond ±32 on the free axis ---
+            let old_edge = if virtual_free > 32 { 32 } else { -32 };
+
+            // Fill toward edge on old tile (capped by MAX_DRAG_STEP)
+            let old_target = old_edge.clamp(last_free - MAX_DRAG_STEP, last_free + MAX_DRAG_STEP);
+            if old_target != last_free {
+                let step = if old_target > last_free { 1 } else { -1 };
+                let mut current = last_free + step;
+                loop {
+                    let grid_xy = if horizontal { (current, fixed_coord) } else { (fixed_coord, current) };
+                    self.try_place_at(old_tile_idx, &old_address, grid_xy, &mode);
+                    if current == old_target { break; }
+                    current += step;
+                }
+            }
+
+            if old_target == old_edge {
+                // Reached the edge — find the neighboring tile via cursor
+                let result = match self.find_clicked_tile(sx, sy) {
+                    Some(r) => r,
+                    None => {
+                        if let Some(d) = self.belt_drag.as_mut() { d.last_free = old_target; }
+                        return;
+                    }
+                };
+
+                if result.tile_idx == old_tile_idx {
+                    // Cursor resolved to the same tile; just stay at edge
+                    if let Some(d) = self.belt_drag.as_mut() { d.last_free = old_target; }
+                    return;
+                }
+
+                // Get new tile info (immutable borrow, then drop before mutable ops)
+                let (new_tile_idx, new_address) = {
+                    let running = self.running.as_ref().unwrap();
+                    (result.tile_idx, running.tiling.tiles[result.tile_idx].address.clone())
+                };
+
+                // For {4,n} (even p), grids align straight across edges:
+                // old gx=+32 → new gx=-32 (same gy), and vice versa
+                let new_edge = -old_edge;
+                let new_free = if horizontal { result.grid_xy.0 } else { result.grid_xy.1 };
+                let new_target = new_free.clamp(new_edge - MAX_DRAG_STEP, new_edge + MAX_DRAG_STEP);
+
+                // Fill from new_edge toward cursor on new tile (inclusive)
+                let mut current = new_edge;
+                loop {
+                    let grid_xy = if horizontal { (current, fixed_coord) } else { (fixed_coord, current) };
+                    self.try_place_at(new_tile_idx, &new_address, grid_xy, &mode);
+                    if current == new_target { break; }
+                    current += if new_target > new_edge { 1 } else { -1 };
+                }
+
+                // Switch drag to the new tile
+                self.belt_drag = Some(BeltDrag {
+                    tile_idx: new_tile_idx,
+                    address: new_address,
+                    horizontal,
+                    fixed_coord,
+                    last_free: new_target,
+                });
+            } else {
+                // Haven't reached edge yet; update position
+                if let Some(d) = self.belt_drag.as_mut() {
+                    d.last_free = old_target;
+                }
+            }
         }
     }
 
@@ -720,8 +765,8 @@ impl App {
                         if disk_center.abs() > 0.9 {
                             continue;
                         }
-                        let cell = match self.world.get_cell(&tile.address) {
-                            Some(c) => c,
+                        let entities = match self.world.tile_entities(&tile.address) {
+                            Some(e) => e,
                             None => continue,
                         };
                         let elevation = running.extra_elevation.get(&tile_idx).copied().unwrap_or(0.0);
@@ -731,9 +776,42 @@ impl App {
                             continue;
                         }
 
-                        for (&(gx, gy), structure) in &cell.structures {
+                        for (&(gx, gy), &entity) in entities {
+                            let kind = match self.world.kind(entity) {
+                                Some(k) => k,
+                                None => continue,
+                            };
+
+                            // Per-kind colors
+                            let (face_rgb, hilite_rgb, shadow_rgb, edge_rgb) = match kind {
+                                StructureKind::Belt => (
+                                    (140, 140, 145),
+                                    (180, 180, 185),
+                                    (60, 60, 60),
+                                    (20, 20, 20),
+                                ),
+                                StructureKind::PowerNode => (
+                                    (200, 180, 50),
+                                    (230, 210, 100),
+                                    (120, 100, 20),
+                                    (60, 50, 10),
+                                ),
+                                StructureKind::PowerSource => (
+                                    (220, 200, 60),
+                                    (250, 230, 120),
+                                    (140, 120, 30),
+                                    (70, 60, 15),
+                                ),
+                                StructureKind::Machine(_) => (
+                                    (100, 130, 180),
+                                    (140, 170, 210),
+                                    (40, 60, 90),
+                                    (15, 25, 45),
+                                ),
+                            };
+
                             // Project fractional grid coords through the full 3D pipeline
-                            // Uses unclamped projection so partially offscreen belts still render
+                            // Uses unclamped projection so partially offscreen structures still render
                             let grid_to_screen = |fx: f64, fy: f64| -> Option<egui::Pos2> {
                                 let skx = (fx / divisions) * 2.0 * khs;
                                 let sky = (fy / divisions) * 2.0 * khs;
@@ -751,7 +829,7 @@ impl App {
                             let cy = gy as f64;
                             let h = 0.48; // slightly inset from full grid cell
 
-                            // Four corners of the belt, projected flat on the surface
+                            // Four corners, projected flat on the surface
                             let c0 = grid_to_screen(cx - h, cy - h);
                             let c1 = grid_to_screen(cx + h, cy - h);
                             let c2 = grid_to_screen(cx + h, cy + h);
@@ -762,10 +840,6 @@ impl App {
                                 _ => continue,
                             };
 
-                            // Alpha only controls distance fade; face/arrow are
-                            // fully opaque at close range to prevent tile-surface
-                            // bleed-through (the eldritch palette shifts under Mobius
-                            // causing flicker through semi-transparent layers).
                             let a = (alpha * 255.0) as u8;
 
                             // Dark outer edge (slightly larger quad)
@@ -780,7 +854,7 @@ impl App {
                             }).collect();
                             painter.add(egui::Shape::convex_polygon(
                                 edge_corners,
-                                egui::Color32::from_rgba_unmultiplied(20, 20, 20, a),
+                                egui::Color32::from_rgba_unmultiplied(edge_rgb.0, edge_rgb.1, edge_rgb.2, a),
                                 egui::Stroke::NONE,
                             ));
 
@@ -793,14 +867,14 @@ impl App {
                             }).collect();
                             painter.add(egui::Shape::convex_polygon(
                                 hilite_corners,
-                                egui::Color32::from_rgba_unmultiplied(180, 180, 185, a),
+                                egui::Color32::from_rgba_unmultiplied(hilite_rgb.0, hilite_rgb.1, hilite_rgb.2, a),
                                 egui::Stroke::NONE,
                             ));
 
-                            // Main belt face (opaque to prevent tile bleed-through)
+                            // Main face
                             painter.add(egui::Shape::convex_polygon(
                                 corners.to_vec(),
-                                egui::Color32::from_rgba_unmultiplied(140, 140, 145, a),
+                                egui::Color32::from_rgba_unmultiplied(face_rgb.0, face_rgb.1, face_rgb.2, a),
                                 egui::Stroke::NONE,
                             ));
 
@@ -813,22 +887,80 @@ impl App {
                             }).collect();
                             painter.add(egui::Shape::convex_polygon(
                                 shadow_corners,
-                                egui::Color32::from_rgba_unmultiplied(60, 60, 60, a),
+                                egui::Color32::from_rgba_unmultiplied(shadow_rgb.0, shadow_rgb.1, shadow_rgb.2, a),
                                 egui::Stroke::NONE,
                             ));
 
-                            // Direction arrow — projected triangle flat on surface
-                            let (dx, dy) = structure.direction.grid_offset();
-                            let tip = grid_to_screen(cx + dx * 0.35, cy + dy * 0.35);
-                            let bl = grid_to_screen(cx - dx * 0.25 - dy * 0.2, cy - dy * 0.25 + dx * 0.2);
-                            let br = grid_to_screen(cx - dx * 0.25 + dy * 0.2, cy - dy * 0.25 - dx * 0.2);
-
-                            if let (Some(t), Some(l), Some(r)) = (tip, bl, br) {
-                                painter.add(egui::Shape::convex_polygon(
-                                    vec![t, l, r],
-                                    egui::Color32::from_rgba_unmultiplied(30, 30, 30, a),
-                                    egui::Stroke::NONE,
-                                ));
+                            // Kind-specific symbol
+                            match kind {
+                                StructureKind::Belt => {
+                                    // Direction arrow for belts
+                                    let dir = match self.world.direction(entity) {
+                                        Some(d) => d,
+                                        None => continue,
+                                    };
+                                    let (dx, dy) = dir.grid_offset();
+                                    let tip = grid_to_screen(cx + dx * 0.35, cy + dy * 0.35);
+                                    let bl = grid_to_screen(cx - dx * 0.25 - dy * 0.2, cy - dy * 0.25 + dx * 0.2);
+                                    let br = grid_to_screen(cx - dx * 0.25 + dy * 0.2, cy - dy * 0.25 - dx * 0.2);
+                                    if let (Some(t), Some(l), Some(r)) = (tip, bl, br) {
+                                        painter.add(egui::Shape::convex_polygon(
+                                            vec![t, l, r],
+                                            egui::Color32::from_rgba_unmultiplied(30, 30, 30, a),
+                                            egui::Stroke::NONE,
+                                        ));
+                                    }
+                                }
+                                StructureKind::PowerNode | StructureKind::PowerSource => {
+                                    // "+" cross symbol for power structures
+                                    let arm = 0.28;
+                                    let w = 0.08;
+                                    let cross_color = egui::Color32::from_rgba_unmultiplied(60, 50, 10, a);
+                                    // Horizontal bar
+                                    if let (Some(a0), Some(a1), Some(a2), Some(a3)) = (
+                                        grid_to_screen(cx - arm, cy - w),
+                                        grid_to_screen(cx + arm, cy - w),
+                                        grid_to_screen(cx + arm, cy + w),
+                                        grid_to_screen(cx - arm, cy + w),
+                                    ) {
+                                        painter.add(egui::Shape::convex_polygon(
+                                            vec![a0, a1, a2, a3],
+                                            cross_color,
+                                            egui::Stroke::NONE,
+                                        ));
+                                    }
+                                    // Vertical bar
+                                    if let (Some(a0), Some(a1), Some(a2), Some(a3)) = (
+                                        grid_to_screen(cx - w, cy - arm),
+                                        grid_to_screen(cx + w, cy - arm),
+                                        grid_to_screen(cx + w, cy + arm),
+                                        grid_to_screen(cx - w, cy + arm),
+                                    ) {
+                                        painter.add(egui::Shape::convex_polygon(
+                                            vec![a0, a1, a2, a3],
+                                            cross_color,
+                                            egui::Stroke::NONE,
+                                        ));
+                                    }
+                                }
+                                StructureKind::Machine(_) => {
+                                    // Gear-like circle for machines
+                                    let dir = match self.world.direction(entity) {
+                                        Some(d) => d,
+                                        None => continue,
+                                    };
+                                    let (dx, dy) = dir.grid_offset();
+                                    let tip = grid_to_screen(cx + dx * 0.35, cy + dy * 0.35);
+                                    let bl = grid_to_screen(cx - dx * 0.25 - dy * 0.2, cy - dy * 0.25 + dx * 0.2);
+                                    let br = grid_to_screen(cx - dx * 0.25 + dy * 0.2, cy - dy * 0.25 - dx * 0.2);
+                                    if let (Some(t), Some(l), Some(r)) = (tip, bl, br) {
+                                        painter.add(egui::Shape::convex_polygon(
+                                            vec![t, l, r],
+                                            egui::Color32::from_rgba_unmultiplied(15, 25, 45, a),
+                                            egui::Stroke::NONE,
+                                        ));
+                                    }
+                                }
                             }
                         }
                     }

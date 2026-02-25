@@ -19,11 +19,11 @@
 - [x] Add `slotmap` and `smallvec` to Cargo.toml
 - [x] Define `TileAddr = SmallVec<[u8; 12]>` type alias
 - [x] Replace `Vec<u8>` with `TileAddr` in `Tile`, `WorldState`, `CellState`, `BeltDrag`, etc.
-- [ ] Define `EntityId` via `slotmap::SlotMap`
-- [ ] Rewrite `WorldState`: `tile_grid` + `structures` SlotMap + `positions`/`directions` SecondaryMaps
-- [ ] Define `StructureKind` enum: `Belt(BeltId)`, `Machine(MachineId)`, `PowerNode`, etc.
-- [ ] Update all callers in `app.rs`: `try_place_at`, `handle_placement_click`, `handle_placement_drag`
-- [ ] Update belt overlay rendering to use new world queries
+- [x] Define `EntityId` via `slotmap::SlotMap`
+- [x] Rewrite `WorldState`: `tile_grid` + `structures` SlotMap + `positions`/`directions` SecondaryMaps
+- [x] Define `StructureKind` enum: `Belt(BeltId)`, `Machine(MachineId)`, `PowerNode`, etc.
+- [x] Update all callers in `app.rs`: `try_place_at`, `handle_placement_click`, `handle_placement_drag`
+- [x] Update belt overlay rendering to use new world queries
 - [ ] Extract `UiState` struct from `App` (flash, drag, cursor, panel open flags)
 
 ## Phase 3: Belt Simulation

@@ -70,11 +70,11 @@
 
 > Quadrupoles transmit power, Dynamos produce it. Quadrupoles alone don't generate energy.
 
-- [ ] Change Quadrupole from Producer to Relay (transmits but produces 0 power)
-- [ ] Dynamo is the sole power producer (rate 8.0)
-- [ ] Relay nodes extend the power graph: machines connect to relays, relays connect to relays and dynamos
-- [ ] Update power overlay to distinguish relays (no pip) from producers (bright pip)
-- [ ] Update item descriptions to reflect Quadrupole=transmitter, Dynamo=generator
+- [x] Change Quadrupole from Producer to Relay (transmits but produces 0 power)
+- [x] Dynamo is the sole power producer (rate 8.0)
+- [x] Relay nodes extend the power graph: machines connect to relays, relays connect to relays and dynamos
+- [x] Update power overlay to distinguish relays (no pip) from producers (bright pip)
+- [x] Update item descriptions to reflect Quadrupole=transmitter, Dynamo=generator
 
 ## Phase 6: Instanced Rendering
 

@@ -80,7 +80,7 @@
 
 > Replace per-tile draw calls and egui belt overlay with instanced rendering.
 
-- [ ] Define instance buffer types: `TileInstance`, `BeltInstance`, `MachineInstance`, `ItemInstance`
+- [x] Define instance buffer types: `TileInstance`, `BeltInstance`, `MachineInstance`, `ItemInstance`
 - [ ] Create `InstanceBuffer<T>` helper (staging Vec + GPU buffer + upload)
 - [ ] Create `RenderEngine` struct, extract rendering from `app.rs`
 - [ ] Write `tile.wgsl` shader with per-instance Mobius from vertex buffer

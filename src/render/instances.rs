@@ -4,6 +4,83 @@
 //! `desc()` returning `VertexBufferLayout` with `step_mode: Instance`.
 //! Shader locations start at 5 to avoid colliding with the per-vertex
 //! attributes (locations 0–2).
+//!
+//! [`InstanceBuffer<T>`] manages a CPU staging vec + GPU buffer with
+//! grow-on-demand upload for any `Pod` instance type.
+
+/// Generic instance buffer: CPU staging vec + GPU vertex buffer.
+///
+/// Usage each frame:
+/// 1. `clear()`
+/// 2. `push()` instances
+/// 3. `upload(device, queue)` — writes staging data to GPU, growing buffer if needed
+/// 4. Bind with `set_vertex_buffer(slot, buf.slice())`
+/// 5. Draw with `0..buf.count()` instances
+pub struct InstanceBuffer<T: bytemuck::Pod> {
+    staging: Vec<T>,
+    buffer: wgpu::Buffer,
+    /// Current GPU buffer capacity in number of elements.
+    capacity: usize,
+    label: &'static str,
+}
+
+impl<T: bytemuck::Pod> InstanceBuffer<T> {
+    /// Create a new instance buffer with the given initial capacity (in elements).
+    pub fn new(device: &wgpu::Device, label: &'static str, initial_capacity: usize) -> Self {
+        let capacity = initial_capacity.max(1);
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size: (capacity * std::mem::size_of::<T>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        Self {
+            staging: Vec::with_capacity(capacity),
+            buffer,
+            capacity,
+            label,
+        }
+    }
+
+    /// Clear the staging buffer for the next frame.
+    pub fn clear(&mut self) {
+        self.staging.clear();
+    }
+
+    /// Push an instance into the staging buffer.
+    pub fn push(&mut self, instance: T) {
+        self.staging.push(instance);
+    }
+
+    /// Number of instances staged for this frame.
+    pub fn count(&self) -> u32 {
+        self.staging.len() as u32
+    }
+
+    /// Upload staging data to the GPU buffer, growing the buffer if needed.
+    pub fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        if self.staging.is_empty() {
+            return;
+        }
+        // Grow GPU buffer if staging exceeds capacity.
+        if self.staging.len() > self.capacity {
+            self.capacity = self.staging.len().next_power_of_two();
+            self.buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(self.label),
+                size: (self.capacity * std::mem::size_of::<T>()) as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+        }
+        queue.write_buffer(&self.buffer, 0, bytemuck::cast_slice(&self.staging));
+    }
+
+    /// Return the buffer slice covering all uploaded instances.
+    pub fn slice(&self) -> wgpu::BufferSlice<'_> {
+        let size = self.staging.len() * std::mem::size_of::<T>();
+        self.buffer.slice(..size as u64)
+    }
+}
 
 /// Per-tile instance data. Carries the composed Mobius transform
 /// (camera × tile) so the vertex shader can position each tile in

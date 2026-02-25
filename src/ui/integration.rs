@@ -30,14 +30,6 @@ impl EguiIntegration {
         response.consumed
     }
 
-    pub fn wants_keyboard_input(&self) -> bool {
-        self.ctx.wants_keyboard_input()
-    }
-
-    pub fn wants_pointer_input(&self) -> bool {
-        self.ctx.wants_pointer_input()
-    }
-
     pub fn begin_frame(&mut self, window: &Window) {
         let raw_input = self.state.take_egui_input(window);
         self.ctx.begin_pass(raw_input);

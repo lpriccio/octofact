@@ -214,6 +214,7 @@ impl InputState {
         }
     }
 
+    #[cfg(test)]
     pub fn with_defaults() -> Self {
         Self::new(default_bindings())
     }

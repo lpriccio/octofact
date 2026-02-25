@@ -347,6 +347,7 @@ pub struct Recipe {
     pub machine: MachineType,
     pub inputs: Vec<(ItemId, u32)>,
     pub output: ItemId,
+    #[allow(dead_code)] // validated in tests; will be read by machine simulation
     pub output_count: u32,
 }
 

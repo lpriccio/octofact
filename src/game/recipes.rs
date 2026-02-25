@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use super::items::{all_recipes, ItemId, MachineType, Recipe};
-use super::inventory::Inventory;
 
 pub struct RecipeIndex {
     pub all: Vec<Recipe>,
     by_output: HashMap<ItemId, Vec<usize>>,
+    #[allow(dead_code)] // used in tests; will be used by machine simulation
     by_machine: HashMap<MachineType, Vec<usize>>,
 }
 
@@ -29,6 +29,10 @@ impl RecipeIndex {
             .unwrap_or_default()
     }
 
+}
+
+#[cfg(test)]
+impl RecipeIndex {
     pub fn recipes_using(&self, machine: MachineType) -> Vec<&Recipe> {
         self.by_machine
             .get(&machine)
@@ -36,7 +40,7 @@ impl RecipeIndex {
             .unwrap_or_default()
     }
 
-    pub fn can_craft(&self, recipe: &Recipe, inventory: &Inventory) -> bool {
+    pub fn can_craft(&self, recipe: &Recipe, inventory: &super::inventory::Inventory) -> bool {
         recipe.inputs.iter().all(|(item, count)| inventory.count(*item) >= *count)
     }
 }
@@ -50,6 +54,7 @@ impl Default for RecipeIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::game::inventory::Inventory;
 
     #[test]
     fn test_recipe_index_lookup_by_output() {

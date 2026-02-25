@@ -41,10 +41,6 @@ impl Inventory {
         self.items.get(&item).copied().unwrap_or(0)
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (&ItemId, &u32)> {
-        self.items.iter()
-    }
-
     pub fn non_empty_items(&self) -> Vec<(ItemId, u32)> {
         let mut items: Vec<(ItemId, u32)> = self.items
             .iter()

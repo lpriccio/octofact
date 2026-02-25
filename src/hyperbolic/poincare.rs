@@ -20,10 +20,6 @@ impl TilingConfig {
         Self { p, q }
     }
 
-    pub fn num_sides(&self) -> usize {
-        self.p as usize
-    }
-
     pub fn vertex_angle_step(&self) -> f64 {
         2.0 * PI / self.p as f64
     }

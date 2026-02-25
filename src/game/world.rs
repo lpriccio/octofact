@@ -42,6 +42,7 @@ impl Direction {
 
 #[derive(Clone, Debug)]
 pub struct Structure {
+    #[allow(dead_code)] // read in tests; will be replaced by StructureKind in Phase 2
     pub item: ItemId,
     pub direction: Direction,
 }
@@ -71,6 +72,13 @@ impl WorldState {
         true
     }
 
+    pub fn get_cell(&self, address: &[u8]) -> Option<&CellState> {
+        self.cells.get(address)
+    }
+}
+
+#[cfg(test)]
+impl WorldState {
     pub fn remove(&mut self, address: &[u8], grid_xy: (i32, i32)) -> Option<Structure> {
         let cell = self.cells.get_mut(address)?;
         let s = cell.structures.remove(&grid_xy);
@@ -78,10 +86,6 @@ impl WorldState {
             self.cells.remove(address);
         }
         s
-    }
-
-    pub fn get_cell(&self, address: &[u8]) -> Option<&CellState> {
-        self.cells.get(address)
     }
 }
 

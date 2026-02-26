@@ -89,7 +89,6 @@ impl PowerNetwork {
     }
 
     /// Remove a power node by entity ID.
-    #[allow(dead_code)]
     pub fn remove(&mut self, entity: EntityId) -> bool {
         let Some(idx) = self.entity_to_idx.remove(&entity) else {
             return false;

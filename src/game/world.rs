@@ -262,7 +262,6 @@ impl WorldState {
     }
 }
 
-#[cfg(test)]
 impl WorldState {
     pub fn remove(&mut self, address: &[u8], grid_xy: (i32, i32)) -> Option<ItemId> {
         let tile_slots = self.tile_grid.get_mut(address)?;

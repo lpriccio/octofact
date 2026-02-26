@@ -435,6 +435,127 @@ impl BeltNetwork {
         }
     }
 
+    /// Remove a belt entity from the network. This handles splitting or
+    /// shrinking the transport line as needed. Items on the removed segment
+    /// are lost (dropped).
+    pub fn on_belt_removed(&mut self, entity: EntityId) {
+        let seg = match self.segments.remove(entity) {
+            Some(s) => s,
+            None => return,
+        };
+        let line = match self.lines.get(seg.line) {
+            Some(l) => l,
+            None => return,
+        };
+
+        let line_len = line.length;
+
+        if line_len == FP_SCALE {
+            // Only segment on the line — remove the entire line.
+            // Clear any external references pointing to this line.
+            let input_end = line.input_end;
+            let output_end = line.output_end;
+            self.lines.remove(seg.line);
+
+            if let BeltEnd::Belt(other_id) = output_end {
+                if let Some(other) = self.lines.get_mut(other_id) {
+                    if other.input_end == BeltEnd::Belt(seg.line) {
+                        other.input_end = BeltEnd::Open;
+                    }
+                }
+            }
+            if let BeltEnd::Belt(other_id) = input_end {
+                if let Some(other) = self.lines.get_mut(other_id) {
+                    if other.output_end == BeltEnd::Belt(seg.line) {
+                        other.output_end = BeltEnd::Open;
+                    }
+                }
+            }
+            return;
+        }
+
+        if seg.offset == 0 {
+            // Removing the output-end segment. Shrink the line.
+            let line = self.lines.get_mut(seg.line).unwrap();
+            // Remove items in the removed segment's range [0, FP_SCALE)
+            line.items.retain(|i| i.pos >= FP_SCALE);
+            // Shift remaining items and segments toward output
+            for item in &mut line.items {
+                item.pos -= FP_SCALE;
+            }
+            line.length -= FP_SCALE;
+            for (_, s) in self.segments.iter_mut() {
+                if s.line == seg.line {
+                    s.offset -= FP_SCALE;
+                }
+            }
+        } else if seg.offset == line_len - FP_SCALE {
+            // Removing the input-end segment. Shrink the line.
+            let line = self.lines.get_mut(seg.line).unwrap();
+            // Remove items in the removed segment's range
+            let seg_start = seg.offset;
+            line.items.retain(|i| i.pos < seg_start);
+            line.length -= FP_SCALE;
+        } else {
+            // Middle segment: split into two lines.
+            // Keep the output half [0, seg.offset) on the original line.
+            // Create a new line for the input half [seg.offset + FP_SCALE, line_len).
+            let old_line_id = seg.line;
+            let split_point = seg.offset;
+            let old_line = self.lines.get(old_line_id).unwrap();
+            let old_input_end = old_line.input_end;
+
+            // Collect items for each half
+            let mut output_items = Vec::new();
+            let mut input_items = Vec::new();
+            for item in &old_line.items {
+                if item.pos < split_point {
+                    output_items.push(item.clone());
+                } else if item.pos >= split_point + FP_SCALE {
+                    input_items.push(BeltItem {
+                        item: item.item,
+                        pos: item.pos - split_point - FP_SCALE,
+                    });
+                }
+                // Items in [split_point, split_point + FP_SCALE) are dropped
+            }
+
+            let input_half_len = line_len - split_point - FP_SCALE;
+
+            // Update the original line to be the output half
+            let line = self.lines.get_mut(old_line_id).unwrap();
+            line.items = output_items;
+            line.length = split_point;
+            line.input_end = BeltEnd::Open;
+
+            // Create the new input-half line
+            let new_line_id = self.lines.insert(TransportLine {
+                items: input_items,
+                speed: DEFAULT_BELT_SPEED,
+                length: input_half_len,
+                input_end: old_input_end,
+                output_end: BeltEnd::Open,
+            });
+
+            // Update external line that fed into the old input end
+            if let BeltEnd::Belt(feeder_id) = old_input_end {
+                if let Some(feeder) = self.lines.get_mut(feeder_id) {
+                    if feeder.output_end == BeltEnd::Belt(old_line_id) {
+                        feeder.output_end = BeltEnd::Belt(new_line_id);
+                    }
+                }
+            }
+
+            // Reassign segments from the input half to the new line
+            for (_, s) in self.segments.iter_mut() {
+                if s.line == old_line_id && s.offset > split_point {
+                    s.line = new_line_id;
+                    s.offset -= split_point + FP_SCALE;
+                }
+            }
+        }
+    }
+
     /// Advance N ticks (for chunk fast-forward).
     #[allow(dead_code)]
     pub fn fast_forward(&mut self, ticks: u32) {

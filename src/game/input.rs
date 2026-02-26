@@ -19,6 +19,7 @@ pub enum GameAction {
     RotateStructure,
     ToggleGrid,
     OpenPlacement,
+    DestroyBuilding,
 }
 
 impl GameAction {
@@ -39,6 +40,7 @@ impl GameAction {
             Self::RotateStructure => "Rotate Structure",
             Self::ToggleGrid => "Toggle Grid",
             Self::OpenPlacement => "Placement Menu",
+            Self::DestroyBuilding => "Destroy Building",
         }
     }
 
@@ -49,6 +51,7 @@ impl GameAction {
             CameraUp, CameraDown, ToggleLabels, OpenSettings,
             OpenInventory, ToggleViewMode, RaiseTerrain,
             LowerTerrain, RotateStructure, ToggleGrid, OpenPlacement,
+            DestroyBuilding,
         ]
     }
 }
@@ -191,6 +194,7 @@ pub fn default_bindings() -> HashMap<GameAction, KeyBind> {
         (RaiseTerrain, KeyBind::with_shift(KeyCode::ArrowUp)),
         (LowerTerrain, KeyBind::with_shift(KeyCode::ArrowDown)),
         (OpenPlacement, KeyBind::new(KeyCode::KeyP)),
+        (DestroyBuilding, KeyBind::new(KeyCode::KeyX)),
     ])
 }
 
@@ -342,6 +346,6 @@ mod tests {
 
     #[test]
     fn test_all_actions_listed() {
-        assert_eq!(GameAction::all().len(), 15);
+        assert_eq!(GameAction::all().len(), 16);
     }
 }

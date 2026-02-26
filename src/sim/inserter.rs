@@ -89,25 +89,24 @@ pub struct RotatedPort {
     pub kind: PortKind,
     /// Machine slot index.
     pub slot: usize,
-    /// Grid cell offset within the footprint (canonical, not yet rotated).
-    /// Full rotation of cell offsets is handled by the rotation milestone.
+    /// Grid cell offset within the rotated footprint.
     pub cell_offset: (i32, i32),
 }
 
 /// Get the rotated port layout for a machine at the given facing direction.
 ///
-/// Rotates port side directions. Cell offsets are passed through as canonical
-/// values — full cell offset rotation is handled by the rotation milestone.
+/// Rotates both port side directions and cell offsets within the footprint.
 #[allow(dead_code)]
 pub fn rotated_ports(machine_type: MachineType, facing: Direction) -> Vec<RotatedPort> {
     let n = facing.rotations_from_north();
+    let (w, h) = machine_type.footprint();
     port_layout(machine_type)
         .iter()
         .map(|def| RotatedPort {
             side: def.side.rotate_n_cw(n),
             kind: def.kind,
             slot: def.slot,
-            cell_offset: def.cell_offset,
+            cell_offset: facing.rotate_cell(def.cell_offset.0, def.cell_offset.1, w, h),
         })
         .collect()
 }
@@ -480,12 +479,97 @@ mod tests {
     }
 
     #[test]
-    fn rotated_ports_preserve_cell_offsets() {
-        // Cell offsets are passed through unchanged (rotation is a separate milestone)
+    fn port_at_cell_on_side_with_rotation() {
+        // Inverter facing East (2×3 footprint):
+        //   input at (0,1) West, output at (1,1) East
+        let port = port_at_cell_on_side(MachineType::Inverter, Direction::East, (0, 1), Direction::West);
+        assert!(port.is_some());
+        assert_eq!(port.unwrap().kind, PortKind::Input);
+
+        let port = port_at_cell_on_side(MachineType::Inverter, Direction::East, (1, 1), Direction::East);
+        assert!(port.is_some());
+        assert_eq!(port.unwrap().kind, PortKind::Output);
+
+        // Old canonical offset (1,1) with South should not match when facing East
+        let port = port_at_cell_on_side(MachineType::Inverter, Direction::East, (1, 1), Direction::South);
+        assert!(port.is_none());
+    }
+
+    #[test]
+    fn rotated_ports_rotate_cell_offsets() {
+        // Inverter (3×2) facing East: footprint becomes (2, 3).
+        // Canonical input at (1,1) South → rotated to (0,1) West.
+        // Canonical output at (1,0) North → rotated to (1,1) East.
         let ports = rotated_ports(MachineType::Inverter, Direction::East);
         let input = ports.iter().find(|p| p.kind == PortKind::Input).unwrap();
-        assert_eq!(input.cell_offset, (1, 1));
+        assert_eq!(input.cell_offset, (0, 1));
+        assert_eq!(input.side, Direction::West);
         let output = ports.iter().find(|p| p.kind == PortKind::Output).unwrap();
-        assert_eq!(output.cell_offset, (1, 0));
+        assert_eq!(output.cell_offset, (1, 1));
+        assert_eq!(output.side, Direction::East);
+    }
+
+    #[test]
+    fn rotated_ports_south_cell_offsets() {
+        // Inverter (3×2) facing South: footprint stays (3, 2).
+        // Canonical input at (1,1) South → rotated to (1,0) North.
+        // Canonical output at (1,0) North → rotated to (1,1) South.
+        let ports = rotated_ports(MachineType::Inverter, Direction::South);
+        let input = ports.iter().find(|p| p.kind == PortKind::Input).unwrap();
+        assert_eq!(input.cell_offset, (1, 0));
+        assert_eq!(input.side, Direction::North);
+        let output = ports.iter().find(|p| p.kind == PortKind::Output).unwrap();
+        assert_eq!(output.cell_offset, (1, 1));
+        assert_eq!(output.side, Direction::South);
+    }
+
+    #[test]
+    fn rotated_ports_west_cell_offsets() {
+        // Inverter (3×2) facing West: footprint becomes (2, 3).
+        // Canonical input at (1,1) South → rotated to (1,1) East.
+        // Canonical output at (1,0) North → rotated to (0,1) West.
+        let ports = rotated_ports(MachineType::Inverter, Direction::West);
+        let input = ports.iter().find(|p| p.kind == PortKind::Input).unwrap();
+        assert_eq!(input.cell_offset, (1, 1));
+        assert_eq!(input.side, Direction::East);
+        let output = ports.iter().find(|p| p.kind == PortKind::Output).unwrap();
+        assert_eq!(output.cell_offset, (0, 1));
+        assert_eq!(output.side, Direction::West);
+    }
+
+    #[test]
+    fn rotated_cell_offsets_on_correct_edge() {
+        // After rotation, each port's cell_offset must sit on the edge
+        // corresponding to its rotated side within the rotated footprint.
+        for mt in [
+            MachineType::Composer,
+            MachineType::Inverter,
+            MachineType::Embedder,
+            MachineType::Quotient,
+            MachineType::Transformer,
+            MachineType::Source,
+        ] {
+            for dir in [
+                Direction::North,
+                Direction::East,
+                Direction::South,
+                Direction::West,
+            ] {
+                let (rw, rh) = dir.rotate_footprint(mt.footprint().0, mt.footprint().1);
+                for port in rotated_ports(mt, dir) {
+                    let (cx, cy) = port.cell_offset;
+                    match port.side {
+                        Direction::North => assert_eq!(cy, 0,
+                            "{:?} facing {:?}: North port at ({},{}) should have y=0", mt, dir, cx, cy),
+                        Direction::South => assert_eq!(cy, rh - 1,
+                            "{:?} facing {:?}: South port at ({},{}) should have y={}", mt, dir, cx, cy, rh - 1),
+                        Direction::West => assert_eq!(cx, 0,
+                            "{:?} facing {:?}: West port at ({},{}) should have x=0", mt, dir, cx, cy),
+                        Direction::East => assert_eq!(cx, rw - 1,
+                            "{:?} facing {:?}: East port at ({},{}) should have x={}", mt, dir, cx, cy, rw - 1),
+                    }
+                }
+            }
+        }
     }
 }

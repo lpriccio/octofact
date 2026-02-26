@@ -41,8 +41,8 @@ struct VertexOutput {
     @location(6) facing: f32,
 };
 
-// Machine footprint in grid cells: (width, height).
-fn machine_size(mt: u32) -> vec2<f32> {
+// Machine footprint in grid cells: (width, height), canonical (facing North).
+fn machine_size_canonical(mt: u32) -> vec2<f32> {
     switch mt {
         case 5u: { return vec2<f32>(1.0, 1.0); }  // Source
         case 6u: { return vec2<f32>(1.0, 1.0); }  // Quadrupole
@@ -50,6 +50,16 @@ fn machine_size(mt: u32) -> vec2<f32> {
         case 7u: { return vec2<f32>(2.0, 2.0); }  // Dynamo
         default: { return vec2<f32>(3.0, 2.0); }   // Inverter, Embedder, Quotient, Transformer
     }
+}
+
+// Machine footprint rotated by facing direction.
+// 90° and 270° swap width and height.
+fn machine_size(mt: u32, facing: u32) -> vec2<f32> {
+    let s = machine_size_canonical(mt);
+    if facing == 1u || facing == 3u {
+        return vec2<f32>(s.y, s.x);
+    }
+    return s;
 }
 
 // Machine type color (matching icon_params in items.rs).
@@ -92,11 +102,31 @@ fn port_uv_pos(cell: vec2<f32>, rot_side: u32, size: vec2<f32>) -> vec2<f32> {
     }
 }
 
+// Rotate a canonical cell offset by facing direction within canonical footprint (w, h).
+fn rotate_cell(cell: vec2<f32>, facing: u32, canon_size: vec2<f32>) -> vec2<f32> {
+    let w = canon_size.x;
+    let h = canon_size.y;
+    switch facing {
+        case 1u: { return vec2<f32>(h - 1.0 - cell.y, cell.x); }          // East: 90° CW
+        case 2u: { return vec2<f32>(w - 1.0 - cell.x, h - 1.0 - cell.y); } // South: 180°
+        case 3u: { return vec2<f32>(cell.y, w - 1.0 - cell.x); }          // West: 270° CW
+        default: { return cell; }                                            // North: identity
+    }
+}
+
 // Check if UV is near a port and return (color, alpha).
 // canon_side: canonical direction (0=N,1=E,2=S,3=W), facing: rotation steps CW from North
-fn check_port(uv: vec2<f32>, size: vec2<f32>, cell: vec2<f32>, canon_side: u32, facing: u32, kind: u32) -> vec4<f32> {
+// cell: canonical cell offset (will be rotated internally)
+// canon_size: canonical footprint (w, h) before rotation
+fn check_port(uv: vec2<f32>, canon_size: vec2<f32>, cell: vec2<f32>, canon_side: u32, facing: u32, kind: u32) -> vec4<f32> {
     let rot_side = (canon_side + facing) % 4u;
-    let pos = port_uv_pos(cell, rot_side, size);
+    let rot_cell = rotate_cell(cell, facing, canon_size);
+    // Rotated footprint size: swap w/h for 90° and 270°
+    var size = canon_size;
+    if facing == 1u || facing == 3u {
+        size = vec2<f32>(canon_size.y, canon_size.x);
+    }
+    let pos = port_uv_pos(rot_cell, rot_side, size);
     // Scale delta by size so circles are round regardless of aspect ratio
     let delta = (uv - pos) * size;
     let dist = length(delta);
@@ -132,35 +162,35 @@ fn check_port(uv: vec2<f32>, size: vec2<f32>, cell: vec2<f32>, canon_side: u32, 
 // Get port indicator overlay for a given machine type.
 // Returns vec4(color.rgb, alpha) — alpha > 0 means a port indicator is here.
 fn port_indicators(uv: vec2<f32>, mt: u32, facing: u32) -> vec4<f32> {
-    let size = machine_size(mt);
+    let canon_size = machine_size_canonical(mt);
     var best = vec4<f32>(0.0);
 
     switch mt {
         case 0u: { // Composer (2×2): input South@(0,1), output North@(0,0)
-            best = max(best, check_port(uv, size, vec2<f32>(0.0, 1.0), 2u, facing, 0u));
-            best = max(best, check_port(uv, size, vec2<f32>(0.0, 0.0), 0u, facing, 1u));
+            best = max(best, check_port(uv, canon_size, vec2<f32>(0.0, 1.0), 2u, facing, 0u));
+            best = max(best, check_port(uv, canon_size, vec2<f32>(0.0, 0.0), 0u, facing, 1u));
         }
         case 1u: { // Inverter (3×2): input South@(1,1), output North@(1,0)
-            best = max(best, check_port(uv, size, vec2<f32>(1.0, 1.0), 2u, facing, 0u));
-            best = max(best, check_port(uv, size, vec2<f32>(1.0, 0.0), 0u, facing, 1u));
+            best = max(best, check_port(uv, canon_size, vec2<f32>(1.0, 1.0), 2u, facing, 0u));
+            best = max(best, check_port(uv, canon_size, vec2<f32>(1.0, 0.0), 0u, facing, 1u));
         }
         case 2u: { // Embedder (3×2): input0 South@(1,1), input1 West@(0,0), output North@(1,0)
-            best = max(best, check_port(uv, size, vec2<f32>(1.0, 1.0), 2u, facing, 0u));
-            best = max(best, check_port(uv, size, vec2<f32>(0.0, 0.0), 3u, facing, 0u));
-            best = max(best, check_port(uv, size, vec2<f32>(1.0, 0.0), 0u, facing, 1u));
+            best = max(best, check_port(uv, canon_size, vec2<f32>(1.0, 1.0), 2u, facing, 0u));
+            best = max(best, check_port(uv, canon_size, vec2<f32>(0.0, 0.0), 3u, facing, 0u));
+            best = max(best, check_port(uv, canon_size, vec2<f32>(1.0, 0.0), 0u, facing, 1u));
         }
         case 3u: { // Quotient (3×2): input South@(1,1), output0 North@(1,0), output1 East@(2,0)
-            best = max(best, check_port(uv, size, vec2<f32>(1.0, 1.0), 2u, facing, 0u));
-            best = max(best, check_port(uv, size, vec2<f32>(1.0, 0.0), 0u, facing, 1u));
-            best = max(best, check_port(uv, size, vec2<f32>(2.0, 0.0), 1u, facing, 1u));
+            best = max(best, check_port(uv, canon_size, vec2<f32>(1.0, 1.0), 2u, facing, 0u));
+            best = max(best, check_port(uv, canon_size, vec2<f32>(1.0, 0.0), 0u, facing, 1u));
+            best = max(best, check_port(uv, canon_size, vec2<f32>(2.0, 0.0), 1u, facing, 1u));
         }
         case 4u: { // Transformer (3×2): input0 South@(1,1), input1 West@(0,0), output North@(1,0)
-            best = max(best, check_port(uv, size, vec2<f32>(1.0, 1.0), 2u, facing, 0u));
-            best = max(best, check_port(uv, size, vec2<f32>(0.0, 0.0), 3u, facing, 0u));
-            best = max(best, check_port(uv, size, vec2<f32>(1.0, 0.0), 0u, facing, 1u));
+            best = max(best, check_port(uv, canon_size, vec2<f32>(1.0, 1.0), 2u, facing, 0u));
+            best = max(best, check_port(uv, canon_size, vec2<f32>(0.0, 0.0), 3u, facing, 0u));
+            best = max(best, check_port(uv, canon_size, vec2<f32>(1.0, 0.0), 0u, facing, 1u));
         }
         case 5u: { // Source (1×1): output North@(0,0)
-            best = max(best, check_port(uv, size, vec2<f32>(0.0, 0.0), 0u, facing, 1u));
+            best = max(best, check_port(uv, canon_size, vec2<f32>(0.0, 0.0), 0u, facing, 1u));
         }
         default: { } // Quadrupole, Dynamo: no ports
     }
@@ -176,7 +206,8 @@ fn vs_machine(vert: VertexInput, inst: InstanceInput) -> VertexOutput {
     let cell_size = 2.0 * khs / divisions;
 
     let mt = u32(inst.machine_type + 0.5);
-    let size = machine_size(mt);
+    let facing = u32(inst.facing + 0.5);
+    let size = machine_size(mt, facing);
     let height = machine_height(mt);
 
     // Scale unit quad to machine footprint (slightly inset)

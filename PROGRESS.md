@@ -101,10 +101,11 @@
 - [x] Extend `PortDef` with grid offset for ports on non-origin cells
 - [x] Update `WorldState` to register multi-cell machines across all occupied cells
 - [x] Update placement logic to check entire footprint is free
-- [ ] Update rotation to transform cell offsets as well as port directions
+- [x] Update rotation to transform cell offsets as well as port directions
 - [x] Define footprints per machine type (e.g., Embedder 1x2, Transformer 2x2)
 - [x] Update belt connection logic to check ports on exterior cells only
 - [ ] Update rendering for multi-cell machine meshes
+- [ ] Standardize on square footprints (3x2 machines become 3x3), add rotate-in-place for placed buildings
 
 
 

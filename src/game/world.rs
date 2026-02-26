@@ -86,6 +86,31 @@ impl Direction {
         d
     }
 
+    /// Rotate a cell offset `(cx, cy)` within a canonical footprint `(w, h)` by
+    /// this direction's rotation from North.
+    ///
+    /// North (0): identity.
+    /// East  (1): 90° CW  — `(cx, cy)` → `(h-1-cy, cx)`, footprint becomes `(h, w)`.
+    /// South (2): 180°    — `(cx, cy)` → `(w-1-cx, h-1-cy)`, footprint stays `(w, h)`.
+    /// West  (3): 270° CW — `(cx, cy)` → `(cy, w-1-cx)`, footprint becomes `(h, w)`.
+    pub fn rotate_cell(self, cx: i32, cy: i32, w: i32, h: i32) -> (i32, i32) {
+        match self {
+            Self::North => (cx, cy),
+            Self::East => (h - 1 - cy, cx),
+            Self::South => (w - 1 - cx, h - 1 - cy),
+            Self::West => (cy, w - 1 - cx),
+        }
+    }
+
+    /// Rotate a footprint `(w, h)` by this direction's rotation from North.
+    /// 90° and 270° swap width and height; 0° and 180° leave them unchanged.
+    pub fn rotate_footprint(self, w: i32, h: i32) -> (i32, i32) {
+        match self {
+            Self::North | Self::South => (w, h),
+            Self::East | Self::West => (h, w),
+        }
+    }
+
     /// Map this grid direction to the {4,n} tiling edge index (0–3).
     /// The neighbor transform at angle k·π/2 corresponds to: East=0, South=1, West=2, North=3.
     pub fn tiling_edge_index(self) -> u8 {
@@ -195,7 +220,7 @@ impl WorldState {
         direction: Direction,
     ) -> Option<EntityId> {
         let kind = StructureKind::from_item(item)?;
-        let footprint = kind.footprint();
+        let footprint = direction.rotate_footprint(kind.footprint().0, kind.footprint().1);
         let cells = occupied_cells(grid_xy, footprint);
         let tile_addr = TileAddr::from_slice(address);
         let tile_slots = self.tile_grid.entry(tile_addr.clone()).or_default();
@@ -267,7 +292,9 @@ impl WorldState {
         let tile_slots = self.tile_grid.get_mut(address)?;
         let &entity = tile_slots.get(&grid_xy)?;
         let kind = self.structures.get(entity)?;
-        let footprint = kind.footprint();
+        let canonical = kind.footprint();
+        let facing = self.directions.get(entity).copied().unwrap_or(Direction::North);
+        let footprint = facing.rotate_footprint(canonical.0, canonical.1);
 
         // Find origin for this entity
         let origin = self.positions.get(entity)?;
@@ -308,6 +335,48 @@ mod tests {
         assert_eq!(Direction::East.arrow_char(), '\u{2192}');
         assert_eq!(Direction::South.arrow_char(), '\u{2193}');
         assert_eq!(Direction::West.arrow_char(), '\u{2190}');
+    }
+
+    #[test]
+    fn test_rotate_cell_north_is_identity() {
+        assert_eq!(Direction::North.rotate_cell(1, 1, 3, 2), (1, 1));
+        assert_eq!(Direction::North.rotate_cell(0, 0, 3, 2), (0, 0));
+        assert_eq!(Direction::North.rotate_cell(2, 1, 3, 2), (2, 1));
+    }
+
+    #[test]
+    fn test_rotate_cell_east() {
+        // (cx, cy) → (h-1-cy, cx) for 3×2 footprint (h=2)
+        assert_eq!(Direction::East.rotate_cell(1, 1, 3, 2), (0, 1));
+        assert_eq!(Direction::East.rotate_cell(1, 0, 3, 2), (1, 1));
+        assert_eq!(Direction::East.rotate_cell(0, 0, 3, 2), (1, 0));
+        assert_eq!(Direction::East.rotate_cell(2, 0, 3, 2), (1, 2));
+    }
+
+    #[test]
+    fn test_rotate_cell_south() {
+        // (cx, cy) → (w-1-cx, h-1-cy) for 3×2
+        assert_eq!(Direction::South.rotate_cell(1, 1, 3, 2), (1, 0));
+        assert_eq!(Direction::South.rotate_cell(1, 0, 3, 2), (1, 1));
+        assert_eq!(Direction::South.rotate_cell(0, 0, 3, 2), (2, 1));
+    }
+
+    #[test]
+    fn test_rotate_cell_west() {
+        // (cx, cy) → (cy, w-1-cx) for 3×2 (w=3)
+        assert_eq!(Direction::West.rotate_cell(1, 1, 3, 2), (1, 1));
+        assert_eq!(Direction::West.rotate_cell(1, 0, 3, 2), (0, 1));
+        assert_eq!(Direction::West.rotate_cell(0, 0, 3, 2), (0, 2));
+    }
+
+    #[test]
+    fn test_rotate_footprint() {
+        assert_eq!(Direction::North.rotate_footprint(3, 2), (3, 2));
+        assert_eq!(Direction::East.rotate_footprint(3, 2), (2, 3));
+        assert_eq!(Direction::South.rotate_footprint(3, 2), (3, 2));
+        assert_eq!(Direction::West.rotate_footprint(3, 2), (2, 3));
+        // Square footprint unchanged
+        assert_eq!(Direction::East.rotate_footprint(2, 2), (2, 2));
     }
 
     #[test]
@@ -407,6 +476,35 @@ mod tests {
                 assert_eq!(entities.get(&(dx, dy)), Some(&entity));
             }
         }
+    }
+
+    #[test]
+    fn test_3x2_rotated_east_footprint() {
+        let mut world = WorldState::new();
+        let addr = vec![0];
+        // Inverter (3×2) facing East: rotated footprint is (2, 3)
+        // Occupies (0,0), (1,0), (0,1), (1,1), (0,2), (1,2)
+        let entity = world.place(&addr, (0, 0), ItemId::Inverter, Direction::East).unwrap();
+        let entities = world.tile_entities(&addr).unwrap();
+        assert_eq!(entities.len(), 6);
+        for dy in 0..3 {
+            for dx in 0..2 {
+                assert_eq!(entities.get(&(dx, dy)), Some(&entity),
+                    "cell ({},{}) should be occupied", dx, dy);
+            }
+        }
+        // (2, 0) should be free (canonical footprint would have it occupied)
+        assert!(entities.get(&(2, 0)).is_none());
+    }
+
+    #[test]
+    fn test_3x2_rotated_east_remove() {
+        let mut world = WorldState::new();
+        let addr = vec![0];
+        world.place(&addr, (0, 0), ItemId::Inverter, Direction::East).unwrap();
+        let removed = world.remove(&addr, (1, 2));
+        assert_eq!(removed, Some(ItemId::Inverter));
+        assert!(world.tile_entities(&addr).is_none());
     }
 
     #[test]

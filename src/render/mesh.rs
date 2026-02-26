@@ -211,32 +211,72 @@ pub fn build_quad_mesh() -> (Vec<QuadVertex>, Vec<u16>) {
 ///   uv.y = 3.0 → side wall bottom edge (tile surface)
 /// The shader checks uv.y > 1.5 to detect side wall fragments.
 pub fn build_box_mesh() -> (Vec<QuadVertex>, Vec<u16>) {
+    build_subdivided_box_mesh(1)
+}
+
+/// Build a subdivided box mesh for multi-cell machines.
+/// The top face is an `n × n` grid so intermediate vertices get properly
+/// transformed through Klein → Poincaré → Möbius → bowl in the shader,
+/// preventing large flat-quad distortion on the curved surface.
+/// Side walls are subdivided `n` times along each edge.
+pub fn build_subdivided_box_mesh(n: u32) -> (Vec<QuadVertex>, Vec<u16>) {
     let mut verts = Vec::new();
     let mut indices = Vec::new();
+    let nf = n as f32;
 
-    // Top face: 4 vertices, 2 triangles
-    verts.push(QuadVertex { pos: [-0.5, -0.5], uv: [0.0, 0.0] });
-    verts.push(QuadVertex { pos: [ 0.5, -0.5], uv: [1.0, 0.0] });
-    verts.push(QuadVertex { pos: [ 0.5,  0.5], uv: [1.0, 1.0] });
-    verts.push(QuadVertex { pos: [-0.5,  0.5], uv: [0.0, 1.0] });
-    indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
+    // Top face: (n+1)² vertices, 2·n² triangles
+    for j in 0..=n {
+        for i in 0..=n {
+            let u = i as f32 / nf;
+            let v = j as f32 / nf;
+            verts.push(QuadVertex {
+                pos: [-0.5 + u, -0.5 + v],
+                uv: [u, v],
+            });
+        }
+    }
+    let stride = n + 1;
+    for j in 0..n {
+        for i in 0..n {
+            let tl = (j * stride + i) as u16;
+            let tr = tl + 1;
+            let bl = tl + stride as u16;
+            let br = bl + 1;
+            indices.extend_from_slice(&[tl, tr, br, tl, br, bl]);
+        }
+    }
 
-    // 4 side walls, each connecting two adjacent top-face corners
+    // 4 side walls, each subdivided n times along the edge.
+    // Corners of the unit quad in CCW order.
     let corners: [[f32; 2]; 4] = [
         [-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5],
     ];
-
-    for i in 0..4usize {
-        let j = (i + 1) % 4;
+    for side in 0..4usize {
+        let next = (side + 1) % 4;
+        let c0 = corners[side];
+        let c1 = corners[next];
         let base = verts.len() as u16;
 
-        // Top-left, top-right (at lifted height), bottom-right, bottom-left (at tile surface)
-        verts.push(QuadVertex { pos: corners[i], uv: [0.0, 2.0] });
-        verts.push(QuadVertex { pos: corners[j], uv: [1.0, 2.0] });
-        verts.push(QuadVertex { pos: corners[j], uv: [1.0, 3.0] });
-        verts.push(QuadVertex { pos: corners[i], uv: [0.0, 3.0] });
+        // n+1 pairs of (top, bottom) vertices along the edge
+        for k in 0..=n {
+            let t = k as f32 / nf;
+            let px = c0[0] + (c1[0] - c0[0]) * t;
+            let py = c0[1] + (c1[1] - c0[1]) * t;
+            // Top edge (lifted by shader)
+            verts.push(QuadVertex { pos: [px, py], uv: [t, 2.0] });
+            // Bottom edge (at tile surface)
+            verts.push(QuadVertex { pos: [px, py], uv: [t, 3.0] });
+        }
 
-        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+        // n quads along the wall
+        for k in 0..n {
+            let k2 = k * 2;
+            let tl = base + k2 as u16;       // top-left
+            let bl = tl + 1;                  // bottom-left
+            let tr = tl + 2;                  // top-right
+            let br = tl + 3;                  // bottom-right
+            indices.extend_from_slice(&[tl, tr, br, tl, br, bl]);
+        }
     }
 
     (verts, indices)

@@ -377,8 +377,10 @@ impl MachinePipeline {
             cache: None,
         });
 
-        // Build box mesh for machines (top face + side walls)
-        let (quad_verts, quad_indices) = crate::render::mesh::build_box_mesh();
+        // Build subdivided box mesh for machines (top face + side walls).
+        // n=8 gives enough vertices so multi-cell machines (up to 3×2 cells)
+        // properly follow the curved hyperbolic surface.
+        let (quad_verts, quad_indices) = crate::render::mesh::build_subdivided_box_mesh(8);
 
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("machine vertex buffer"),

@@ -98,7 +98,7 @@
 
 
 - [x] Enable click sensitivity on non-occluded cuboid representing a machine.
-- [ ] Extend `PortDef` with grid offset for ports on non-origin cells
+- [x] Extend `PortDef` with grid offset for ports on non-origin cells
 - [x] Update `WorldState` to register multi-cell machines across all occupied cells
 - [x] Update placement logic to check entire footprint is free
 - [ ] Update rotation to transform cell offsets as well as port directions

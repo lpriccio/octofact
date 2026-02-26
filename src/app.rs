@@ -404,8 +404,8 @@ impl App {
         }
     }
 
-    /// When a machine is placed, check all exterior cells for adjacent belts and connect ports.
-    /// For multi-cell machines, scans all cells on the footprint's border.
+    /// When a machine is placed, check each port's specific adjacent cell for a belt.
+    /// Uses `cell_offset` to check only the exact cell where each port lives.
     fn auto_connect_machine_ports(
         &mut self,
         machine_entity: EntityId,
@@ -414,43 +414,33 @@ impl App {
         facing: Direction,
         machine_type: crate::game::items::MachineType,
     ) {
-        use crate::game::world::occupied_cells;
         use crate::sim::inserter::{belt_compatible_with_port, rotated_ports, PortKind};
-
-        let footprint = machine_type.footprint();
-        let cells = occupied_cells(grid_xy, footprint);
 
         for port in rotated_ports(machine_type, facing) {
             let (dx, dy) = port.side.grid_offset_i32();
+            // The port lives at origin + cell_offset; check the adjacent cell on that side
+            let port_cell = (grid_xy.0 + port.cell_offset.0, grid_xy.1 + port.cell_offset.1);
+            let adj = (port_cell.0 + dx, port_cell.1 + dy);
 
-            // Check all cells on the port's side of the footprint
-            for &cell in &cells {
-                let adj = (cell.0 + dx, cell.1 + dy);
-                // Only check cells on the exterior edge (adjacent cell must be outside footprint)
-                if cells.contains(&adj) {
-                    continue;
-                }
-
-                if let Some(entities) = self.world.tile_entities(tile_addr) {
-                    if let Some(&belt_entity) = entities.get(&adj) {
-                        if self.world.kind(belt_entity) == Some(StructureKind::Belt) {
-                            if let Some(belt_dir) = self.world.direction(belt_entity) {
-                                if belt_compatible_with_port(&port, belt_dir) {
-                                    match port.kind {
-                                        PortKind::Input => {
-                                            self.belt_network.connect_belt_to_machine_input(
-                                                belt_entity,
-                                                machine_entity,
-                                                port.slot,
-                                            );
-                                        }
-                                        PortKind::Output => {
-                                            self.belt_network.connect_machine_output_to_belt(
-                                                belt_entity,
-                                                machine_entity,
-                                                port.slot,
-                                            );
-                                        }
+            if let Some(entities) = self.world.tile_entities(tile_addr) {
+                if let Some(&belt_entity) = entities.get(&adj) {
+                    if self.world.kind(belt_entity) == Some(StructureKind::Belt) {
+                        if let Some(belt_dir) = self.world.direction(belt_entity) {
+                            if belt_compatible_with_port(&port, belt_dir) {
+                                match port.kind {
+                                    PortKind::Input => {
+                                        self.belt_network.connect_belt_to_machine_input(
+                                            belt_entity,
+                                            machine_entity,
+                                            port.slot,
+                                        );
+                                    }
+                                    PortKind::Output => {
+                                        self.belt_network.connect_machine_output_to_belt(
+                                            belt_entity,
+                                            machine_entity,
+                                            port.slot,
+                                        );
                                     }
                                 }
                             }
@@ -462,6 +452,8 @@ impl App {
     }
 
     /// When a belt is placed, check all 4 adjacent cells for machines and connect ports.
+    /// When a belt is placed, check all 4 adjacent cells for machines and connect ports.
+    /// Uses `port_at_cell_on_side` to match by the port's exact cell offset.
     fn auto_connect_belt_to_machines(
         &mut self,
         belt_entity: EntityId,
@@ -469,7 +461,7 @@ impl App {
         grid_xy: (i32, i32),
         belt_dir: Direction,
     ) {
-        use crate::sim::inserter::{belt_compatible_with_port, port_on_side, PortKind};
+        use crate::sim::inserter::{belt_compatible_with_port, port_at_cell_on_side, PortKind};
 
         for &check_dir in &[Direction::North, Direction::East, Direction::South, Direction::West] {
             let (dx, dy) = check_dir.grid_offset_i32();
@@ -479,25 +471,35 @@ impl App {
                 if let Some(&adj_entity) = entities.get(&adj) {
                     if let Some(StructureKind::Machine(mt)) = self.world.kind(adj_entity) {
                         if let Some(facing) = self.world.direction(adj_entity) {
-                            // Machine's port on the side facing the belt
-                            if let Some(port) =
-                                port_on_side(mt, facing, check_dir.opposite())
-                            {
-                                if belt_compatible_with_port(&port, belt_dir) {
-                                    match port.kind {
-                                        PortKind::Input => {
-                                            self.belt_network.connect_belt_to_machine_input(
-                                                belt_entity,
-                                                adj_entity,
-                                                port.slot,
-                                            );
-                                        }
-                                        PortKind::Output => {
-                                            self.belt_network.connect_machine_output_to_belt(
-                                                belt_entity,
-                                                adj_entity,
-                                                port.slot,
-                                            );
+                            // Compute cell offset of `adj` within the machine's footprint
+                            if let Some(origin) = self.world.position(adj_entity) {
+                                let cell_offset = (
+                                    adj.0 - origin.gx as i32,
+                                    adj.1 - origin.gy as i32,
+                                );
+                                // Check if there's a port at this cell on the side facing the belt
+                                if let Some(port) = port_at_cell_on_side(
+                                    mt,
+                                    facing,
+                                    cell_offset,
+                                    check_dir.opposite(),
+                                ) {
+                                    if belt_compatible_with_port(&port, belt_dir) {
+                                        match port.kind {
+                                            PortKind::Input => {
+                                                self.belt_network.connect_belt_to_machine_input(
+                                                    belt_entity,
+                                                    adj_entity,
+                                                    port.slot,
+                                                );
+                                            }
+                                            PortKind::Output => {
+                                                self.belt_network.connect_machine_output_to_belt(
+                                                    belt_entity,
+                                                    adj_entity,
+                                                    port.slot,
+                                                );
+                                            }
                                         }
                                     }
                                 }
@@ -838,6 +840,8 @@ impl App {
                 };
 
                 let power_sat = self.power_network.satisfaction(entity).unwrap_or(-1.0);
+                let facing = self.world.direction(entity).unwrap_or(Direction::North);
+                let facing_float = facing.rotations_from_north() as f32;
 
                 re.machine_instances.push(MachineInstance {
                     mobius_a: [combined.a.re as f32, combined.a.im as f32],
@@ -846,6 +850,7 @@ impl App {
                     machine_type: machine_type_float,
                     progress,
                     power_sat,
+                    facing: facing_float,
                 });
             }
         }

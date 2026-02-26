@@ -26,39 +26,55 @@ pub struct PortDef {
     /// Which machine slot this port maps to.
     /// For input ports: index into `input_slots`. For output: index into `output_slots`.
     pub slot: usize,
+    /// Grid cell offset within the machine footprint where this port lives.
+    /// (0,0) is the origin cell. For a 3×2 machine, valid offsets are (0..3, 0..2).
+    pub cell_offset: (i32, i32),
 }
 
 /// Get the canonical port layout for a machine type (defined facing North).
+///
+/// Cell offsets are relative to the origin cell within the machine's footprint.
+/// For a 3×2 machine (w=3, h=2), cells are:
+/// ```text
+///   (0,0) (1,0) (2,0)   ← North edge (y=0)
+///   (0,1) (1,1) (2,1)   ← South edge (y=h-1)
+/// ```
 #[allow(dead_code)]
 pub fn port_layout(machine_type: MachineType) -> &'static [PortDef] {
     use Direction::*;
     use PortKind::*;
     match machine_type {
+        // Composer (2×2): input bottom-left, output top-left
         MachineType::Composer => &[
-            PortDef { side: South, kind: Input, slot: 0 },
-            PortDef { side: North, kind: Output, slot: 0 },
+            PortDef { side: South, kind: Input, slot: 0, cell_offset: (0, 1) },
+            PortDef { side: North, kind: Output, slot: 0, cell_offset: (0, 0) },
         ],
+        // Inverter (3×2): input center-south, output center-north
         MachineType::Inverter => &[
-            PortDef { side: South, kind: Input, slot: 0 },
-            PortDef { side: North, kind: Output, slot: 0 },
+            PortDef { side: South, kind: Input, slot: 0, cell_offset: (1, 1) },
+            PortDef { side: North, kind: Output, slot: 0, cell_offset: (1, 0) },
         ],
+        // Embedder (3×2): two inputs (south-center, west-top), output center-north
         MachineType::Embedder => &[
-            PortDef { side: South, kind: Input, slot: 0 },
-            PortDef { side: West, kind: Input, slot: 1 },
-            PortDef { side: North, kind: Output, slot: 0 },
+            PortDef { side: South, kind: Input, slot: 0, cell_offset: (1, 1) },
+            PortDef { side: West, kind: Input, slot: 1, cell_offset: (0, 0) },
+            PortDef { side: North, kind: Output, slot: 0, cell_offset: (1, 0) },
         ],
+        // Quotient (3×2): input south-center, outputs north-center and east-top
         MachineType::Quotient => &[
-            PortDef { side: South, kind: Input, slot: 0 },
-            PortDef { side: North, kind: Output, slot: 0 },
-            PortDef { side: East, kind: Output, slot: 1 },
+            PortDef { side: South, kind: Input, slot: 0, cell_offset: (1, 1) },
+            PortDef { side: North, kind: Output, slot: 0, cell_offset: (1, 0) },
+            PortDef { side: East, kind: Output, slot: 1, cell_offset: (2, 0) },
         ],
+        // Transformer (3×2): two inputs (south-center, west-top), output center-north
         MachineType::Transformer => &[
-            PortDef { side: South, kind: Input, slot: 0 },
-            PortDef { side: West, kind: Input, slot: 1 },
-            PortDef { side: North, kind: Output, slot: 0 },
+            PortDef { side: South, kind: Input, slot: 0, cell_offset: (1, 1) },
+            PortDef { side: West, kind: Input, slot: 1, cell_offset: (0, 0) },
+            PortDef { side: North, kind: Output, slot: 0, cell_offset: (1, 0) },
         ],
+        // Source (1×1): single output on origin
         MachineType::Source => &[
-            PortDef { side: North, kind: Output, slot: 0 },
+            PortDef { side: North, kind: Output, slot: 0, cell_offset: (0, 0) },
         ],
     }
 }
@@ -73,9 +89,15 @@ pub struct RotatedPort {
     pub kind: PortKind,
     /// Machine slot index.
     pub slot: usize,
+    /// Grid cell offset within the footprint (canonical, not yet rotated).
+    /// Full rotation of cell offsets is handled by the rotation milestone.
+    pub cell_offset: (i32, i32),
 }
 
 /// Get the rotated port layout for a machine at the given facing direction.
+///
+/// Rotates port side directions. Cell offsets are passed through as canonical
+/// values — full cell offset rotation is handled by the rotation milestone.
 #[allow(dead_code)]
 pub fn rotated_ports(machine_type: MachineType, facing: Direction) -> Vec<RotatedPort> {
     let n = facing.rotations_from_north();
@@ -85,6 +107,7 @@ pub fn rotated_ports(machine_type: MachineType, facing: Direction) -> Vec<Rotate
             side: def.side.rotate_n_cw(n),
             kind: def.kind,
             slot: def.slot,
+            cell_offset: def.cell_offset,
         })
         .collect()
 }
@@ -99,6 +122,22 @@ pub fn port_on_side(
     rotated_ports(machine_type, facing)
         .into_iter()
         .find(|p| p.side == side)
+}
+
+/// Find which port (if any) lives at a specific cell offset and faces a given side.
+///
+/// Used when a belt is adjacent to cell `cell_offset` of a machine: we need to know
+/// if there's a port at that cell on the side facing the belt.
+#[allow(dead_code)]
+pub fn port_at_cell_on_side(
+    machine_type: MachineType,
+    facing: Direction,
+    cell_offset: (i32, i32),
+    side: Direction,
+) -> Option<RotatedPort> {
+    rotated_ports(machine_type, facing)
+        .into_iter()
+        .find(|p| p.side == side && p.cell_offset == cell_offset)
 }
 
 /// Determine whether a belt at an adjacent cell can connect to a machine port.
@@ -287,6 +326,7 @@ mod tests {
             side: Direction::South,
             kind: PortKind::Input,
             slot: 0,
+            cell_offset: (0, 0),
         };
         assert!(belt_compatible_with_port(&port, Direction::North));
         assert!(!belt_compatible_with_port(&port, Direction::South));
@@ -301,6 +341,7 @@ mod tests {
             side: Direction::North,
             kind: PortKind::Output,
             slot: 0,
+            cell_offset: (0, 0),
         };
         assert!(belt_compatible_with_port(&port, Direction::North));
         assert!(!belt_compatible_with_port(&port, Direction::South));
@@ -341,5 +382,110 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn cell_offsets_within_footprint() {
+        // Verify every port's cell_offset is within the machine's footprint bounds.
+        for mt in [
+            MachineType::Composer,
+            MachineType::Inverter,
+            MachineType::Embedder,
+            MachineType::Quotient,
+            MachineType::Transformer,
+            MachineType::Source,
+        ] {
+            let (w, h) = mt.footprint();
+            for port in port_layout(mt) {
+                let (cx, cy) = port.cell_offset;
+                assert!(
+                    cx >= 0 && cx < w && cy >= 0 && cy < h,
+                    "{:?} port {:?} cell_offset ({}, {}) out of footprint ({}, {})",
+                    mt, port.side, cx, cy, w, h,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cell_offsets_on_correct_edge() {
+        // Verify each port's cell_offset is on the edge matching its side direction.
+        for mt in [
+            MachineType::Composer,
+            MachineType::Inverter,
+            MachineType::Embedder,
+            MachineType::Quotient,
+            MachineType::Transformer,
+            MachineType::Source,
+        ] {
+            let (w, h) = mt.footprint();
+            for port in port_layout(mt) {
+                let (cx, cy) = port.cell_offset;
+                match port.side {
+                    Direction::North => assert_eq!(cy, 0,
+                        "{:?} North port should be on y=0, got y={}", mt, cy),
+                    Direction::South => assert_eq!(cy, h - 1,
+                        "{:?} South port should be on y={}, got y={}", mt, h - 1, cy),
+                    Direction::West => assert_eq!(cx, 0,
+                        "{:?} West port should be on x=0, got x={}", mt, cx),
+                    Direction::East => assert_eq!(cx, w - 1,
+                        "{:?} East port should be on x={}, got x={}", mt, w - 1, cx),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn no_duplicate_port_cells() {
+        // No two ports should occupy the same cell with the same side direction.
+        for mt in [
+            MachineType::Composer,
+            MachineType::Inverter,
+            MachineType::Embedder,
+            MachineType::Quotient,
+            MachineType::Transformer,
+            MachineType::Source,
+        ] {
+            let ports = port_layout(mt);
+            for (i, a) in ports.iter().enumerate() {
+                for (j, b) in ports.iter().enumerate() {
+                    if i != j && a.cell_offset == b.cell_offset && a.side == b.side {
+                        panic!(
+                            "{:?}: ports {} and {} share cell {:?} side {:?}",
+                            mt, i, j, a.cell_offset, a.side,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn port_at_cell_on_side_finds_port() {
+        // Inverter facing North: input at (1,1) South, output at (1,0) North
+        let port = port_at_cell_on_side(MachineType::Inverter, Direction::North, (1, 1), Direction::South);
+        assert!(port.is_some());
+        assert_eq!(port.unwrap().kind, PortKind::Input);
+
+        let port = port_at_cell_on_side(MachineType::Inverter, Direction::North, (1, 0), Direction::North);
+        assert!(port.is_some());
+        assert_eq!(port.unwrap().kind, PortKind::Output);
+    }
+
+    #[test]
+    fn port_at_cell_on_side_rejects_wrong_cell() {
+        // Inverter facing North: no port at (0, 1) South (port is at (1, 1) South)
+        let port = port_at_cell_on_side(MachineType::Inverter, Direction::North, (0, 1), Direction::South);
+        assert!(port.is_none());
+    }
+
+    #[test]
+    fn rotated_ports_preserve_cell_offsets() {
+        // Cell offsets are passed through unchanged (rotation is a separate milestone)
+        let ports = rotated_ports(MachineType::Inverter, Direction::East);
+        let input = ports.iter().find(|p| p.kind == PortKind::Input).unwrap();
+        assert_eq!(input.cell_offset, (1, 1));
+        let output = ports.iter().find(|p| p.kind == PortKind::Output).unwrap();
+        assert_eq!(output.cell_offset, (1, 0));
     }
 }

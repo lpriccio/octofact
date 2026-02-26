@@ -27,6 +27,7 @@ struct InstanceInput {
     @location(8) machine_type: f32,     // 0-7 (see machine_size/machine_color)
     @location(9) progress: f32,         // 0.0-1.0 working, -1.0 idle, -2.0 no power
     @location(10) power_sat: f32,       // 0.0-1.0 satisfaction, -1.0 not connected
+    @location(11) facing: f32,          // 0=North, 1=East, 2=South, 3=West
 };
 
 struct VertexOutput {
@@ -37,6 +38,7 @@ struct VertexOutput {
     @location(3) disk_r: f32,
     @location(4) world_normal: vec3<f32>,
     @location(5) power_sat: f32,
+    @location(6) facing: f32,
 };
 
 // Machine footprint in grid cells: (width, height).
@@ -72,6 +74,97 @@ fn machine_height(mt: u32) -> f32 {
         case 5u: { return 0.008; }  // Source: medium
         default: { return 0.010; }  // All production machines: tall
     }
+}
+
+// --- Port indicator helpers ---
+// Side encoding: 0=North, 1=East, 2=South, 3=West
+// Kind: 0=input, 1=output
+
+// Compute UV position of a port given its cell offset, rotated side, and machine size.
+fn port_uv_pos(cell: vec2<f32>, rot_side: u32, size: vec2<f32>) -> vec2<f32> {
+    let cx = (cell.x + 0.5) / size.x;
+    let cy = (cell.y + 0.5) / size.y;
+    switch rot_side {
+        case 0u: { return vec2<f32>(cx, cell.y / size.y); }               // North: top of cell
+        case 1u: { return vec2<f32>((cell.x + 1.0) / size.x, cy); }      // East: right of cell
+        case 2u: { return vec2<f32>(cx, (cell.y + 1.0) / size.y); }      // South: bottom of cell
+        default: { return vec2<f32>(cell.x / size.x, cy); }               // West: left of cell
+    }
+}
+
+// Check if UV is near a port and return (color, alpha).
+// canon_side: canonical direction (0=N,1=E,2=S,3=W), facing: rotation steps CW from North
+fn check_port(uv: vec2<f32>, size: vec2<f32>, cell: vec2<f32>, canon_side: u32, facing: u32, kind: u32) -> vec4<f32> {
+    let rot_side = (canon_side + facing) % 4u;
+    let pos = port_uv_pos(cell, rot_side, size);
+    // Scale delta by size so circles are round regardless of aspect ratio
+    let delta = (uv - pos) * size;
+    let dist = length(delta);
+    let radius = 0.22;
+    if dist > radius { return vec4<f32>(0.0); }
+
+    let alpha = smoothstep(radius, radius * 0.4, dist);
+    // Draw a triangle/arrow pointing in the port direction
+    // Normalized direction from port center outward
+    var arrow_dir: vec2<f32>;
+    switch rot_side {
+        case 0u: { arrow_dir = vec2<f32>(0.0, -1.0); }  // North: up
+        case 1u: { arrow_dir = vec2<f32>(1.0, 0.0); }   // East: right
+        case 2u: { arrow_dir = vec2<f32>(0.0, 1.0); }   // South: down
+        default: { arrow_dir = vec2<f32>(-1.0, 0.0); }   // West: left
+    }
+    // For input ports, arrow points inward (toward machine center)
+    if kind == 0u { arrow_dir = -arrow_dir; }
+
+    // Triangle shape: strongest along arrow direction
+    let along = dot(delta / radius, arrow_dir);
+    let tri_shape = smoothstep(-0.3, 0.5, along);
+
+    var port_color: vec3<f32>;
+    if kind == 0u {
+        port_color = vec3<f32>(0.3, 0.5, 1.0);  // Blue for input
+    } else {
+        port_color = vec3<f32>(1.0, 0.6, 0.2);  // Orange for output
+    }
+    return vec4<f32>(port_color, alpha * max(tri_shape, 0.5));
+}
+
+// Get port indicator overlay for a given machine type.
+// Returns vec4(color.rgb, alpha) — alpha > 0 means a port indicator is here.
+fn port_indicators(uv: vec2<f32>, mt: u32, facing: u32) -> vec4<f32> {
+    let size = machine_size(mt);
+    var best = vec4<f32>(0.0);
+
+    switch mt {
+        case 0u: { // Composer (2×2): input South@(0,1), output North@(0,0)
+            best = max(best, check_port(uv, size, vec2<f32>(0.0, 1.0), 2u, facing, 0u));
+            best = max(best, check_port(uv, size, vec2<f32>(0.0, 0.0), 0u, facing, 1u));
+        }
+        case 1u: { // Inverter (3×2): input South@(1,1), output North@(1,0)
+            best = max(best, check_port(uv, size, vec2<f32>(1.0, 1.0), 2u, facing, 0u));
+            best = max(best, check_port(uv, size, vec2<f32>(1.0, 0.0), 0u, facing, 1u));
+        }
+        case 2u: { // Embedder (3×2): input0 South@(1,1), input1 West@(0,0), output North@(1,0)
+            best = max(best, check_port(uv, size, vec2<f32>(1.0, 1.0), 2u, facing, 0u));
+            best = max(best, check_port(uv, size, vec2<f32>(0.0, 0.0), 3u, facing, 0u));
+            best = max(best, check_port(uv, size, vec2<f32>(1.0, 0.0), 0u, facing, 1u));
+        }
+        case 3u: { // Quotient (3×2): input South@(1,1), output0 North@(1,0), output1 East@(2,0)
+            best = max(best, check_port(uv, size, vec2<f32>(1.0, 1.0), 2u, facing, 0u));
+            best = max(best, check_port(uv, size, vec2<f32>(1.0, 0.0), 0u, facing, 1u));
+            best = max(best, check_port(uv, size, vec2<f32>(2.0, 0.0), 1u, facing, 1u));
+        }
+        case 4u: { // Transformer (3×2): input0 South@(1,1), input1 West@(0,0), output North@(1,0)
+            best = max(best, check_port(uv, size, vec2<f32>(1.0, 1.0), 2u, facing, 0u));
+            best = max(best, check_port(uv, size, vec2<f32>(0.0, 0.0), 3u, facing, 0u));
+            best = max(best, check_port(uv, size, vec2<f32>(1.0, 0.0), 0u, facing, 1u));
+        }
+        case 5u: { // Source (1×1): output North@(0,0)
+            best = max(best, check_port(uv, size, vec2<f32>(0.0, 0.0), 0u, facing, 1u));
+        }
+        default: { } // Quadrupole, Dynamo: no ports
+    }
+    return best;
 }
 
 @vertex
@@ -132,6 +225,7 @@ fn vs_machine(vert: VertexInput, inst: InstanceInput) -> VertexOutput {
     out.disk_r = length(disk);
     out.world_normal = normal;
     out.power_sat = inst.power_sat;
+    out.facing = inst.facing;
 
     return out;
 }
@@ -203,6 +297,13 @@ fn fs_machine(in: VertexOutput) -> @location(0) vec4<f32> {
     } else {
         let grey = dot(color, vec3<f32>(0.299, 0.587, 0.114));
         color = mix(vec3<f32>(grey), color, 0.2) * 0.3;
+    }
+
+    // Port indicators on top face
+    let facing_u = u32(in.facing + 0.5);
+    let port = port_indicators(in.uv, mt, facing_u);
+    if port.w > 0.01 {
+        color = mix(color, port.rgb, port.w * 0.85);
     }
 
     // Power satisfaction pip in bottom-right corner

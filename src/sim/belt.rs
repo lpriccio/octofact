@@ -33,6 +33,9 @@ pub enum BeltEnd {
     /// Machine output port feeds into belt input.
     /// `entity` is the machine's EntityId, `slot` is the output slot index.
     MachineOutput { entity: EntityId, slot: usize },
+    /// Belt output side-injects onto a perpendicular belt.
+    /// Items insert at the target entity's segment center rather than the line's input end.
+    SideInject { entity: EntityId },
 }
 
 /// An item riding on a transport line.
@@ -81,6 +84,33 @@ impl TransportLine {
     /// Insert an item at the input end of this line.
     pub fn insert_at_input(&mut self, item: ItemId) {
         self.items.push(BeltItem { item, pos: self.length });
+    }
+
+    /// Check whether there is room at a specific offset for a side-injected item.
+    /// Requires MIN_ITEM_GAP clearance from nearest items on both sides.
+    pub fn can_accept_at_offset(&self, offset: u32) -> bool {
+        let idx = self.items.partition_point(|i| i.pos < offset);
+        // Check gap from item before (closer to output, lower pos)
+        if idx > 0 {
+            let before = self.items[idx - 1].pos;
+            if offset.saturating_sub(before) < MIN_ITEM_GAP {
+                return false;
+            }
+        }
+        // Check gap from item after (closer to input, higher pos)
+        if idx < self.items.len() {
+            let after = self.items[idx].pos;
+            if after.saturating_sub(offset) < MIN_ITEM_GAP {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Insert an item at a specific offset, maintaining sorted order.
+    pub fn insert_at_offset(&mut self, item: ItemId, offset: u32) {
+        let idx = self.items.partition_point(|i| i.pos < offset);
+        self.items.insert(idx, BeltItem { item, pos: offset });
     }
 
     /// Advance all items toward the output by `speed` units.
@@ -242,6 +272,49 @@ impl BeltNetwork {
                 self.lines.remove(up_line_id);
             }
         }
+
+        // --- Perpendicular side-inject detection ---
+        let new_seg = *self.segments.get(entity).unwrap();
+
+        // Forward: if this belt is at the output end and faces a perpendicular belt ahead
+        if new_seg.offset == 0 {
+            let output_open = self.lines.get(new_seg.line)
+                .map(|l| l.output_end == BeltEnd::Open)
+                .unwrap_or(false);
+            if output_open && is_within_tile(ahead.0, ahead.1) {
+                if let Some((target_entity, target_dir)) = find_any_belt_at(tile, ahead, world) {
+                    if is_perpendicular(direction, target_dir) {
+                        self.lines.get_mut(new_seg.line).unwrap().output_end =
+                            BeltEnd::SideInject { entity: target_entity };
+                    }
+                }
+            }
+        }
+
+        // Reverse: check if existing belts in adjacent cells aim their output at this cell
+        for adj_dir in [Direction::North, Direction::East, Direction::South, Direction::West] {
+            let (adj_dx, adj_dy) = adj_dir.grid_offset_i32();
+            let (nx, ny) = (gx + adj_dx, gy + adj_dy);
+            if !is_within_tile(nx, ny) { continue; }
+
+            // A belt at (nx,ny) going adj_dir.opposite() has its output at (gx,gy)
+            let required_dir = adj_dir.opposite();
+            if !is_perpendicular(required_dir, direction) { continue; }
+
+            if let Some(other_entity) = find_belt_at(tile, (nx, ny), required_dir, world) {
+                if let Some(other_seg) = self.segments.get(other_entity).copied() {
+                    if other_seg.offset == 0 {
+                        let other_output_open = self.lines.get(other_seg.line)
+                            .map(|l| l.output_end == BeltEnd::Open)
+                            .unwrap_or(false);
+                        if other_output_open {
+                            self.lines.get_mut(other_seg.line).unwrap().output_end =
+                                BeltEnd::SideInject { entity };
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Run one simulation tick for all transport lines.
@@ -250,6 +323,7 @@ impl BeltNetwork {
 
         // Phase 1: Transfer items at output ends to connected inputs.
         let mut transfers: Vec<(TransportLineId, TransportLineId)> = Vec::new();
+        let mut side_injects: Vec<(TransportLineId, TransportLineId, u32)> = Vec::new();
 
         for &line_id in &line_ids {
             let line = match self.lines.get(line_id) {
@@ -261,12 +335,25 @@ impl BeltNetwork {
             }
             // Front item sitting at the output end?
             if line.items[0].pos == 0 {
-                if let BeltEnd::Belt(target_id) = line.output_end {
-                    if let Some(target) = self.lines.get(target_id) {
-                        if target.can_accept_at_input() {
-                            transfers.push((line_id, target_id));
+                match line.output_end {
+                    BeltEnd::Belt(target_id) => {
+                        if let Some(target) = self.lines.get(target_id) {
+                            if target.can_accept_at_input() {
+                                transfers.push((line_id, target_id));
+                            }
                         }
                     }
+                    BeltEnd::SideInject { entity: target_entity } => {
+                        if let Some(target_seg) = self.segments.get(target_entity).copied() {
+                            let inject_offset = target_seg.offset + FP_SCALE / 2;
+                            if let Some(target_line) = self.lines.get(target_seg.line) {
+                                if target_line.can_accept_at_offset(inject_offset) {
+                                    side_injects.push((line_id, target_seg.line, inject_offset));
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
@@ -278,6 +365,15 @@ impl BeltNetwork {
             };
             let target = self.lines.get_mut(target_id).unwrap();
             target.insert_at_input(item);
+        }
+
+        for (source_id, target_id, offset) in side_injects {
+            let item = {
+                let source = self.lines.get_mut(source_id).unwrap();
+                source.items.remove(0).item
+            };
+            let target = self.lines.get_mut(target_id).unwrap();
+            target.insert_at_offset(item, offset);
         }
 
         // Phase 2: Advance all items toward output.
@@ -458,6 +554,15 @@ impl BeltNetwork {
     /// shrinking the transport line as needed. Items on the removed segment
     /// are lost (dropped).
     pub fn on_belt_removed(&mut self, entity: EntityId) {
+        // Clean up any SideInject links that target this entity.
+        for (_, line) in self.lines.iter_mut() {
+            if let BeltEnd::SideInject { entity: target } = line.output_end {
+                if target == entity {
+                    line.output_end = BeltEnd::Open;
+                }
+            }
+        }
+
         let seg = match self.segments.remove(entity) {
             Some(s) => s,
             None => return,
@@ -496,6 +601,11 @@ impl BeltNetwork {
         if seg.offset == 0 {
             // Removing the output-end segment. Shrink the line.
             let line = self.lines.get_mut(seg.line).unwrap();
+            // Clear SideInject — it was specific to this segment's position,
+            // and the new output-end segment may not be adjacent to the target.
+            if matches!(line.output_end, BeltEnd::SideInject { .. }) {
+                line.output_end = BeltEnd::Open;
+            }
             // Remove items in the removed segment's range [0, FP_SCALE)
             line.items.retain(|i| i.pos >= FP_SCALE);
             // Shift remaining items and segments toward output
@@ -605,6 +715,27 @@ fn find_belt_at(
     } else {
         None
     }
+}
+
+/// Find any belt entity at the given tile+grid position, regardless of direction.
+fn find_any_belt_at(
+    tile: &[u8],
+    grid_xy: (i32, i32),
+    world: &WorldState,
+) -> Option<(EntityId, Direction)> {
+    let entities = world.tile_entities(tile)?;
+    let &entity = entities.get(&grid_xy)?;
+    if world.kind(entity) == Some(StructureKind::Belt) {
+        let dir = world.direction(entity)?;
+        Some((entity, dir))
+    } else {
+        None
+    }
+}
+
+/// Two directions are perpendicular if they are neither the same nor opposite.
+fn is_perpendicular(a: Direction, b: Direction) -> bool {
+    a != b && a != b.opposite()
 }
 
 #[cfg(test)]
@@ -836,14 +967,14 @@ mod tests {
     }
 
     #[test]
-    fn blocked_output_stops_items() {
+    fn perpendicular_belt_side_injects_items() {
         let mut world = WorldState::new();
         let mut net = BeltNetwork::new();
         let addr: &[u8] = &[0];
 
-        // Two belts: e1 East, e2 North — different directions, separate lines.
+        // Two belts: e1 East, e2 North — perpendicular, connected via SideInject.
         let e1 = place_belt(&mut world, &mut net, addr, 0, 0, Direction::East);
-        let _e2 = place_belt(&mut world, &mut net, addr, 1, 0, Direction::North);
+        let e2 = place_belt(&mut world, &mut net, addr, 1, 0, Direction::North);
 
         net.spawn_item_on_entity(e1, ItemId::NullSet);
 
@@ -851,10 +982,12 @@ mod tests {
             net.tick();
         }
 
-        // Item stuck at output end (open, since e2 is different direction).
-        let items = local_items(&net, e1);
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].1, 0);
+        // Item should have transferred via SideInject to the North belt.
+        let items1 = local_items(&net, e1);
+        let items2 = local_items(&net, e2);
+        assert_eq!(items1.len(), 0, "Item should have left the East belt");
+        assert_eq!(items2.len(), 1, "Item should be on the North belt");
+        assert_eq!(items2[0].0, ItemId::NullSet);
     }
 
     #[test]
@@ -1094,5 +1227,301 @@ mod tests {
         let seg = *net.segments.get(e2).unwrap();
         let line = net.lines.get(seg.line).unwrap();
         assert_eq!(line.output_end, BeltEnd::Open, "Middle belt should not connect at output end");
+    }
+
+    // --- Side-inject (perpendicular belt) tests ---
+
+    #[test]
+    fn t_junction_east_into_north_creates_side_inject() {
+        let mut world = WorldState::new();
+        let mut net = BeltNetwork::new();
+        let addr: &[u8] = &[0];
+
+        // North belt at (1, 0)
+        let north = place_belt(&mut world, &mut net, addr, 1, 0, Direction::North);
+        // East belt at (0, 0) — output faces (1, 0) where the North belt is
+        let east = place_belt(&mut world, &mut net, addr, 0, 0, Direction::East);
+
+        // East belt should have SideInject output to the North belt
+        let east_seg = *net.segments.get(east).unwrap();
+        let east_line = net.lines.get(east_seg.line).unwrap();
+        assert_eq!(east_line.output_end, BeltEnd::SideInject { entity: north });
+
+        // They should be on separate lines
+        let north_seg = *net.segments.get(north).unwrap();
+        assert_ne!(east_seg.line, north_seg.line);
+    }
+
+    #[test]
+    fn t_junction_reverse_order_creates_side_inject() {
+        // Place the dead-ending belt first, then the perpendicular belt
+        let mut world = WorldState::new();
+        let mut net = BeltNetwork::new();
+        let addr: &[u8] = &[0];
+
+        // East belt at (0, 0) first — output faces (1, 0), nothing there yet
+        let east = place_belt(&mut world, &mut net, addr, 0, 0, Direction::East);
+        let east_seg = *net.segments.get(east).unwrap();
+        assert_eq!(net.lines.get(east_seg.line).unwrap().output_end, BeltEnd::Open);
+
+        // Now place North belt at (1, 0) — the reverse check should connect
+        let north = place_belt(&mut world, &mut net, addr, 1, 0, Direction::North);
+
+        // East belt should now have SideInject
+        let east_seg = *net.segments.get(east).unwrap();
+        let east_line = net.lines.get(east_seg.line).unwrap();
+        assert_eq!(east_line.output_end, BeltEnd::SideInject { entity: north });
+    }
+
+    #[test]
+    fn t_junction_items_transfer_to_perpendicular_belt() {
+        let mut world = WorldState::new();
+        let mut net = BeltNetwork::new();
+        let addr: &[u8] = &[0];
+
+        // North belt at (1, 0)
+        let north = place_belt(&mut world, &mut net, addr, 1, 0, Direction::North);
+        // East belt at (0, 0) with SideInject to North belt
+        let east = place_belt(&mut world, &mut net, addr, 0, 0, Direction::East);
+
+        // Spawn item on East belt
+        net.spawn_item_on_entity(east, ItemId::NullSet);
+
+        // Run ticks until item transfers
+        for _ in 0..500 {
+            net.tick();
+        }
+
+        // Item should have moved to the North belt
+        let east_items = local_items(&net, east);
+        let north_items = local_items(&net, north);
+        assert_eq!(east_items.len(), 0, "Item should have left the East belt");
+        assert_eq!(north_items.len(), 1, "Item should be on the North belt");
+        assert_eq!(north_items[0].0, ItemId::NullSet);
+    }
+
+    #[test]
+    fn side_inject_respects_min_gap() {
+        let mut world = WorldState::new();
+        let mut net = BeltNetwork::new();
+        let addr: &[u8] = &[0];
+
+        // North belt at (1, 0), East belt at (0, 0)
+        let north = place_belt(&mut world, &mut net, addr, 1, 0, Direction::North);
+        let east = place_belt(&mut world, &mut net, addr, 0, 0, Direction::East);
+
+        // Fill the North belt with 4 items (max: FP_SCALE / MIN_ITEM_GAP = 256/64 = 4)
+        // They pack at 0, 64, 128, 192 — injection point 128 is exactly occupied.
+        let north_seg = *net.segments.get(north).unwrap();
+        let line = net.lines.get_mut(north_seg.line).unwrap();
+        for i in 0..4u32 {
+            line.items.push(BeltItem {
+                item: ItemId::Point,
+                pos: north_seg.offset + i * MIN_ITEM_GAP,
+            });
+        }
+        line.items.sort_by_key(|i| i.pos);
+
+        // Spawn item on East belt
+        net.spawn_item_on_entity(east, ItemId::NullSet);
+
+        // Run just a few ticks (enough for East item to reach pos=0 but
+        // not enough for North items to drain away)
+        for _ in 0..500 {
+            net.tick();
+        }
+
+        // Items on the North belt should remain packed since output is Open
+        // (items stop at pos=0). Injection at offset 128 is blocked.
+        let east_items = local_items(&net, east);
+        assert_eq!(east_items.len(), 1, "Item should stay on East belt (blocked)");
+        assert_eq!(east_items[0].1, 0, "Item should be stuck at output end");
+    }
+
+    #[test]
+    fn side_inject_blocks_when_target_full() {
+        let mut world = WorldState::new();
+        let mut net = BeltNetwork::new();
+        let addr: &[u8] = &[0];
+
+        // North belt at (1, 0), East belt at (0, 0)
+        let north = place_belt(&mut world, &mut net, addr, 1, 0, Direction::North);
+        let east = place_belt(&mut world, &mut net, addr, 0, 0, Direction::East);
+
+        // Fill the North belt with 4 items (max per segment = FP_SCALE / MIN_ITEM_GAP = 4)
+        let north_seg = *net.segments.get(north).unwrap();
+        let line = net.lines.get_mut(north_seg.line).unwrap();
+        for i in 0..4u32 {
+            line.items.push(BeltItem {
+                item: ItemId::Point,
+                pos: north_seg.offset + i * MIN_ITEM_GAP,
+            });
+        }
+        line.items.sort_by_key(|i| i.pos);
+
+        // Spawn item on East belt
+        net.spawn_item_on_entity(east, ItemId::NullSet);
+
+        // Run ticks — should not transfer
+        for _ in 0..500 {
+            net.tick();
+        }
+
+        let east_items = local_items(&net, east);
+        assert_eq!(east_items.len(), 1, "Item should stay on East belt (target full)");
+    }
+
+    #[test]
+    fn removing_target_belt_clears_side_inject() {
+        let mut world = WorldState::new();
+        let mut net = BeltNetwork::new();
+        let addr: &[u8] = &[0];
+
+        let north = place_belt(&mut world, &mut net, addr, 1, 0, Direction::North);
+        let east = place_belt(&mut world, &mut net, addr, 0, 0, Direction::East);
+
+        // Verify SideInject exists
+        let east_seg = *net.segments.get(east).unwrap();
+        assert!(matches!(
+            net.lines.get(east_seg.line).unwrap().output_end,
+            BeltEnd::SideInject { .. }
+        ));
+
+        // Remove the North belt (target)
+        net.on_belt_removed(north);
+        world.remove(addr, (1, 0));
+
+        // SideInject should be cleared
+        let east_seg = *net.segments.get(east).unwrap();
+        let east_line = net.lines.get(east_seg.line).unwrap();
+        assert_eq!(east_line.output_end, BeltEnd::Open);
+    }
+
+    #[test]
+    fn removing_source_belt_cleans_up() {
+        let mut world = WorldState::new();
+        let mut net = BeltNetwork::new();
+        let addr: &[u8] = &[0];
+
+        let _north = place_belt(&mut world, &mut net, addr, 1, 0, Direction::North);
+        let east = place_belt(&mut world, &mut net, addr, 0, 0, Direction::East);
+
+        // Remove the East belt (source of SideInject)
+        net.on_belt_removed(east);
+        world.remove(addr, (0, 0));
+
+        // No crash, no dangling references. The SideInject was on the removed line.
+        // Verify the North belt is still fine
+        assert_eq!(net.lines.len(), 1);
+    }
+
+    #[test]
+    fn opposite_direction_does_not_side_inject() {
+        let mut world = WorldState::new();
+        let mut net = BeltNetwork::new();
+        let addr: &[u8] = &[0];
+
+        // West belt at (1, 0) — facing opposite to East
+        let _west = place_belt(&mut world, &mut net, addr, 1, 0, Direction::West);
+        // East belt at (0, 0) — output faces (1, 0) but West is opposite, not perpendicular
+        let east = place_belt(&mut world, &mut net, addr, 0, 0, Direction::East);
+
+        let east_seg = *net.segments.get(east).unwrap();
+        let east_line = net.lines.get(east_seg.line).unwrap();
+        assert_eq!(east_line.output_end, BeltEnd::Open, "Opposite directions should not side-inject");
+    }
+
+    #[test]
+    fn same_direction_merges_not_side_injects() {
+        let mut world = WorldState::new();
+        let mut net = BeltNetwork::new();
+        let addr: &[u8] = &[0];
+
+        // East belt at (1, 0) — same direction
+        let e2 = place_belt(&mut world, &mut net, addr, 1, 0, Direction::East);
+        let e1 = place_belt(&mut world, &mut net, addr, 0, 0, Direction::East);
+
+        // Should merge, not side-inject
+        let seg1 = *net.segments.get(e1).unwrap();
+        let seg2 = *net.segments.get(e2).unwrap();
+        assert_eq!(seg1.line, seg2.line, "Same direction should merge");
+    }
+
+    #[test]
+    fn south_belt_side_injects_onto_east_belt() {
+        // Test a different orientation: South belt feeds onto East belt
+        let mut world = WorldState::new();
+        let mut net = BeltNetwork::new();
+        let addr: &[u8] = &[0];
+
+        // East belt at (0, 1)
+        let east = place_belt(&mut world, &mut net, addr, 0, 1, Direction::East);
+        // South belt at (0, 0) — output faces (0, 1) where the East belt is
+        let south = place_belt(&mut world, &mut net, addr, 0, 0, Direction::South);
+
+        let south_seg = *net.segments.get(south).unwrap();
+        let south_line = net.lines.get(south_seg.line).unwrap();
+        assert_eq!(south_line.output_end, BeltEnd::SideInject { entity: east });
+
+        // Spawn item and verify transfer
+        net.spawn_item_on_entity(south, ItemId::NullSet);
+        for _ in 0..500 {
+            net.tick();
+        }
+
+        let south_items = local_items(&net, south);
+        let east_items = local_items(&net, east);
+        assert_eq!(south_items.len(), 0);
+        assert_eq!(east_items.len(), 1);
+    }
+
+    #[test]
+    fn output_end_removal_clears_side_inject() {
+        let mut world = WorldState::new();
+        let mut net = BeltNetwork::new();
+        let addr: &[u8] = &[0];
+
+        // North belt at (2, 0)
+        let north = place_belt(&mut world, &mut net, addr, 2, 0, Direction::North);
+        // Two merged East belts: (0,0) and (1,0)
+        let e1 = place_belt(&mut world, &mut net, addr, 0, 0, Direction::East);
+        let e2 = place_belt(&mut world, &mut net, addr, 1, 0, Direction::East);
+
+        // e2 is at offset=0 (output end), should have SideInject to North belt
+        let e2_seg = *net.segments.get(e2).unwrap();
+        assert_eq!(e2_seg.offset, 0);
+        let line = net.lines.get(e2_seg.line).unwrap();
+        assert_eq!(line.output_end, BeltEnd::SideInject { entity: north });
+
+        // Remove e2 (the output-end belt with SideInject)
+        net.on_belt_removed(e2);
+        world.remove(addr, (1, 0));
+
+        // e1 is now at offset=0, but SideInject should be cleared
+        let e1_seg = *net.segments.get(e1).unwrap();
+        assert_eq!(e1_seg.offset, 0);
+        let line = net.lines.get(e1_seg.line).unwrap();
+        assert_eq!(line.output_end, BeltEnd::Open, "SideInject should be cleared after output-end removal");
+    }
+
+    #[test]
+    fn can_accept_at_offset_empty_line() {
+        let line = TransportLine::new(FP_SCALE);
+        assert!(line.can_accept_at_offset(FP_SCALE / 2));
+    }
+
+    #[test]
+    fn can_accept_at_offset_with_nearby_items() {
+        let mut line = TransportLine::new(FP_SCALE);
+        // Item at position 128 (center)
+        line.items.push(BeltItem { item: ItemId::NullSet, pos: 128 });
+
+        // Too close (gap < MIN_ITEM_GAP)
+        assert!(!line.can_accept_at_offset(128 + MIN_ITEM_GAP - 1));
+        assert!(!line.can_accept_at_offset(128 - MIN_ITEM_GAP + 1));
+
+        // Exactly at MIN_ITEM_GAP — should accept
+        assert!(line.can_accept_at_offset(128 + MIN_ITEM_GAP));
+        assert!(line.can_accept_at_offset(128 - MIN_ITEM_GAP));
     }
 }

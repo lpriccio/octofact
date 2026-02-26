@@ -109,17 +109,15 @@
 
 
 
-## Phase 9: Chunk Streaming
+## Phase 9: Tile Streaming & Render Culling
 
-> Support unbounded world exploration without running out of memory.
+> Support unbounded world exploration without running out of tile/GPU memory.
+> Simulation always runs — Factorio-style. Only tile geometry is streamed.
 
-- [ ] Create `game/chunk.rs` with `ChunkManager`, `Chunk`, `ChunkAddr`
-- [ ] Define chunk boundaries by address prefix depth
-- [ ] Implement ring-based loading centered on player
-- [ ] Implement LRU eviction with sim state serialization
-- [ ] Implement freeze/thaw with fast-forward catch-up
-- [ ] Integrate with `TilingState`: on-demand tile generation instead of global BFS
-- [ ] Integrate with simulation: only tick Active/Nearby chunks
+- [ ] LRU tile eviction in `TilingState`: evict tile geometry far from camera
+- [ ] Tune `ensure_coverage` radius for on-demand tile generation
+- [ ] Ensure simulation is fully decoupled from tile visibility (belts/machines tick by entity, not by tile presence)
+- [ ] Verify: walk far, return — factory kept running the whole time
 
 
 
@@ -128,7 +126,7 @@
 > Persist world state across sessions.
 
 - [ ] Create `game/save.rs`
-- [ ] Define save format: world state + chunk states + inventory + camera position
+- [ ] Define save format: world state + sim state + inventory + camera position
 - [ ] Serialize with `bincode` or `rmp-serde`
 - [ ] Auto-save on exit, manual save via UI
 - [ ] Load on startup if save file exists

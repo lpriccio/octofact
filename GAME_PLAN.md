@@ -40,7 +40,7 @@
 - **No tick system** — frame-driven only, no fixed timestep
 - **No entity IDs** — structures stored in nested HashMaps
 - **No batched rendering** — belts are egui overlays, tiles are individual draws
-- **No chunk streaming** — all tiles in memory forever
+- **No tile streaming** — all tile geometry in memory forever
 - **No power network** — quadrupoles exist but do nothing
 - **No save/load**
 
@@ -84,8 +84,10 @@
    Never global Poincare/Klein coords in game state. Mobius reconstructs position
    on demand for rendering.
 
-7. **Chunk streaming.** Address-prefix chunks. Ring loading around player. LRU
-   eviction. Freeze distant chunks; fast-forward on approach.
+7. **Simulate everything, render nearby.** Factorio-style: the entire factory
+   runs every tick regardless of camera position. Only *rendering* is scoped to
+   visible tiles. Tile geometry is generated on demand and evicted when far away,
+   but game state (belts, machines, power) is always live.
 
 ### Module Layout (target)
 
@@ -109,7 +111,7 @@ src/
     inventory.rs                # (unchanged)
     recipes.rs                  # (unchanged)
     world.rs                    # Rewritten: EntityId, TileAddr, typed pools
-    chunk.rs                    # ChunkManager, streaming, freeze/thaw
+    chunk.rs                    # (removed — Factorio-style: sim always runs, no chunked freezing)
     save.rs                     # Serialization
   hyperbolic/
     mod.rs
@@ -409,7 +411,7 @@ fn about_to_wait():
 fn simulation_tick(dt: f64):
     // Phase 1: Camera & World Updates
     camera.process_movement(input_state, tiling, dt)
-    chunk_manager.update(camera.current_tile_addr())
+    tiling.ensure_coverage(camera.current_tile_pos(), RENDER_RADIUS)
 
     // Phase 2: Power Network
     //   Single-threaded. Memory-bound, parallelism doesn't help.
@@ -860,7 +862,8 @@ Down from current ~1024+ draw calls.
                needs entity data)
                        |
                   [Phase 7]
-               Chunk Streaming
+            Tile Streaming &
+              Render Culling
                        |
                   [Phase 8]
                   Save / Load
@@ -1047,26 +1050,28 @@ proportionally.
 ~1024. Profile to confirm GPU time reduction. Belt rendering no longer depends on
 egui.
 
-### Phase 7: Chunk Streaming
+### Phase 7: Tile Streaming & Render Culling
 
-**Goal:** Support unbounded world exploration without running out of memory.
+**Goal:** Support unbounded world exploration without running out of GPU/tile memory,
+while keeping the full factory simulation running at all times (Factorio-style).
+
+**Design:** Simulation always ticks every belt, machine, and power node regardless of
+camera position — the factory never "freezes." Only tile *geometry* (Mobius transforms
+for rendering) is streamed: generated on demand near the camera and evicted when far
+away. Game state (WorldState, BeltNetwork, MachinePool, PowerNetwork) is always fully
+live and in memory.
 
 **Changes:**
-- [ ] Create `game/chunk.rs` with `ChunkManager`, `Chunk`, `ChunkAddr`
-- [ ] Define chunk boundaries by address prefix depth
-- [ ] Implement ring-based loading centered on player
-- [ ] Implement LRU eviction with sim state serialization
-- [ ] Implement freeze/thaw with fast-forward catch-up
-- [ ] Integrate with `TilingState`: chunks request tile generation, `TilingState`
-  generates tiles on demand instead of BFS-expanding globally
-- [ ] Integrate with simulation: only tick Active/Nearby chunks
+- [ ] LRU tile eviction in `TilingState`: evict tile geometry far from camera
+- [ ] On-demand tile generation: `ensure_coverage` already does this, just tune radius
+- [ ] Render culling: only build instance buffers for tiles near the camera (already done via `visible_tiles`)
+- [ ] Ensure simulation is not coupled to tile geometry (belts/machines tick by entity, not by tile visibility)
 
-**Files touched:** new `game/chunk.rs`, `hyperbolic/tiling.rs` (on-demand generation),
-`sim/tick.rs` (scoped simulation), `app.rs` (chunk manager updates)
+**Files touched:** `hyperbolic/tiling.rs` (eviction), `app.rs` (ensure sim is decoupled from tile visibility)
 
-**Validation:** Walk far from origin. Memory usage stays bounded. Return to a
-previously visited factory — it has continued producing (via catch-up). No visual
-pop-in at chunk boundaries.
+**Validation:** Walk far from origin. Tile memory stays bounded. Return to a
+previously visited factory — it has been running the whole time (no catch-up needed).
+No visual pop-in at tile boundaries.
 
 ### Phase 8: Save/Load
 

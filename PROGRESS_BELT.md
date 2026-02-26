@@ -13,14 +13,14 @@ the way a T-junction works in Factorio.
 
 ### Tasks
 
-- [x] Add `BeltEnd::SideInject { line: TransportLineId, offset: u32 }` variant — represents a connection where items enter a target line at a specific offset rather than the input end
-- [x] In `on_belt_placed`, after checking same-direction neighbors, check whether the cell ahead contains a perpendicular belt (any direction that is not the same or opposite). If found, create a SideInject link from the new belt's line output to the target line at the target segment's offset
-- [x] In `on_belt_placed`, also check whether any perpendicular belt in an adjacent cell has its output aimed at the newly placed belt — if so, create a SideInject link from that belt's line to the new belt's line
+- [x] Add `BeltEnd::SideInject { entity: EntityId }` variant — items side-inject at the target entity's segment center (offset resolved at tick time for robustness)
+- [x] In `on_belt_placed`, after checking same-direction neighbors, check whether the cell ahead contains a perpendicular belt. If found, create a SideInject link from the new belt's line output to the target belt entity
+- [x] In `on_belt_placed`, also check whether any perpendicular belt in an adjacent cell has its output aimed at the newly placed belt — if so, create a SideInject link from that belt's line to the new belt
 - [x] Implement side-injection transfer in `tick()`: items at pos=0 on a line with `SideInject` output try to insert at the target offset if there's room (gap check against neighbors at that offset position)
 - [x] Add `can_accept_at_offset(offset: u32) -> bool` to `TransportLine` — checks whether there is room at the given position (MIN_ITEM_GAP from nearest items on either side)
 - [x] Add `insert_at_offset(item: ItemId, offset: u32)` to `TransportLine` — inserts an item at the specified position, maintaining sorted order
 - [x] Handle belt removal: when a belt with a SideInject connection is removed, clean up the link (set back to Open); when the target perpendicular belt is removed, find and clean up any SideInject links pointing to its old line
-- [x] Handle line splits: when a perpendicular belt is removed mid-line and the line splits, update any SideInject links whose offset falls in the new line's range
+- [x] Handle line splits: when output-end segment is removed, SideInject is cleared (new output-end segment may not be adjacent to target)
 - [x] Unit tests: T-junction (East belt dead-ends into North belt), items transfer at correct offset
 - [x] Unit tests: reverse T-junction (place perpendicular belt first, then dead-ending belt)
 - [x] Unit tests: removal of either belt cleans up SideInject links

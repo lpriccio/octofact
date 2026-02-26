@@ -34,10 +34,11 @@ pub struct PortDef {
 /// Get the canonical port layout for a machine type (defined facing North).
 ///
 /// Cell offsets are relative to the origin cell within the machine's footprint.
-/// For a 3×2 machine (w=3, h=2), cells are:
+/// For a 3×3 machine (w=3, h=3), cells are:
 /// ```text
 ///   (0,0) (1,0) (2,0)   ← North edge (y=0)
-///   (0,1) (1,1) (2,1)   ← South edge (y=h-1)
+///   (0,1) (1,1) (2,1)   ← Middle row
+///   (0,2) (1,2) (2,2)   ← South edge (y=h-1)
 /// ```
 #[allow(dead_code)]
 pub fn port_layout(machine_type: MachineType) -> &'static [PortDef] {
@@ -49,27 +50,27 @@ pub fn port_layout(machine_type: MachineType) -> &'static [PortDef] {
             PortDef { side: South, kind: Input, slot: 0, cell_offset: (0, 1) },
             PortDef { side: North, kind: Output, slot: 0, cell_offset: (0, 0) },
         ],
-        // Inverter (3×2): input center-south, output center-north
+        // Inverter (3×3): input center-south, output center-north
         MachineType::Inverter => &[
-            PortDef { side: South, kind: Input, slot: 0, cell_offset: (1, 1) },
+            PortDef { side: South, kind: Input, slot: 0, cell_offset: (1, 2) },
             PortDef { side: North, kind: Output, slot: 0, cell_offset: (1, 0) },
         ],
-        // Embedder (3×2): two inputs (south-center, west-top), output center-north
+        // Embedder (3×3): two inputs (south-center, west-center), output center-north
         MachineType::Embedder => &[
-            PortDef { side: South, kind: Input, slot: 0, cell_offset: (1, 1) },
-            PortDef { side: West, kind: Input, slot: 1, cell_offset: (0, 0) },
+            PortDef { side: South, kind: Input, slot: 0, cell_offset: (1, 2) },
+            PortDef { side: West, kind: Input, slot: 1, cell_offset: (0, 1) },
             PortDef { side: North, kind: Output, slot: 0, cell_offset: (1, 0) },
         ],
-        // Quotient (3×2): input south-center, outputs north-center and east-top
+        // Quotient (3×3): input south-center, outputs north-center and east-center
         MachineType::Quotient => &[
-            PortDef { side: South, kind: Input, slot: 0, cell_offset: (1, 1) },
+            PortDef { side: South, kind: Input, slot: 0, cell_offset: (1, 2) },
             PortDef { side: North, kind: Output, slot: 0, cell_offset: (1, 0) },
-            PortDef { side: East, kind: Output, slot: 1, cell_offset: (2, 0) },
+            PortDef { side: East, kind: Output, slot: 1, cell_offset: (2, 1) },
         ],
-        // Transformer (3×2): two inputs (south-center, west-top), output center-north
+        // Transformer (3×3): two inputs (south-center, west-center), output center-north
         MachineType::Transformer => &[
-            PortDef { side: South, kind: Input, slot: 0, cell_offset: (1, 1) },
-            PortDef { side: West, kind: Input, slot: 1, cell_offset: (0, 0) },
+            PortDef { side: South, kind: Input, slot: 0, cell_offset: (1, 2) },
+            PortDef { side: West, kind: Input, slot: 1, cell_offset: (0, 1) },
             PortDef { side: North, kind: Output, slot: 0, cell_offset: (1, 0) },
         ],
         // Source (1×1): single output on origin
@@ -461,8 +462,8 @@ mod tests {
 
     #[test]
     fn port_at_cell_on_side_finds_port() {
-        // Inverter facing North: input at (1,1) South, output at (1,0) North
-        let port = port_at_cell_on_side(MachineType::Inverter, Direction::North, (1, 1), Direction::South);
+        // Inverter facing North: input at (1,2) South, output at (1,0) North
+        let port = port_at_cell_on_side(MachineType::Inverter, Direction::North, (1, 2), Direction::South);
         assert!(port.is_some());
         assert_eq!(port.unwrap().kind, PortKind::Input);
 
@@ -473,64 +474,65 @@ mod tests {
 
     #[test]
     fn port_at_cell_on_side_rejects_wrong_cell() {
-        // Inverter facing North: no port at (0, 1) South (port is at (1, 1) South)
-        let port = port_at_cell_on_side(MachineType::Inverter, Direction::North, (0, 1), Direction::South);
+        // Inverter facing North: no port at (0, 2) South (port is at (1, 2) South)
+        let port = port_at_cell_on_side(MachineType::Inverter, Direction::North, (0, 2), Direction::South);
         assert!(port.is_none());
     }
 
     #[test]
     fn port_at_cell_on_side_with_rotation() {
-        // Inverter facing East (2×3 footprint):
-        //   input at (0,1) West, output at (1,1) East
+        // Inverter (3×3) facing East: square footprint stays (3, 3).
+        //   Canonical input (1,2) South → rotated to (0,1) West
+        //   Canonical output (1,0) North → rotated to (2,1) East
         let port = port_at_cell_on_side(MachineType::Inverter, Direction::East, (0, 1), Direction::West);
         assert!(port.is_some());
         assert_eq!(port.unwrap().kind, PortKind::Input);
 
-        let port = port_at_cell_on_side(MachineType::Inverter, Direction::East, (1, 1), Direction::East);
+        let port = port_at_cell_on_side(MachineType::Inverter, Direction::East, (2, 1), Direction::East);
         assert!(port.is_some());
         assert_eq!(port.unwrap().kind, PortKind::Output);
 
-        // Old canonical offset (1,1) with South should not match when facing East
-        let port = port_at_cell_on_side(MachineType::Inverter, Direction::East, (1, 1), Direction::South);
+        // Old canonical offset (1,2) with South should not match when facing East
+        let port = port_at_cell_on_side(MachineType::Inverter, Direction::East, (1, 2), Direction::South);
         assert!(port.is_none());
     }
 
     #[test]
     fn rotated_ports_rotate_cell_offsets() {
-        // Inverter (3×2) facing East: footprint becomes (2, 3).
-        // Canonical input at (1,1) South → rotated to (0,1) West.
-        // Canonical output at (1,0) North → rotated to (1,1) East.
+        // Inverter (3×3) facing East: footprint stays (3, 3).
+        // Canonical input at (1,2) South → rotated to (0,1) West.
+        // Canonical output at (1,0) North → rotated to (2,1) East.
         let ports = rotated_ports(MachineType::Inverter, Direction::East);
         let input = ports.iter().find(|p| p.kind == PortKind::Input).unwrap();
         assert_eq!(input.cell_offset, (0, 1));
         assert_eq!(input.side, Direction::West);
         let output = ports.iter().find(|p| p.kind == PortKind::Output).unwrap();
-        assert_eq!(output.cell_offset, (1, 1));
+        assert_eq!(output.cell_offset, (2, 1));
         assert_eq!(output.side, Direction::East);
     }
 
     #[test]
     fn rotated_ports_south_cell_offsets() {
-        // Inverter (3×2) facing South: footprint stays (3, 2).
-        // Canonical input at (1,1) South → rotated to (1,0) North.
-        // Canonical output at (1,0) North → rotated to (1,1) South.
+        // Inverter (3×3) facing South: footprint stays (3, 3).
+        // Canonical input at (1,2) South → rotated to (1,0) North.
+        // Canonical output at (1,0) North → rotated to (1,2) South.
         let ports = rotated_ports(MachineType::Inverter, Direction::South);
         let input = ports.iter().find(|p| p.kind == PortKind::Input).unwrap();
         assert_eq!(input.cell_offset, (1, 0));
         assert_eq!(input.side, Direction::North);
         let output = ports.iter().find(|p| p.kind == PortKind::Output).unwrap();
-        assert_eq!(output.cell_offset, (1, 1));
+        assert_eq!(output.cell_offset, (1, 2));
         assert_eq!(output.side, Direction::South);
     }
 
     #[test]
     fn rotated_ports_west_cell_offsets() {
-        // Inverter (3×2) facing West: footprint becomes (2, 3).
-        // Canonical input at (1,1) South → rotated to (1,1) East.
+        // Inverter (3×3) facing West: footprint stays (3, 3).
+        // Canonical input at (1,2) South → rotated to (2,1) East.
         // Canonical output at (1,0) North → rotated to (0,1) West.
         let ports = rotated_ports(MachineType::Inverter, Direction::West);
         let input = ports.iter().find(|p| p.kind == PortKind::Input).unwrap();
-        assert_eq!(input.cell_offset, (1, 1));
+        assert_eq!(input.cell_offset, (2, 1));
         assert_eq!(input.side, Direction::East);
         let output = ports.iter().find(|p| p.kind == PortKind::Output).unwrap();
         assert_eq!(output.cell_offset, (0, 1));

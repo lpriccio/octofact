@@ -285,6 +285,15 @@ impl WorldState {
     pub fn position(&self, entity: EntityId) -> Option<&GridPos> {
         self.positions.get(entity)
     }
+
+    /// Rotate an entity's facing direction 90° clockwise.
+    /// For square footprints (w == h), the occupied cells don't change.
+    /// Returns the new direction, or None if the entity doesn't exist.
+    pub fn rotate_cw(&mut self, entity: EntityId) -> Option<Direction> {
+        let dir = self.directions.get_mut(entity)?;
+        *dir = dir.rotate_cw();
+        Some(*dir)
+    }
 }
 
 impl WorldState {
@@ -464,14 +473,14 @@ mod tests {
     }
 
     #[test]
-    fn test_3x2_footprint() {
+    fn test_3x3_footprint() {
         let mut world = WorldState::new();
         let addr = vec![0];
-        // Inverter is 3x2: occupies (0,0), (1,0), (2,0), (0,1), (1,1), (2,1)
+        // Inverter is 3x3: occupies 9 cells
         let entity = world.place(&addr, (0, 0), ItemId::Inverter, Direction::North).unwrap();
         let entities = world.tile_entities(&addr).unwrap();
-        assert_eq!(entities.len(), 6);
-        for dy in 0..2 {
+        assert_eq!(entities.len(), 9);
+        for dy in 0..3 {
             for dx in 0..3 {
                 assert_eq!(entities.get(&(dx, dy)), Some(&entity));
             }
@@ -479,30 +488,27 @@ mod tests {
     }
 
     #[test]
-    fn test_3x2_rotated_east_footprint() {
+    fn test_3x3_rotated_east_footprint() {
         let mut world = WorldState::new();
         let addr = vec![0];
-        // Inverter (3×2) facing East: rotated footprint is (2, 3)
-        // Occupies (0,0), (1,0), (0,1), (1,1), (0,2), (1,2)
+        // Inverter (3×3) facing East: square footprint stays (3, 3)
         let entity = world.place(&addr, (0, 0), ItemId::Inverter, Direction::East).unwrap();
         let entities = world.tile_entities(&addr).unwrap();
-        assert_eq!(entities.len(), 6);
+        assert_eq!(entities.len(), 9);
         for dy in 0..3 {
-            for dx in 0..2 {
+            for dx in 0..3 {
                 assert_eq!(entities.get(&(dx, dy)), Some(&entity),
                     "cell ({},{}) should be occupied", dx, dy);
             }
         }
-        // (2, 0) should be free (canonical footprint would have it occupied)
-        assert!(entities.get(&(2, 0)).is_none());
     }
 
     #[test]
-    fn test_3x2_rotated_east_remove() {
+    fn test_3x3_rotated_east_remove() {
         let mut world = WorldState::new();
         let addr = vec![0];
         world.place(&addr, (0, 0), ItemId::Inverter, Direction::East).unwrap();
-        let removed = world.remove(&addr, (1, 2));
+        let removed = world.remove(&addr, (2, 2));
         assert_eq!(removed, Some(ItemId::Inverter));
         assert!(world.tile_entities(&addr).is_none());
     }

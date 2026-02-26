@@ -48,7 +48,7 @@ fn machine_size_canonical(mt: u32) -> vec2<f32> {
         case 6u: { return vec2<f32>(1.0, 1.0); }  // Quadrupole
         case 0u: { return vec2<f32>(2.0, 2.0); }  // Composer
         case 7u: { return vec2<f32>(2.0, 2.0); }  // Dynamo
-        default: { return vec2<f32>(3.0, 2.0); }   // Inverter, Embedder, Quotient, Transformer
+        default: { return vec2<f32>(3.0, 3.0); }   // Inverter, Embedder, Quotient, Transformer
     }
 }
 
@@ -170,23 +170,23 @@ fn port_indicators(uv: vec2<f32>, mt: u32, facing: u32) -> vec4<f32> {
             best = max(best, check_port(uv, canon_size, vec2<f32>(0.0, 1.0), 2u, facing, 0u));
             best = max(best, check_port(uv, canon_size, vec2<f32>(0.0, 0.0), 0u, facing, 1u));
         }
-        case 1u: { // Inverter (3×2): input South@(1,1), output North@(1,0)
-            best = max(best, check_port(uv, canon_size, vec2<f32>(1.0, 1.0), 2u, facing, 0u));
+        case 1u: { // Inverter (3×3): input South@(1,2), output North@(1,0)
+            best = max(best, check_port(uv, canon_size, vec2<f32>(1.0, 2.0), 2u, facing, 0u));
             best = max(best, check_port(uv, canon_size, vec2<f32>(1.0, 0.0), 0u, facing, 1u));
         }
-        case 2u: { // Embedder (3×2): input0 South@(1,1), input1 West@(0,0), output North@(1,0)
-            best = max(best, check_port(uv, canon_size, vec2<f32>(1.0, 1.0), 2u, facing, 0u));
-            best = max(best, check_port(uv, canon_size, vec2<f32>(0.0, 0.0), 3u, facing, 0u));
+        case 2u: { // Embedder (3×3): input0 South@(1,2), input1 West@(0,1), output North@(1,0)
+            best = max(best, check_port(uv, canon_size, vec2<f32>(1.0, 2.0), 2u, facing, 0u));
+            best = max(best, check_port(uv, canon_size, vec2<f32>(0.0, 1.0), 3u, facing, 0u));
             best = max(best, check_port(uv, canon_size, vec2<f32>(1.0, 0.0), 0u, facing, 1u));
         }
-        case 3u: { // Quotient (3×2): input South@(1,1), output0 North@(1,0), output1 East@(2,0)
-            best = max(best, check_port(uv, canon_size, vec2<f32>(1.0, 1.0), 2u, facing, 0u));
+        case 3u: { // Quotient (3×3): input South@(1,2), output0 North@(1,0), output1 East@(2,1)
+            best = max(best, check_port(uv, canon_size, vec2<f32>(1.0, 2.0), 2u, facing, 0u));
             best = max(best, check_port(uv, canon_size, vec2<f32>(1.0, 0.0), 0u, facing, 1u));
-            best = max(best, check_port(uv, canon_size, vec2<f32>(2.0, 0.0), 1u, facing, 1u));
+            best = max(best, check_port(uv, canon_size, vec2<f32>(2.0, 1.0), 1u, facing, 1u));
         }
-        case 4u: { // Transformer (3×2): input0 South@(1,1), input1 West@(0,0), output North@(1,0)
-            best = max(best, check_port(uv, canon_size, vec2<f32>(1.0, 1.0), 2u, facing, 0u));
-            best = max(best, check_port(uv, canon_size, vec2<f32>(0.0, 0.0), 3u, facing, 0u));
+        case 4u: { // Transformer (3×3): input0 South@(1,2), input1 West@(0,1), output North@(1,0)
+            best = max(best, check_port(uv, canon_size, vec2<f32>(1.0, 2.0), 2u, facing, 0u));
+            best = max(best, check_port(uv, canon_size, vec2<f32>(0.0, 1.0), 3u, facing, 0u));
             best = max(best, check_port(uv, canon_size, vec2<f32>(1.0, 0.0), 0u, facing, 1u));
         }
         case 5u: { // Source (1×1): output North@(0,0)

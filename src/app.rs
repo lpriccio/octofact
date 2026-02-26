@@ -818,6 +818,90 @@ impl App {
         false
     }
 
+    /// Rotate the structure at the given screen position 90° clockwise.
+    /// Disconnects old belt connections and auto-reconnects with the new facing.
+    fn rotate_at_cursor(&mut self, sx: f64, sy: f64) -> bool {
+        let result = match self.find_clicked_tile(sx, sy) {
+            Some(r) => r,
+            None => return false,
+        };
+        let address = {
+            let running = self.renderer.as_ref().unwrap();
+            running.tiling.tiles[result.tile_idx].address.clone()
+        };
+        let entities = match self.world.tile_entities(&address) {
+            Some(e) => e,
+            None => return false,
+        };
+        let &entity = match entities.get(&result.grid_xy) {
+            Some(e) => e,
+            None => return false,
+        };
+
+        let kind = match self.world.kind(entity) {
+            Some(k) => k,
+            None => return false,
+        };
+
+        // Only rotate machines and power structures (not belts — belt direction is functional)
+        let machine_type = match kind {
+            StructureKind::Machine(mt) => Some(mt),
+            StructureKind::PowerSource => None,
+            _ => return false,
+        };
+
+        // Disconnect old belt connections for machines
+        if machine_type.is_some() {
+            self.belt_network.disconnect_machine_ports(entity);
+        }
+
+        // Rotate direction
+        let new_dir = match self.world.rotate_cw(entity) {
+            Some(d) => d,
+            None => return false,
+        };
+
+        // Auto-reconnect ports for machines
+        if let Some(mt) = machine_type {
+            let origin = match self.world.position(entity) {
+                Some(p) => (p.gx as i32, p.gy as i32),
+                None => return false,
+            };
+            self.auto_connect_machine_ports(entity, &address, origin, new_dir, mt);
+        }
+
+        // Flash feedback
+        let running = self.renderer.as_ref().unwrap();
+        let width = running.gpu.config.width as f32;
+        let height = running.gpu.config.height as f32;
+        let scale = running.gpu.window.scale_factor() as f32;
+        let aspect = width / height;
+        let view_proj = self.camera.build_view_proj(aspect);
+
+        let inv_view = self.camera.local.inverse();
+        let tile_xform = running.tiling.tiles[result.tile_idx].transform;
+        let combined = inv_view.compose(&tile_xform);
+
+        let khs = self.klein_half_side;
+        let divisions = 64.0_f64;
+        let snap_kx = (result.grid_xy.0 as f64 / divisions) * 2.0 * khs;
+        let snap_ky = (result.grid_xy.1 as f64 / divisions) * 2.0 * khs;
+        let kr2 = snap_kx * snap_kx + snap_ky * snap_ky;
+        let denom = 1.0 + (1.0 - kr2).max(0.0).sqrt();
+        let local_disk = Complex::new(snap_kx / denom, snap_ky / denom);
+        let world_disk = combined.apply(local_disk);
+        let bowl = crate::hyperbolic::embedding::disk_to_bowl(world_disk);
+        let elevation = running.extra_elevation.get(&result.tile_idx).copied().unwrap_or(0.0);
+        let world_pos = glam::Vec3::new(bowl[0], bowl[1] + elevation, bowl[2]);
+
+        if let Some((px, py)) = project_to_screen(world_pos, &view_proj, width, height) {
+            self.ui.flash_label = format!("{}", new_dir.arrow_char());
+            self.ui.flash_screen_pos = Some((px / scale, py / scale));
+            self.ui.flash_timer = 0.3;
+        }
+        true
+    }
+
     fn modify_terrain(&mut self, sx: f64, sy: f64, delta: f32) {
         let result = match self.find_clicked_tile(sx, sy) {
             Some(r) => r,
@@ -1214,6 +1298,8 @@ impl ApplicationHandler for App {
                     if self.input_state.just_pressed(GameAction::RotateStructure) {
                         if let Some(mode) = &mut self.ui.placement_mode {
                             mode.direction = mode.direction.rotate_cw();
+                        } else if let Some(pos) = self.ui.cursor_pos {
+                            self.rotate_at_cursor(pos.x, pos.y);
                         }
                     }
                     if self.input_state.just_pressed(GameAction::DestroyBuilding) {

@@ -385,6 +385,25 @@ impl BeltNetwork {
         }
     }
 
+    /// Disconnect all belt connections to/from a machine entity.
+    /// Sets any BeltEnd referencing this machine back to Open.
+    pub fn disconnect_machine_ports(&mut self, machine_entity: EntityId) {
+        for (_id, line) in self.lines.iter_mut() {
+            match line.output_end {
+                BeltEnd::MachineInput { entity, .. } if entity == machine_entity => {
+                    line.output_end = BeltEnd::Open;
+                }
+                _ => {}
+            }
+            match line.input_end {
+                BeltEnd::MachineOutput { entity, .. } if entity == machine_entity => {
+                    line.input_end = BeltEnd::Open;
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// Run port transfers: move items between belt endpoints and machine ports.
     /// Call this each tick after belt advance and machine tick.
     pub fn tick_port_transfers(&mut self, machine_pool: &mut MachinePool) {

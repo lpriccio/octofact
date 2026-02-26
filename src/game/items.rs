@@ -361,7 +361,7 @@ impl MachineType {
         match self {
             Self::Source => (1, 1),
             Self::Composer => (2, 2),
-            Self::Inverter | Self::Embedder | Self::Quotient | Self::Transformer => (3, 2),
+            Self::Inverter | Self::Embedder | Self::Quotient | Self::Transformer => (3, 3),
         }
     }
 }

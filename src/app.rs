@@ -1539,6 +1539,7 @@ impl ApplicationHandler for App {
             }
             self.machine_pool.tick(&self.recipes);
             self.belt_network.tick();
+            self.splitter_pool.tick(&mut self.belt_network);
             self.belt_network.tick_port_transfers(&mut self.machine_pool);
             if let Some(running) = &mut self.renderer {
                 self.camera.process_movement(

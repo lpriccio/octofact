@@ -574,9 +574,55 @@ impl BeltNetwork {
         }
     }
 
-    /// Get the transport line ID for a belt entity's segment.
-    pub fn line_of(&self, entity: EntityId) -> Option<TransportLineId> {
-        self.segments.get(entity).map(|s| s.line)
+    /// Check if a belt entity's line has a front item at pos=0 ready to take.
+    pub fn peek_front_item(&self, belt_entity: EntityId) -> Option<ItemId> {
+        let seg = self.segments.get(belt_entity)?;
+        let line = self.lines.get(seg.line)?;
+        if !line.items.is_empty() && line.items[0].pos == 0 {
+            Some(line.items[0].item)
+        } else {
+            None
+        }
+    }
+
+    /// Take the front item from a belt entity's transport line (pos=0).
+    pub fn take_front_item(&mut self, belt_entity: EntityId) -> Option<ItemId> {
+        let seg = self.segments.get(belt_entity)?;
+        let line = self.lines.get_mut(seg.line)?;
+        if !line.items.is_empty() && line.items[0].pos == 0 {
+            Some(line.items.remove(0).item)
+        } else {
+            None
+        }
+    }
+
+    /// Check if a belt entity's line can accept an item at its input end.
+    pub fn can_accept_at_entity_input(&self, belt_entity: EntityId) -> bool {
+        let seg = match self.segments.get(belt_entity) {
+            Some(s) => s,
+            None => return false,
+        };
+        self.lines.get(seg.line)
+            .map(|l| l.can_accept_at_input())
+            .unwrap_or(false)
+    }
+
+    /// Push an item to the input end of a belt entity's transport line.
+    pub fn push_to_entity_input(&mut self, belt_entity: EntityId, item: ItemId) -> bool {
+        let seg = match self.segments.get(belt_entity) {
+            Some(s) => *s,
+            None => return false,
+        };
+        let line = match self.lines.get_mut(seg.line) {
+            Some(l) => l,
+            None => return false,
+        };
+        if line.can_accept_at_input() {
+            line.insert_at_input(item);
+            true
+        } else {
+            false
+        }
     }
 
     /// Get splitter connections on the line containing this belt entity.

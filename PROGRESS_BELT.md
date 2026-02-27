@@ -99,17 +99,17 @@ behavior based on which sides have input vs output belts.
 
 ### Phase B2c: Simulation Tick
 
-- [ ] Implement `SplitterPool::tick(belt_network)` — called each sim tick after belt advance:
+- [x] Implement `SplitterPool::tick(belt_network)` — called each sim tick after belt advance:
   - **Merger mode:** Round-robin pull from input lines. Take item from front of next input line (pos=0), push to output line input end. Advance round_robin_idx.
   - **Splitter mode:** Take item from single input line (pos=0), push to next output line (round-robin). If target output is full, try next output. If all full, item stays on input belt.
   - **Balancer mode:** Alternate between input lines, alternate between output lines. Pull from input A → push to output A, pull from input B → push to output B. If one side backs up, overflow to the other.
-- [ ] Throughput: splitter transfers at belt speed (1 item per tick if gap allows), not faster
-- [ ] Wire `SplitterPool::tick()` into the main simulation loop (after belt tick, before machine tick)
-- [ ] Unit tests: merger — 2 input belts with items, 1 output belt, items alternate fairly
-- [ ] Unit tests: splitter — 1 input belt, 2 output belts, items distributed round-robin
-- [ ] Unit tests: balancer — 2 in 2 out, items balanced
-- [ ] Unit tests: backpressure — when output belt is full, items back up correctly
-- [ ] Unit tests: throughput — splitter doesn't exceed belt speed
+- [x] Throughput: splitter transfers at belt speed (1 item per tick if gap allows), not faster
+- [x] Wire `SplitterPool::tick()` into the main simulation loop (after belt tick, before machine tick)
+- [x] Unit tests: merger — 2 input belts with items, 1 output belt, items alternate fairly
+- [x] Unit tests: splitter — 1 input belt, 2 output belts, items distributed round-robin
+- [x] Unit tests: balancer — 2 in 2 out, items balanced
+- [x] Unit tests: backpressure — when output belt is full, items back up correctly
+- [x] Unit tests: throughput — splitter doesn't exceed belt speed
 
 ### Phase B2d: Rendering & UI
 

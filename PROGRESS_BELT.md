@@ -113,11 +113,11 @@ behavior based on which sides have input vs output belts.
 
 ### Phase B2d: Rendering & UI
 
-- [ ] Add `SplitterInstance` to instance buffer system or reuse MachineInstance with a splitter type
-- [ ] Write splitter visuals in machine.wgsl (or new splitter.wgsl): distinct appearance showing directional arrows or connection indicators based on mode
-- [ ] Build splitter instances each frame from SplitterPool state
-- [ ] Click-to-inspect UI: show mode (Merger/Splitter/Balancer), connected belt count, throughput stats
-- [ ] Add Splitter recipe to crafting (e.g., Composer: 2x Identity → Splitter, or 4x LineSegment → Splitter)
+- [x] Add `SplitterInstance` to instance buffer system or reuse MachineInstance with a splitter type
+- [x] Write splitter visuals in machine.wgsl (or new splitter.wgsl): distinct appearance showing directional arrows or connection indicators based on mode
+- [x] Build splitter instances each frame from SplitterPool state
+- [x] Click-to-inspect UI: show mode (Merger/Splitter/Balancer), connected belt count, throughput stats
+- [x] Add Splitter recipe to crafting (e.g., Composer: 2x Identity → Splitter, or 4x LineSegment → Splitter)
 
 
 ## Phase B3: Storage Building

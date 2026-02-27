@@ -406,6 +406,8 @@ pub fn all_recipes() -> Vec<Recipe> {
         Recipe { machine: c, inputs: vec![(Function, 2)], output: Composer, output_count: 1 },
         Recipe { machine: i, inputs: vec![(Composer, 1)], output: Inverter, output_count: 1 },
         Recipe { machine: c, inputs: vec![(AxiomaticScience, 12)], output: KnowledgeSheaf, output_count: 1 },
+        // Infrastructure
+        Recipe { machine: c, inputs: vec![(LineSegment, 4)], output: Splitter, output_count: 1 },
         // Power chain
         Recipe { machine: c, inputs: vec![(Identity, 4)], output: Quadrupole, output_count: 1 },
         Recipe { machine: c, inputs: vec![(Quadrupole, 2)], output: Dynamo, output_count: 1 },

@@ -57,6 +57,8 @@ pub struct UiState {
     belt_drag: Option<BeltDrag>,
     /// Currently inspected machine entity (opens the machine panel).
     pub machine_panel_entity: Option<EntityId>,
+    /// Currently inspected splitter entity (opens the splitter panel).
+    pub splitter_panel_entity: Option<EntityId>,
 }
 
 impl UiState {
@@ -73,11 +75,12 @@ impl UiState {
             flash_timer: 0.0,
             belt_drag: None,
             machine_panel_entity: None,
+            splitter_panel_entity: None,
         }
     }
 
     fn is_panel_open(&self) -> bool {
-        self.settings_open || self.inventory_open || self.machine_panel_entity.is_some()
+        self.settings_open || self.inventory_open || self.machine_panel_entity.is_some() || self.splitter_panel_entity.is_some()
     }
 }
 
@@ -823,11 +826,18 @@ impl App {
             Some(e) => e,
             None => return false,
         };
-        if let Some(StructureKind::Machine(_)) = self.world.kind(entity) {
-            self.ui.machine_panel_entity = Some(entity);
-            true
-        } else {
-            false
+        match self.world.kind(entity) {
+            Some(StructureKind::Machine(_)) => {
+                self.ui.splitter_panel_entity = None;
+                self.ui.machine_panel_entity = Some(entity);
+                true
+            }
+            Some(StructureKind::Splitter) => {
+                self.ui.machine_panel_entity = None;
+                self.ui.splitter_panel_entity = Some(entity);
+                true
+            }
+            _ => false,
         }
     }
 
@@ -881,6 +891,9 @@ impl App {
                 self.power_network.remove(entity);
             }
             StructureKind::Splitter => {
+                if self.ui.splitter_panel_entity == Some(entity) {
+                    self.ui.splitter_panel_entity = None;
+                }
                 self.belt_network.disconnect_splitter_ports(entity);
                 self.splitter_pool.remove(entity);
             }
@@ -1110,6 +1123,9 @@ impl App {
                             _ => -1.0, // Idle, NoInput, OutputFull
                         })
                         .unwrap_or(-1.0)
+                } else if machine_type_float == 8.0 {
+                    // Splitter: encode connection bitmask in progress field
+                    self.splitter_pool.connection_bitmask(entity, &self.world) as f32
                 } else {
                     -1.0 // Power nodes are always "idle" visually
                 };
@@ -1261,6 +1277,23 @@ impl App {
                     }
                     crate::ui::machine::MachineAction::Close => {
                         self.ui.machine_panel_entity = None;
+                    }
+                }
+            }
+        }
+
+        // Splitter inspection panel
+        if let Some(entity) = self.ui.splitter_panel_entity {
+            let egui_ctx = re.egui.ctx.clone();
+            if let Some(action) = crate::ui::splitter::splitter_panel(
+                &egui_ctx,
+                entity,
+                &self.splitter_pool,
+                &self.world,
+            ) {
+                match action {
+                    crate::ui::splitter::SplitterAction::Close => {
+                        self.ui.splitter_panel_entity = None;
                     }
                 }
             }
@@ -1469,11 +1502,12 @@ impl ApplicationHandler for App {
                                 if !self.try_open_machine_panel(pos.x, pos.y) {
                                     self.handle_debug_click(pos.x, pos.y);
                                 }
-                            } else if self.ui.machine_panel_entity.is_some() {
-                                // Clicking outside while machine panel is open:
-                                // try to click another machine, else close panel
+                            } else if self.ui.machine_panel_entity.is_some() || self.ui.splitter_panel_entity.is_some() {
+                                // Clicking outside while inspection panel is open:
+                                // try to click another building, else close panel
                                 if !self.try_open_machine_panel(pos.x, pos.y) {
                                     self.ui.machine_panel_entity = None;
+                                    self.ui.splitter_panel_entity = None;
                                 }
                             }
                         }

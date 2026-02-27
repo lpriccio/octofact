@@ -1,7 +1,17 @@
 use std::collections::HashMap;
 
-use crate::game::world::EntityId;
+use crate::game::world::{Direction, EntityId, WorldState};
 use crate::sim::belt::BeltNetwork;
+
+/// Bit shift for encoding a direction in the connection bitmask (2 bits per side).
+fn side_shift(dir: Direction) -> u8 {
+    match dir {
+        Direction::North => 0,
+        Direction::East => 2,
+        Direction::South => 4,
+        Direction::West => 6,
+    }
+}
 
 /// How a splitter behaves, auto-detected from connected belt directions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -127,6 +137,45 @@ impl SplitterPool {
             if !s.outputs.contains(&belt) {
                 s.outputs.push(belt);
             }
+        }
+    }
+
+    /// Compute a bitmask encoding which sides of the splitter have input/output belts.
+    /// 2 bits per direction: 0=none, 1=input, 2=output.
+    /// Packed as: north | (east << 2) | (south << 4) | (west << 6).
+    pub fn connection_bitmask(&self, splitter: EntityId, world: &WorldState) -> u8 {
+        let Some(s) = self.get(splitter) else { return 0 };
+        let Some(spos) = world.position(splitter) else { return 0 };
+        let (sx, sy) = (spos.gx as i32, spos.gy as i32);
+
+        let mut mask: u8 = 0;
+        // Determine which side each connected belt is on
+        for &belt in &s.inputs {
+            if let Some(side) = Self::belt_side(belt, sx, sy, world) {
+                let shift = side_shift(side);
+                mask |= 1 << shift; // 1 = input
+            }
+        }
+        for &belt in &s.outputs {
+            if let Some(side) = Self::belt_side(belt, sx, sy, world) {
+                let shift = side_shift(side);
+                mask |= 2 << shift; // 2 = output
+            }
+        }
+        mask
+    }
+
+    /// Determine which side of the splitter a belt entity is on.
+    fn belt_side(belt: EntityId, sx: i32, sy: i32, world: &WorldState) -> Option<Direction> {
+        let bpos = world.position(belt)?;
+        let (bx, by) = (bpos.gx as i32, bpos.gy as i32);
+        let (dx, dy) = (bx - sx, by - sy);
+        match (dx, dy) {
+            (0, -1) => Some(Direction::North),
+            (1, 0) => Some(Direction::East),
+            (0, 1) => Some(Direction::South),
+            (-1, 0) => Some(Direction::West),
+            _ => None,
         }
     }
 

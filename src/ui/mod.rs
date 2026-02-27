@@ -6,3 +6,4 @@ pub mod icons;
 pub mod tooltip;
 pub mod placement;
 pub mod machine;
+pub mod splitter;

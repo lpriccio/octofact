@@ -162,6 +162,36 @@ fn check_port(uv: vec2<f32>, canon_size: vec2<f32>, cell: vec2<f32>, canon_side:
     return vec4<f32>(port_color, alpha * max(tri_shape, 0.5));
 }
 
+// Splitter port indicators: decode connection bitmask from progress field.
+// Bitmask: 2 bits per direction (N=bits 0-1, E=bits 2-3, S=bits 4-5, W=bits 6-7).
+// Value per direction: 0=none, 1=input, 2=output.
+fn splitter_port_indicators(uv: vec2<f32>, bitmask: u32) -> vec4<f32> {
+    var best = vec4<f32>(0.0);
+    let size = vec2<f32>(1.0, 1.0);
+    let cell = vec2<f32>(0.0, 0.0);
+
+    // Check each direction
+    let north = (bitmask >> 0u) & 3u;
+    let east  = (bitmask >> 2u) & 3u;
+    let south = (bitmask >> 4u) & 3u;
+    let west  = (bitmask >> 6u) & 3u;
+
+    if north > 0u {
+        best = max(best, check_port(uv, size, cell, 0u, 0u, north - 1u));
+    }
+    if east > 0u {
+        best = max(best, check_port(uv, size, cell, 1u, 0u, east - 1u));
+    }
+    if south > 0u {
+        best = max(best, check_port(uv, size, cell, 2u, 0u, south - 1u));
+    }
+    if west > 0u {
+        best = max(best, check_port(uv, size, cell, 3u, 0u, west - 1u));
+    }
+
+    return best;
+}
+
 // Get port indicator overlay for a given machine type.
 // Returns vec4(color.rgb, alpha) — alpha > 0 means a port indicator is here.
 fn port_indicators(uv: vec2<f32>, mt: u32, facing: u32) -> vec4<f32> {
@@ -287,15 +317,17 @@ fn fs_machine(in: VertexOutput) -> @location(0) vec4<f32> {
         let grad = 1.0 - wall_v * 0.4;
         var side_color = side_lit * grad;
 
-        // State dimming for side walls too
-        if in.progress >= 0.0 {
-            let pulse = 0.8 + 0.2 * sin(in.progress * 6.2832);
-            side_color *= pulse;
-        } else if in.progress > -1.5 {
-            side_color *= 0.65;
-        } else {
-            let grey = dot(side_color, vec3<f32>(0.299, 0.587, 0.114));
-            side_color = mix(vec3<f32>(grey), side_color, 0.2) * 0.3;
+        // State dimming for side walls too (skip for splitters)
+        if mt != 8u {
+            if in.progress >= 0.0 {
+                let pulse = 0.8 + 0.2 * sin(in.progress * 6.2832);
+                side_color *= pulse;
+            } else if in.progress > -1.5 {
+                side_color *= 0.65;
+            } else {
+                let grey = dot(side_color, vec3<f32>(0.299, 0.587, 0.114));
+                side_color = mix(vec3<f32>(grey), side_color, 0.2) * 0.3;
+            }
         }
 
         return vec4<f32>(side_color * fade, 1.0);
@@ -322,20 +354,29 @@ fn fs_machine(in: VertexOutput) -> @location(0) vec4<f32> {
     // Apply lighting
     color *= lighting;
 
-    // State-based pulsing glow
-    if in.progress >= 0.0 {
-        let pulse = 0.8 + 0.2 * sin(in.progress * 6.2832);
-        color *= pulse;
-    } else if in.progress > -1.5 {
-        color *= 0.65;
-    } else {
-        let grey = dot(color, vec3<f32>(0.299, 0.587, 0.114));
-        color = mix(vec3<f32>(grey), color, 0.2) * 0.3;
+    // State-based pulsing glow (skip for splitters — they use progress as bitmask)
+    if mt != 8u {
+        if in.progress >= 0.0 {
+            let pulse = 0.8 + 0.2 * sin(in.progress * 6.2832);
+            color *= pulse;
+        } else if in.progress > -1.5 {
+            color *= 0.65;
+        } else {
+            let grey = dot(color, vec3<f32>(0.299, 0.587, 0.114));
+            color = mix(vec3<f32>(grey), color, 0.2) * 0.3;
+        }
     }
 
     // Port indicators on top face
     let facing_u = u32(in.facing + 0.5);
-    let port = port_indicators(in.uv, mt, facing_u);
+    var port: vec4<f32>;
+    if mt == 8u {
+        // Splitter: decode dynamic connection bitmask from progress field
+        let bitmask = u32(max(in.progress, 0.0) + 0.5);
+        port = splitter_port_indicators(in.uv, bitmask);
+    } else {
+        port = port_indicators(in.uv, mt, facing_u);
+    }
     if port.w > 0.01 {
         color = mix(color, port.rgb, port.w * 0.85);
     }

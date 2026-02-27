@@ -1,25 +1,45 @@
 ---
 name: milestone
 description: Pick the next unblocked Octofact milestone, implement it, test it, and commit after user approval.
-allowed-tools: Read, Edit, Write, Bash(*), Grep, Glob, AskUserQuestion, Task(*)
-argument-hint: "[optional phase or milestone hint]"
+allowed-tools: Read, Edit, Write, Bash(*), Grep, Glob, AskUserQuestion, Task(*), EnterWorktree
+argument-hint: "[--worktree] [--progress FILE] [optional phase or milestone hint]"
 ---
 
 # Octofact Milestone Workflow
 
 Work through the next unblocked milestone from the game plan. Follow every step in order. Do not skip steps or combine them.
 
+## Step 0: Set up worktree (if requested)
+
+If `$ARGUMENTS` contains `--worktree`, use `EnterWorktree` to create an isolated worktree **before doing anything else**. Give it a name based on the milestone hint if one was provided (e.g., `milestone-belt-sim`), otherwise let it auto-generate a name.
+
+This ensures all work happens on a separate branch in an isolated copy of the repo, so multiple Claudes can work on different milestones in parallel without conflicts.
+
+If `--worktree` is not present, skip this step and work in the current directory as usual.
+
 ## Step 1: Read the plan and progress
+
+**Parse arguments:** Extract flags from `$ARGUMENTS`:
+
+- `--worktree` — already handled in Step 0
+- `--progress <FILE>` — use that file as the progress tracker instead of the default `PROGRESS.md`
+
+The remaining arguments (after extracting flags) are the milestone hint. Examples:
+
+- `/milestone --worktree --progress GUI_PROGRESS.md phase 3` → worktree, progress file `GUI_PROGRESS.md`, hint `phase 3`
+- `/milestone --worktree` → worktree, default progress file, no hint
+- `/milestone --progress GUI_PROGRESS.md` → no worktree, progress file `GUI_PROGRESS.md`, no hint
+- `/milestone phase 3` → no worktree, default progress file, hint `phase 3`
 
 Read these files to understand the full context:
 
 - `GAME_PLAN.md` — the master architecture blueprint
-- `PROGRESS.md` — checkboxed milestone tracker
+- The progress file (default `PROGRESS.md`, or the file specified via `--progress`) — checkboxed milestone tracker
 - `CLAUDE.md` — build instructions, architecture, conventions
 
 Identify all **unchecked** (`- [ ]`) milestones. Determine which are **unblocked** — meaning all milestones they depend on (earlier items in the same phase, or earlier phases where noted) are already checked.
 
-If `$ARGUMENTS` was provided, prefer a milestone matching that hint. Otherwise pick the first unblocked item in phase order.
+If a milestone hint was provided, prefer a milestone matching that hint. Otherwise pick the first unblocked item in phase order.
 
 Announce which milestone you've selected and briefly explain why it's next.
 
@@ -75,11 +95,11 @@ If the user reports issues or wants changes:
 - Ask them to check again.
 - Repeat until they're satisfied.
 
-## Step 7: Update PROGRESS.md
+## Step 7: Update progress file
 
-Check off the completed milestone in `PROGRESS.md` by changing `- [ ]` to `- [x]`.
+Check off the completed milestone in the progress file (the one determined in Step 1) by changing `- [ ]` to `- [x]`.
 
-If during implementation you discovered work that should be tracked for a future session, **ask the user for permission** before adding new items to `PROGRESS.md`. Propose the exact text of any new items and wait for approval.
+If during implementation you discovered work that should be tracked for a future session, **ask the user for permission** before adding new items to the progress file. Propose the exact text of any new items and wait for approval.
 
 ## Step 8: Commit and push
 
@@ -90,3 +110,5 @@ Only after the user has confirmed the milestone works:
 3. Push to the remote.
 
 If there is no git remote configured, just commit locally and tell the user.
+
+**Worktree mode:** If running in a worktree, remind the user that the work is on a separate branch and they can merge it when ready (e.g., `git merge <branch-name>` from their main working branch, or create a PR).

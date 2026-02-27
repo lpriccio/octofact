@@ -16,6 +16,7 @@ impl Inventory {
     pub fn starting_inventory() -> Self {
         let mut inv = Self::new();
         inv.add(ItemId::Belt, 2000);
+        inv.add(ItemId::Splitter, 100);
         inv.add(ItemId::Quadrupole, 1);
         inv
     }

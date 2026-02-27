@@ -46,6 +46,7 @@ fn machine_size_canonical(mt: u32) -> vec2<f32> {
     switch mt {
         case 5u: { return vec2<f32>(1.0, 1.0); }  // Source
         case 6u: { return vec2<f32>(1.0, 1.0); }  // Quadrupole
+        case 8u: { return vec2<f32>(1.0, 1.0); }  // Splitter
         case 0u: { return vec2<f32>(2.0, 2.0); }  // Composer
         case 7u: { return vec2<f32>(2.0, 2.0); }  // Dynamo
         default: { return vec2<f32>(3.0, 3.0); }   // Inverter, Embedder, Quotient, Transformer
@@ -73,6 +74,7 @@ fn machine_color(mt: u32) -> vec3<f32> {
         case 5u: { return vec3<f32>(0.4, 0.9, 0.3); }   // Source: lime
         case 6u: { return vec3<f32>(0.9, 0.8, 0.2); }   // Quadrupole: gold
         case 7u: { return vec3<f32>(1.0, 0.9, 0.3); }   // Dynamo: bright gold
+        case 8u: { return vec3<f32>(0.3, 0.8, 0.7); }   // Splitter: teal
         default: { return vec3<f32>(0.5, 0.5, 0.5); }
     }
 }
@@ -82,6 +84,7 @@ fn machine_height(mt: u32) -> f32 {
     switch mt {
         case 6u: { return 0.005; }  // Quadrupole: short relay
         case 5u: { return 0.008; }  // Source: medium
+        case 8u: { return 0.008; }  // Splitter: medium
         default: { return 0.010; }  // All production machines: tall
     }
 }

@@ -56,11 +56,11 @@ behavior based on which sides have input vs output belts.
 
 ### Phase B2a: Data Model & Placement
 
-- [ ] Add `Splitter` variant to `ItemId` enum — new infrastructure item
-- [ ] Add display_name ("Splitter"), description, icon_params (Octagon shape, distinct colors) to ItemId impl
-- [ ] Add `Splitter` variant to `StructureKind` enum with 1x1 footprint
-- [ ] Wire `StructureKind::from_item(ItemId::Splitter)` → `StructureKind::Splitter`
-- [ ] Add `SplitterPool` struct in new file `src/sim/splitter.rs`:
+- [x] Add `Splitter` variant to `ItemId` enum — new infrastructure item
+- [x] Add display_name ("Splitter"), description, icon_params (Octagon shape, distinct colors) to ItemId impl
+- [x] Add `Splitter` variant to `StructureKind` enum with 1x1 footprint
+- [x] Wire `StructureKind::from_item(ItemId::Splitter)` → `StructureKind::Splitter`
+- [x] Add `SplitterPool` struct in new file `src/sim/splitter.rs`:
   ```
   SplitterPool {
       entities: SlotMap<SplitterId, SplitterState>,
@@ -75,9 +75,9 @@ behavior based on which sides have input vs output belts.
   }
   SplitterMode { Merger, Splitter, Balancer, Inactive }
   ```
-- [ ] Register splitter in world placement flow (app.rs): on place, create SplitterPool entry
-- [ ] On removal, clean up SplitterPool entry and disconnect belt links
-- [ ] Add Splitter to build menu / inventory (start with 100 in debug inventory)
+- [x] Register splitter in world placement flow (app.rs): on place, create SplitterPool entry
+- [x] On removal, clean up SplitterPool entry and disconnect belt links
+- [x] Add Splitter to build menu / inventory (start with 100 in debug inventory)
 
 ### Phase B2b: Belt Connection Logic
 

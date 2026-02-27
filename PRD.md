@@ -66,10 +66,7 @@ Gap-based transport line model (Factorio-style). O(1) per unblocked line per tic
 **R4.3 — Machine simulation.**
 Machines consume inputs, craft over time, produce outputs. State machine: Idle → Working → OutputFull / NoPower / NoInput. Hot/cold data split for cache efficiency.
 
-**R4.4 — Inserter simulation.**
-Inserters bridge belts and machines, transferring items between them. Two-phase tick: parallel plan, sequential apply.
-
-**R4.5 — Power network.**
+**R4.4 — Power network.**
 Ratio-based power model. Connected components via BFS on power graph. Satisfaction ratio determines machine speed.
 
 ### R5: World Model

@@ -29,6 +29,7 @@ pub enum ItemId {
     RootOfUnity,
     Kernel,
     Quantum,
+    Splitter,
     SourceMachine,
 }
 
@@ -40,7 +41,7 @@ impl ItemId {
             Identity, Square, Cube, StandingWave, Function, NeckerCube,
             Image, Belt, AxiomaticScience, Composer, Inverter, Embedder,
             Quotient, Transformer, KnowledgeSheaf, Quadrupole, Dynamo,
-            RootOfUnity, Kernel, Quantum, SourceMachine,
+            RootOfUnity, Kernel, Quantum, Splitter, SourceMachine,
         ]
     }
 
@@ -72,6 +73,7 @@ impl ItemId {
             Self::RootOfUnity => "Root of Unity",
             Self::Kernel => "Kernel",
             Self::Quantum => "Quantum",
+            Self::Splitter => "Splitter",
             Self::SourceMachine => "Source",
         }
     }
@@ -85,7 +87,7 @@ impl ItemId {
             | Self::Square | Self::Cube | Self::StandingWave
             | Self::Function | Self::NeckerCube | Self::Image
             | Self::AxiomaticScience => ItemCategory::Intermediate,
-            Self::Belt | Self::Quadrupole | Self::Dynamo => ItemCategory::Infrastructure,
+            Self::Belt | Self::Quadrupole | Self::Dynamo | Self::Splitter => ItemCategory::Infrastructure,
             Self::Composer | Self::Inverter | Self::Embedder
             | Self::Quotient | Self::Transformer | Self::KnowledgeSheaf
             | Self::SourceMachine => {
@@ -100,7 +102,7 @@ impl ItemId {
             Self::NullSet | Self::Point | Self::Preimage | Self::Wavelet => 0,
             Self::RootOfUnity | Self::Kernel | Self::Quantum
             | Self::Embedder | Self::Quotient | Self::Transformer => 2,
-            Self::SourceMachine => 0,
+            Self::SourceMachine | Self::Splitter => 0,
             _ => 1,
         }
     }
@@ -133,6 +135,7 @@ impl ItemId {
             Self::RootOfUnity => "A preimage embedded in unity. Cycles back to itself.",
             Self::Kernel => "An identity embedded in a preimage. The null space made real.",
             Self::Quantum => "A standing wave embedded in a cube. Probability crystallized.",
+            Self::Splitter => "Universal junction. Merges, splits, or balances item flows depending on belt connections.",
             Self::SourceMachine => "Debug machine. Produces any item from nothing.",
         }
     }
@@ -226,6 +229,11 @@ impl ItemId {
                 shape: IconShape::Octagon,
                 primary_color: [1.0, 0.9, 0.3],
                 secondary_color: [0.8, 0.7, 0.1],
+            },
+            Self::Splitter => IconParams {
+                shape: IconShape::Octagon,
+                primary_color: [0.3, 0.8, 0.7],
+                secondary_color: [0.1, 0.6, 0.5],
             },
             // Machines — diamonds
             Self::Composer => IconParams {
@@ -468,7 +476,7 @@ mod tests {
 
     #[test]
     fn test_all_items_count() {
-        assert_eq!(ItemId::all().len(), 27);
+        assert_eq!(ItemId::all().len(), 28);
     }
 
     #[test]

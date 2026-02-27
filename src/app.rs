@@ -93,6 +93,7 @@ pub struct App {
     world: WorldState,
     belt_network: BeltNetwork,
     machine_pool: crate::sim::machine::MachinePool,
+    splitter_pool: crate::sim::splitter::SplitterPool,
     power_network: crate::sim::power::PowerNetwork,
     ui: UiState,
     grid_enabled: bool,
@@ -115,6 +116,7 @@ impl App {
             world: WorldState::new(),
             belt_network: BeltNetwork::new(),
             machine_pool: crate::sim::machine::MachinePool::new(),
+            splitter_pool: crate::sim::splitter::SplitterPool::new(),
             power_network: crate::sim::power::PowerNetwork::new(),
             ui: UiState::new(),
             grid_enabled: false,
@@ -300,6 +302,11 @@ impl App {
                 );
             }
             _ => {}
+        }
+
+        // Register splitter with simulation pool
+        if mode.item == crate::game::items::ItemId::Splitter {
+            self.splitter_pool.add(entity);
         }
 
         // Auto-connect belt to adjacent machines
@@ -775,6 +782,9 @@ impl App {
                 self.machine_pool.remove(entity);
                 self.power_network.remove(entity);
             }
+            StructureKind::Splitter => {
+                self.splitter_pool.remove(entity);
+            }
             StructureKind::PowerNode | StructureKind::PowerSource => {
                 self.power_network.remove(entity);
             }
@@ -986,6 +996,7 @@ impl App {
                     }
                     Some(StructureKind::PowerNode) => (6.0, false),
                     Some(StructureKind::PowerSource) => (7.0, false),
+                    Some(StructureKind::Splitter) => (8.0, false),
                     _ => continue,
                 };
 

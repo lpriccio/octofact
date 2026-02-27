@@ -132,6 +132,7 @@ pub enum StructureKind {
     Machine(MachineType),
     PowerNode,   // Quadrupole
     PowerSource, // Dynamo
+    Splitter,
 }
 
 impl StructureKind {
@@ -142,6 +143,7 @@ impl StructureKind {
             Self::Machine(mt) => mt.footprint(),
             Self::PowerNode => (1, 1),   // Quadrupole
             Self::PowerSource => (2, 2), // Dynamo
+            Self::Splitter => (1, 1),
         }
     }
 
@@ -150,6 +152,7 @@ impl StructureKind {
     pub fn from_item(item: ItemId) -> Option<Self> {
         match item {
             ItemId::Belt => Some(Self::Belt),
+            ItemId::Splitter => Some(Self::Splitter),
             ItemId::Quadrupole => Some(Self::PowerNode),
             ItemId::Dynamo => Some(Self::PowerSource),
             ItemId::Composer => Some(Self::Machine(MachineType::Composer)),

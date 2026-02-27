@@ -4,7 +4,7 @@ use crate::game::world::{Direction, StructureKind};
 use super::icons::IconAtlas;
 
 /// Items shown in the placement panel by default (when not in free-placement mode).
-const PLACEABLE_ITEMS: &[ItemId] = &[ItemId::Belt, ItemId::Quadrupole];
+const PLACEABLE_ITEMS: &[ItemId] = &[ItemId::Belt, ItemId::Splitter, ItemId::Quadrupole];
 
 #[derive(Clone, Debug)]
 pub struct PlacementMode {

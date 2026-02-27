@@ -36,6 +36,10 @@ pub enum BeltEnd {
     /// Belt output side-injects onto a perpendicular belt.
     /// Items insert at the target entity's segment center rather than the line's input end.
     SideInject { entity: EntityId },
+    /// Belt endpoint connected to a splitter.
+    /// When on output_end: belt feeds items into the splitter (splitter input).
+    /// When on input_end: splitter feeds items into the belt (splitter output).
+    Splitter { entity: EntityId },
 }
 
 /// An item riding on a transport line.
@@ -500,6 +504,103 @@ impl BeltNetwork {
         }
     }
 
+    /// Connect a belt's output end to a splitter (belt feeds into splitter).
+    /// Only succeeds if the belt entity is at the output end of its line
+    /// and the output end is currently Open.
+    pub fn connect_belt_to_splitter(
+        &mut self,
+        belt_entity: EntityId,
+        splitter_entity: EntityId,
+    ) -> bool {
+        let seg = match self.segments.get(belt_entity) {
+            Some(s) => *s,
+            None => return false,
+        };
+        if seg.offset != 0 {
+            return false;
+        }
+        let line = match self.lines.get_mut(seg.line) {
+            Some(l) => l,
+            None => return false,
+        };
+        if line.output_end != BeltEnd::Open {
+            return false;
+        }
+        line.output_end = BeltEnd::Splitter { entity: splitter_entity };
+        true
+    }
+
+    /// Connect a splitter's output to a belt's input end (splitter feeds belt).
+    /// Only succeeds if the belt entity is at the input end of its line
+    /// and the input end is currently Open.
+    pub fn connect_splitter_to_belt(
+        &mut self,
+        belt_entity: EntityId,
+        splitter_entity: EntityId,
+    ) -> bool {
+        let seg = match self.segments.get(belt_entity) {
+            Some(s) => *s,
+            None => return false,
+        };
+        let line_len = match self.lines.get(seg.line) {
+            Some(l) => l.length,
+            None => return false,
+        };
+        if seg.offset != line_len - FP_SCALE {
+            return false;
+        }
+        let line = self.lines.get_mut(seg.line).unwrap();
+        if line.input_end != BeltEnd::Open {
+            return false;
+        }
+        line.input_end = BeltEnd::Splitter { entity: splitter_entity };
+        true
+    }
+
+    /// Disconnect all belt connections to/from a splitter entity.
+    /// Sets any BeltEnd::Splitter referencing this splitter back to Open.
+    pub fn disconnect_splitter_ports(&mut self, splitter_entity: EntityId) {
+        for (_id, line) in self.lines.iter_mut() {
+            if let BeltEnd::Splitter { entity } = line.output_end {
+                if entity == splitter_entity {
+                    line.output_end = BeltEnd::Open;
+                }
+            }
+            if let BeltEnd::Splitter { entity } = line.input_end {
+                if entity == splitter_entity {
+                    line.input_end = BeltEnd::Open;
+                }
+            }
+        }
+    }
+
+    /// Get the transport line ID for a belt entity's segment.
+    pub fn line_of(&self, entity: EntityId) -> Option<TransportLineId> {
+        self.segments.get(entity).map(|s| s.line)
+    }
+
+    /// Get splitter connections on the line containing this belt entity.
+    /// Returns (output_end_splitter, input_end_splitter).
+    pub fn line_splitter_connections(&self, entity: EntityId) -> (Option<EntityId>, Option<EntityId>) {
+        let seg = match self.segments.get(entity) {
+            Some(s) => s,
+            None => return (None, None),
+        };
+        let line = match self.lines.get(seg.line) {
+            Some(l) => l,
+            None => return (None, None),
+        };
+        let output_splitter = match line.output_end {
+            BeltEnd::Splitter { entity } => Some(entity),
+            _ => None,
+        };
+        let input_splitter = match line.input_end {
+            BeltEnd::Splitter { entity } => Some(entity),
+            _ => None,
+        };
+        (output_splitter, input_splitter)
+    }
+
     /// Run port transfers: move items between belt endpoints and machine ports.
     /// Call this each tick after belt advance and machine tick.
     pub fn tick_port_transfers(&mut self, machine_pool: &mut MachinePool) {
@@ -603,7 +704,7 @@ impl BeltNetwork {
             let line = self.lines.get_mut(seg.line).unwrap();
             // Clear SideInject — it was specific to this segment's position,
             // and the new output-end segment may not be adjacent to the target.
-            if matches!(line.output_end, BeltEnd::SideInject { .. }) {
+            if matches!(line.output_end, BeltEnd::SideInject { .. } | BeltEnd::Splitter { .. }) {
                 line.output_end = BeltEnd::Open;
             }
             // Remove items in the removed segment's range [0, FP_SCALE)
@@ -621,6 +722,10 @@ impl BeltNetwork {
         } else if seg.offset == line_len - FP_SCALE {
             // Removing the input-end segment. Shrink the line.
             let line = self.lines.get_mut(seg.line).unwrap();
+            // Clear Splitter — the new input-end segment may not be adjacent to the splitter.
+            if matches!(line.input_end, BeltEnd::Splitter { .. }) {
+                line.input_end = BeltEnd::Open;
+            }
             // Remove items in the removed segment's range
             let seg_start = seg.offset;
             line.items.retain(|i| i.pos < seg_start);
@@ -1523,5 +1628,290 @@ mod tests {
         // Exactly at MIN_ITEM_GAP — should accept
         assert!(line.can_accept_at_offset(128 + MIN_ITEM_GAP));
         assert!(line.can_accept_at_offset(128 - MIN_ITEM_GAP));
+    }
+
+    // --- Splitter-belt connection tests ---
+
+    fn place_splitter(world: &mut WorldState, pool: &mut crate::sim::splitter::SplitterPool, addr: &[u8], gx: i32, gy: i32) -> EntityId {
+        let entity = world.place(addr, (gx, gy), ItemId::Splitter, Direction::North).unwrap();
+        pool.add(entity);
+        entity
+    }
+
+    #[test]
+    fn splitter_belt_output_connects_as_input() {
+        // Belt going East at (4,5), splitter at (5,5) → belt feeds into splitter
+        let mut world = WorldState::new();
+        let mut net = BeltNetwork::new();
+        let mut pool = crate::sim::splitter::SplitterPool::new();
+
+        let splitter = place_splitter(&mut world, &mut pool, &[0], 5, 5);
+        let belt = place_belt(&mut world, &mut net, &[0], 4, 5, Direction::East);
+
+        // Belt's output end faces the splitter
+        assert!(net.connect_belt_to_splitter(belt, splitter));
+        pool.add_input(splitter, belt);
+        pool.detect_mode(splitter);
+
+        // Verify belt's output_end is Splitter
+        let seg = net.segments.get(belt).unwrap();
+        let line = net.lines.get(seg.line).unwrap();
+        assert_eq!(line.output_end, BeltEnd::Splitter { entity: splitter });
+
+        // Splitter should be Inactive (1 input, 0 outputs)
+        assert_eq!(pool.get(splitter).unwrap().mode, crate::sim::splitter::SplitterMode::Inactive);
+    }
+
+    #[test]
+    fn splitter_belt_input_connects_as_output() {
+        // Belt going East at (6,5), splitter at (5,5) → splitter feeds belt
+        let mut world = WorldState::new();
+        let mut net = BeltNetwork::new();
+        let mut pool = crate::sim::splitter::SplitterPool::new();
+
+        let splitter = place_splitter(&mut world, &mut pool, &[0], 5, 5);
+        let belt = place_belt(&mut world, &mut net, &[0], 6, 5, Direction::East);
+
+        // Belt's input end faces the splitter
+        assert!(net.connect_splitter_to_belt(belt, splitter));
+        pool.add_output(splitter, belt);
+        pool.detect_mode(splitter);
+
+        // Verify belt's input_end is Splitter
+        let seg = net.segments.get(belt).unwrap();
+        let line = net.lines.get(seg.line).unwrap();
+        assert_eq!(line.input_end, BeltEnd::Splitter { entity: splitter });
+
+        // Splitter should be Inactive (0 inputs, 1 output)
+        assert_eq!(pool.get(splitter).unwrap().mode, crate::sim::splitter::SplitterMode::Inactive);
+    }
+
+    #[test]
+    fn splitter_connects_two_inputs_one_output_merger() {
+        let mut world = WorldState::new();
+        let mut net = BeltNetwork::new();
+        let mut pool = crate::sim::splitter::SplitterPool::new();
+
+        let splitter = place_splitter(&mut world, &mut pool, &[0], 5, 5);
+
+        // Two belts feeding in from West and South
+        let belt_w = place_belt(&mut world, &mut net, &[0], 4, 5, Direction::East);
+        let belt_s = place_belt(&mut world, &mut net, &[0], 5, 6, Direction::North);
+
+        // One belt taking out to the East
+        let belt_e = place_belt(&mut world, &mut net, &[0], 6, 5, Direction::East);
+
+        assert!(net.connect_belt_to_splitter(belt_w, splitter));
+        pool.add_input(splitter, belt_w);
+        assert!(net.connect_belt_to_splitter(belt_s, splitter));
+        pool.add_input(splitter, belt_s);
+        assert!(net.connect_splitter_to_belt(belt_e, splitter));
+        pool.add_output(splitter, belt_e);
+        pool.detect_mode(splitter);
+
+        assert_eq!(pool.get(splitter).unwrap().inputs.len(), 2);
+        assert_eq!(pool.get(splitter).unwrap().outputs.len(), 1);
+        assert_eq!(pool.get(splitter).unwrap().mode, crate::sim::splitter::SplitterMode::Merger);
+    }
+
+    #[test]
+    fn splitter_connects_one_input_two_outputs_splitter_mode() {
+        let mut world = WorldState::new();
+        let mut net = BeltNetwork::new();
+        let mut pool = crate::sim::splitter::SplitterPool::new();
+
+        let splitter = place_splitter(&mut world, &mut pool, &[0], 5, 5);
+
+        // One belt feeding in from West
+        let belt_in = place_belt(&mut world, &mut net, &[0], 4, 5, Direction::East);
+        // Two belts taking out to East and South
+        let belt_out1 = place_belt(&mut world, &mut net, &[0], 6, 5, Direction::East);
+        let belt_out2 = place_belt(&mut world, &mut net, &[0], 5, 6, Direction::South);
+
+        assert!(net.connect_belt_to_splitter(belt_in, splitter));
+        pool.add_input(splitter, belt_in);
+        assert!(net.connect_splitter_to_belt(belt_out1, splitter));
+        pool.add_output(splitter, belt_out1);
+        assert!(net.connect_splitter_to_belt(belt_out2, splitter));
+        pool.add_output(splitter, belt_out2);
+        pool.detect_mode(splitter);
+
+        assert_eq!(pool.get(splitter).unwrap().mode, crate::sim::splitter::SplitterMode::Splitter);
+    }
+
+    #[test]
+    fn splitter_two_in_two_out_balancer() {
+        let mut world = WorldState::new();
+        let mut net = BeltNetwork::new();
+        let mut pool = crate::sim::splitter::SplitterPool::new();
+
+        let splitter = place_splitter(&mut world, &mut pool, &[0], 5, 5);
+
+        let belt_in1 = place_belt(&mut world, &mut net, &[0], 4, 5, Direction::East);
+        let belt_in2 = place_belt(&mut world, &mut net, &[0], 5, 4, Direction::South);
+        let belt_out1 = place_belt(&mut world, &mut net, &[0], 6, 5, Direction::East);
+        let belt_out2 = place_belt(&mut world, &mut net, &[0], 5, 6, Direction::South);
+
+        assert!(net.connect_belt_to_splitter(belt_in1, splitter));
+        pool.add_input(splitter, belt_in1);
+        assert!(net.connect_belt_to_splitter(belt_in2, splitter));
+        pool.add_input(splitter, belt_in2);
+        assert!(net.connect_splitter_to_belt(belt_out1, splitter));
+        pool.add_output(splitter, belt_out1);
+        assert!(net.connect_splitter_to_belt(belt_out2, splitter));
+        pool.add_output(splitter, belt_out2);
+        pool.detect_mode(splitter);
+
+        assert_eq!(pool.get(splitter).unwrap().mode, crate::sim::splitter::SplitterMode::Balancer);
+    }
+
+    #[test]
+    fn splitter_connect_rejects_non_endpoint_belt() {
+        // A merged belt in the middle of a line should NOT connect to a splitter
+        let mut world = WorldState::new();
+        let mut net = BeltNetwork::new();
+        let mut pool = crate::sim::splitter::SplitterPool::new();
+
+        let splitter = place_splitter(&mut world, &mut pool, &[0], 7, 5);
+
+        // Place 3 belts going East: (4,5) (5,5) (6,5) — they merge into one line
+        let _belt1 = place_belt(&mut world, &mut net, &[0], 4, 5, Direction::East);
+        let belt2 = place_belt(&mut world, &mut net, &[0], 5, 5, Direction::East);
+        let belt3 = place_belt(&mut world, &mut net, &[0], 6, 5, Direction::East);
+
+        // belt3 is at offset 0 (output end) — should connect
+        assert!(net.connect_belt_to_splitter(belt3, splitter));
+        // belt2 is in the middle — should NOT connect
+        assert!(!net.connect_belt_to_splitter(belt2, splitter));
+    }
+
+    #[test]
+    fn splitter_connect_rejects_non_open_endpoint() {
+        // A belt whose output_end is already Belt should not override with Splitter
+        let mut world = WorldState::new();
+        let mut net = BeltNetwork::new();
+        let mut pool = crate::sim::splitter::SplitterPool::new();
+
+        let splitter = place_splitter(&mut world, &mut pool, &[0], 7, 5);
+
+        // Place 2 belts going East: (5,5) then (6,5) — output is Belt connection
+        let _belt1 = place_belt(&mut world, &mut net, &[0], 6, 5, Direction::East);
+        let belt2 = place_belt(&mut world, &mut net, &[0], 5, 5, Direction::East);
+
+        // belt2 is NOT at offset 0 (it was merged as upstream), so connect should fail
+        // Actually after merge, belt1 is at offset 0 and belt2 is at the input end
+        // Let's check: belt1 output_end is Open, belt2's segment is at offset FP_SCALE
+        // connect_belt_to_splitter requires offset 0, so belt2 fails
+        assert!(!net.connect_belt_to_splitter(belt2, splitter));
+    }
+
+    #[test]
+    fn disconnect_splitter_ports_clears_belt_ends() {
+        let mut world = WorldState::new();
+        let mut net = BeltNetwork::new();
+        let mut pool = crate::sim::splitter::SplitterPool::new();
+
+        let splitter = place_splitter(&mut world, &mut pool, &[0], 5, 5);
+        let belt_in = place_belt(&mut world, &mut net, &[0], 4, 5, Direction::East);
+        let belt_out = place_belt(&mut world, &mut net, &[0], 6, 5, Direction::East);
+
+        assert!(net.connect_belt_to_splitter(belt_in, splitter));
+        assert!(net.connect_splitter_to_belt(belt_out, splitter));
+
+        // Both endpoints should be Splitter
+        let seg_in = net.segments.get(belt_in).unwrap();
+        assert_eq!(net.lines.get(seg_in.line).unwrap().output_end, BeltEnd::Splitter { entity: splitter });
+        let seg_out = net.segments.get(belt_out).unwrap();
+        assert_eq!(net.lines.get(seg_out.line).unwrap().input_end, BeltEnd::Splitter { entity: splitter });
+
+        // Disconnect
+        net.disconnect_splitter_ports(splitter);
+
+        let seg_in = net.segments.get(belt_in).unwrap();
+        assert_eq!(net.lines.get(seg_in.line).unwrap().output_end, BeltEnd::Open);
+        let seg_out = net.segments.get(belt_out).unwrap();
+        assert_eq!(net.lines.get(seg_out.line).unwrap().input_end, BeltEnd::Open);
+    }
+
+    #[test]
+    fn removing_output_end_belt_clears_splitter_connection() {
+        let mut world = WorldState::new();
+        let mut net = BeltNetwork::new();
+        let mut pool = crate::sim::splitter::SplitterPool::new();
+
+        let splitter = place_splitter(&mut world, &mut pool, &[0], 5, 5);
+
+        // Place 2 belts going East: (3,5) then (4,5)
+        let belt1 = place_belt(&mut world, &mut net, &[0], 3, 5, Direction::East);
+        let belt2 = place_belt(&mut world, &mut net, &[0], 4, 5, Direction::East);
+        // They merge: belt2 at offset 0 (output end), belt1 at offset FP_SCALE
+
+        assert!(net.connect_belt_to_splitter(belt2, splitter));
+        pool.add_input(splitter, belt2);
+        pool.detect_mode(splitter);
+
+        // Remove belt2 (output end) — should clear Splitter connection
+        net.on_belt_removed(belt2);
+
+        // belt1 is now the only segment; its line's output_end should be Open
+        let seg1 = net.segments.get(belt1).unwrap();
+        assert_eq!(net.lines.get(seg1.line).unwrap().output_end, BeltEnd::Open);
+    }
+
+    #[test]
+    fn removing_input_end_belt_clears_splitter_connection() {
+        let mut world = WorldState::new();
+        let mut net = BeltNetwork::new();
+        let mut pool = crate::sim::splitter::SplitterPool::new();
+
+        let splitter = place_splitter(&mut world, &mut pool, &[0], 2, 5);
+
+        // Place 2 belts going East: (4,5) then (3,5) — they merge
+        let belt1 = place_belt(&mut world, &mut net, &[0], 4, 5, Direction::East);
+        let belt2 = place_belt(&mut world, &mut net, &[0], 3, 5, Direction::East);
+        // belt1 at offset 0, belt2 at offset FP_SCALE (input end)
+
+        assert!(net.connect_splitter_to_belt(belt2, splitter));
+        pool.add_output(splitter, belt2);
+        pool.detect_mode(splitter);
+
+        // Verify input_end is Splitter
+        let seg2 = net.segments.get(belt2).unwrap();
+        assert_eq!(net.lines.get(seg2.line).unwrap().input_end, BeltEnd::Splitter { entity: splitter });
+
+        // Remove belt2 (input end) — should clear Splitter connection
+        net.on_belt_removed(belt2);
+
+        // belt1 is now the only segment; its line's input_end should be Open
+        let seg1 = net.segments.get(belt1).unwrap();
+        assert_eq!(net.lines.get(seg1.line).unwrap().input_end, BeltEnd::Open);
+    }
+
+    #[test]
+    fn line_splitter_connections_returns_both() {
+        let mut world = WorldState::new();
+        let mut net = BeltNetwork::new();
+        let mut pool = crate::sim::splitter::SplitterPool::new();
+
+        let splitter_a = place_splitter(&mut world, &mut pool, &[0], 3, 5);
+        let splitter_b = place_splitter(&mut world, &mut pool, &[0], 6, 5);
+
+        // Place belt at (4,5) going East, connect to both splitters
+        let belt = place_belt(&mut world, &mut net, &[0], 4, 5, Direction::East);
+
+        // Output end faces East toward (5,5) — but splitter_b is at (6,5), not (5,5)
+        // So let me adjust: single belt, splitter behind and splitter ahead
+        // Actually for a single-segment belt, output=offset 0, input=offset 0 too (same)
+        // For a single belt, offset=0 and length=FP_SCALE, so input end is also offset=0
+        // Wait, input end is at offset line.length - FP_SCALE = 0. So both ends are the same segment.
+
+        // Let me use connect directly
+        assert!(net.connect_belt_to_splitter(belt, splitter_b));
+        // For input end, offset must equal length - FP_SCALE = 0, which it does
+        assert!(net.connect_splitter_to_belt(belt, splitter_a));
+
+        let (out, inp) = net.line_splitter_connections(belt);
+        assert_eq!(out, Some(splitter_b));
+        assert_eq!(inp, Some(splitter_a));
     }
 }

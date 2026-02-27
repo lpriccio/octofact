@@ -81,21 +81,21 @@ behavior based on which sides have input vs output belts.
 
 ### Phase B2b: Belt Connection Logic
 
-- [ ] Add `BeltEnd::Splitter { entity: EntityId, splitter: SplitterId }` variant — a belt endpoint connected to a splitter
-- [ ] When a belt is placed adjacent to a splitter, detect whether the belt feeds into or out of the splitter:
+- [x] Add `BeltEnd::Splitter { entity: EntityId }` variant — a belt endpoint connected to a splitter
+- [x] When a belt is placed adjacent to a splitter, detect whether the belt feeds into or out of the splitter:
   - Belt direction points toward the splitter cell → input (belt output_end = Splitter)
   - Belt direction points away from the splitter cell → output (belt input_end = Splitter)
-- [ ] When a splitter is placed, scan all 4 adjacent cells for existing belts and connect them
-- [ ] After connections change, auto-detect `SplitterMode`:
+- [x] When a splitter is placed, scan all 4 adjacent cells for existing belts and connect them
+- [x] After connections change, auto-detect `SplitterMode`:
   - 0 inputs or 0 outputs → Inactive
   - 2-3 inputs, 1 output → Merger
   - 1 input, 2-3 outputs → Splitter
   - 2 inputs, 2 outputs → Balancer
   - Other combinations (e.g., 3 inputs 2 outputs) → treat as Merger on inputs, round-robin on outputs
-- [ ] When a belt adjacent to a splitter is removed, update the splitter's connection list and re-detect mode
-- [ ] Unit tests: placing splitter then belts connects correctly
-- [ ] Unit tests: placing belts then splitter connects correctly
-- [ ] Unit tests: mode auto-detection for all valid configurations
+- [x] When a belt adjacent to a splitter is removed, update the splitter's connection list and re-detect mode
+- [x] Unit tests: placing splitter then belts connects correctly
+- [x] Unit tests: placing belts then splitter connects correctly
+- [x] Unit tests: mode auto-detection for all valid configurations
 
 ### Phase B2c: Simulation Tick
 

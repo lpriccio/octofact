@@ -1,11 +1,9 @@
 use std::collections::HashMap;
 
 use crate::game::world::EntityId;
-use crate::sim::belt::TransportLineId;
 
 /// How a splitter behaves, auto-detected from connected belt directions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)] // Variants used in B2b/B2c
 pub enum SplitterMode {
     /// No inputs or no outputs connected.
     Inactive,
@@ -19,13 +17,12 @@ pub enum SplitterMode {
 
 /// Per-splitter state.
 #[derive(Clone, Debug)]
-#[allow(dead_code)] // Fields used in B2b/B2c
 pub struct SplitterState {
     pub entity: EntityId,
-    /// Transport lines feeding items into this splitter.
-    pub inputs: Vec<TransportLineId>,
-    /// Transport lines receiving items from this splitter.
-    pub outputs: Vec<TransportLineId>,
+    /// Belt entities feeding items into this splitter (output_end = Splitter).
+    pub inputs: Vec<EntityId>,
+    /// Belt entities receiving items from this splitter (input_end = Splitter).
+    pub outputs: Vec<EntityId>,
     /// Auto-detected operating mode.
     pub mode: SplitterMode,
     /// Round-robin index for fair distribution across outputs (or inputs for merger).
@@ -33,7 +30,6 @@ pub struct SplitterState {
 }
 
 /// Pool of all placed splitters. Dense storage indexed by EntityId.
-#[allow(dead_code)]
 pub struct SplitterPool {
     splitters: Vec<SplitterState>,
     entity_to_idx: HashMap<EntityId, usize>,
@@ -48,7 +44,6 @@ impl SplitterPool {
     }
 
     /// Number of active splitters.
-    #[allow(dead_code)]
     pub fn count(&self) -> usize {
         self.splitters.len()
     }
@@ -85,26 +80,22 @@ impl SplitterPool {
     }
 
     /// Look up the dense index for an EntityId.
-    #[allow(dead_code)]
     pub fn index_of(&self, entity: EntityId) -> Option<usize> {
         self.entity_to_idx.get(&entity).copied()
     }
 
     /// Get a reference to the splitter state for an entity.
-    #[allow(dead_code)]
     pub fn get(&self, entity: EntityId) -> Option<&SplitterState> {
         self.index_of(entity).map(|i| &self.splitters[i])
     }
 
     /// Get a mutable reference to the splitter state for an entity.
-    #[allow(dead_code)]
     pub fn get_mut(&mut self, entity: EntityId) -> Option<&mut SplitterState> {
         let i = self.index_of(entity)?;
         Some(&mut self.splitters[i])
     }
 
     /// Re-detect the operating mode based on current input/output counts.
-    #[allow(dead_code)]
     pub fn detect_mode(&mut self, entity: EntityId) {
         let Some(i) = self.index_of(entity) else { return };
         let s = &mut self.splitters[i];
@@ -118,6 +109,32 @@ impl SplitterPool {
             (2, 2) => SplitterMode::Balancer,
             _ => SplitterMode::Splitter, // mixed: treat as splitter on outputs
         };
+    }
+
+    /// Register a belt entity as an input to this splitter.
+    pub fn add_input(&mut self, splitter: EntityId, belt: EntityId) {
+        if let Some(s) = self.get_mut(splitter) {
+            if !s.inputs.contains(&belt) {
+                s.inputs.push(belt);
+            }
+        }
+    }
+
+    /// Register a belt entity as an output from this splitter.
+    pub fn add_output(&mut self, splitter: EntityId, belt: EntityId) {
+        if let Some(s) = self.get_mut(splitter) {
+            if !s.outputs.contains(&belt) {
+                s.outputs.push(belt);
+            }
+        }
+    }
+
+    /// Remove a belt entity from this splitter's inputs and outputs.
+    pub fn disconnect_belt(&mut self, splitter: EntityId, belt: EntityId) {
+        if let Some(s) = self.get_mut(splitter) {
+            s.inputs.retain(|&e| e != belt);
+            s.outputs.retain(|&e| e != belt);
+        }
     }
 }
 
@@ -214,15 +231,16 @@ mod tests {
     #[test]
     fn detect_mode_merger() {
         let mut pool = SplitterPool::new();
-        let (_, e1) = make_entity();
+        let (mut sm, e1) = make_entity();
         pool.add(e1);
 
-        // Simulate 2 inputs, 1 output
-        let s = pool.get_mut(e1).unwrap();
-        let mut line_sm: SlotMap<TransportLineId, ()> = SlotMap::with_key();
-        s.inputs.push(line_sm.insert(()));
-        s.inputs.push(line_sm.insert(()));
-        s.outputs.push(line_sm.insert(()));
+        // Simulate 2 inputs, 1 output using belt entity IDs
+        let b1 = sm.insert(());
+        let b2 = sm.insert(());
+        let b3 = sm.insert(());
+        pool.add_input(e1, b1);
+        pool.add_input(e1, b2);
+        pool.add_output(e1, b3);
 
         pool.detect_mode(e1);
         assert_eq!(pool.get(e1).unwrap().mode, SplitterMode::Merger);
@@ -231,14 +249,15 @@ mod tests {
     #[test]
     fn detect_mode_splitter() {
         let mut pool = SplitterPool::new();
-        let (_, e1) = make_entity();
+        let (mut sm, e1) = make_entity();
         pool.add(e1);
 
-        let s = pool.get_mut(e1).unwrap();
-        let mut line_sm: SlotMap<TransportLineId, ()> = SlotMap::with_key();
-        s.inputs.push(line_sm.insert(()));
-        s.outputs.push(line_sm.insert(()));
-        s.outputs.push(line_sm.insert(()));
+        let b1 = sm.insert(());
+        let b2 = sm.insert(());
+        let b3 = sm.insert(());
+        pool.add_input(e1, b1);
+        pool.add_output(e1, b2);
+        pool.add_output(e1, b3);
 
         pool.detect_mode(e1);
         assert_eq!(pool.get(e1).unwrap().mode, SplitterMode::Splitter);
@@ -247,17 +266,50 @@ mod tests {
     #[test]
     fn detect_mode_balancer() {
         let mut pool = SplitterPool::new();
-        let (_, e1) = make_entity();
+        let (mut sm, e1) = make_entity();
         pool.add(e1);
 
-        let s = pool.get_mut(e1).unwrap();
-        let mut line_sm: SlotMap<TransportLineId, ()> = SlotMap::with_key();
-        s.inputs.push(line_sm.insert(()));
-        s.inputs.push(line_sm.insert(()));
-        s.outputs.push(line_sm.insert(()));
-        s.outputs.push(line_sm.insert(()));
+        let b1 = sm.insert(());
+        let b2 = sm.insert(());
+        let b3 = sm.insert(());
+        let b4 = sm.insert(());
+        pool.add_input(e1, b1);
+        pool.add_input(e1, b2);
+        pool.add_output(e1, b3);
+        pool.add_output(e1, b4);
 
         pool.detect_mode(e1);
         assert_eq!(pool.get(e1).unwrap().mode, SplitterMode::Balancer);
+    }
+
+    #[test]
+    fn add_input_no_duplicates() {
+        let mut pool = SplitterPool::new();
+        let (mut sm, e1) = make_entity();
+        pool.add(e1);
+
+        let b1 = sm.insert(());
+        pool.add_input(e1, b1);
+        pool.add_input(e1, b1); // duplicate
+        assert_eq!(pool.get(e1).unwrap().inputs.len(), 1);
+    }
+
+    #[test]
+    fn disconnect_belt_removes_from_both() {
+        let mut pool = SplitterPool::new();
+        let (mut sm, e1) = make_entity();
+        pool.add(e1);
+
+        let b1 = sm.insert(());
+        let b2 = sm.insert(());
+        pool.add_input(e1, b1);
+        pool.add_output(e1, b2);
+
+        pool.disconnect_belt(e1, b1);
+        assert!(pool.get(e1).unwrap().inputs.is_empty());
+        assert_eq!(pool.get(e1).unwrap().outputs.len(), 1);
+
+        pool.disconnect_belt(e1, b2);
+        assert!(pool.get(e1).unwrap().outputs.is_empty());
     }
 }

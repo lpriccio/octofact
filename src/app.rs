@@ -304,14 +304,16 @@ impl App {
             _ => {}
         }
 
-        // Register splitter with simulation pool
+        // Register splitter with simulation pool and connect to adjacent belts
         if mode.item == crate::game::items::ItemId::Splitter {
             self.splitter_pool.add(entity);
+            self.auto_connect_splitter_to_belts(entity, address, grid_xy);
         }
 
-        // Auto-connect belt to adjacent machines
+        // Auto-connect belt to adjacent machines and splitters
         if mode.item == crate::game::items::ItemId::Belt {
             self.auto_connect_belt_to_machines(entity, address, grid_xy, mode.direction);
+            self.auto_connect_belt_to_splitters(entity, address, grid_xy, mode.direction);
         }
 
         // Flash feedback
@@ -516,6 +518,91 @@ impl App {
                 }
             }
         }
+    }
+
+    /// When a belt is placed, check the cell ahead and behind for splitters.
+    /// A belt pointing toward a splitter → belt feeds into it (input).
+    /// A belt pointing away from a splitter → splitter feeds into belt (output).
+    fn auto_connect_belt_to_splitters(
+        &mut self,
+        belt_entity: EntityId,
+        tile_addr: &[u8],
+        grid_xy: (i32, i32),
+        belt_dir: Direction,
+    ) {
+        let (dx, dy) = belt_dir.grid_offset_i32();
+        let ahead = (grid_xy.0 + dx, grid_xy.1 + dy);
+        let behind = (grid_xy.0 - dx, grid_xy.1 - dy);
+
+        // Ahead: belt output faces a splitter → belt is input to splitter
+        if let Some(entities) = self.world.tile_entities(tile_addr) {
+            if let Some(&adj_entity) = entities.get(&ahead) {
+                if self.world.kind(adj_entity) == Some(StructureKind::Splitter)
+                    && self.belt_network.connect_belt_to_splitter(belt_entity, adj_entity)
+                {
+                    self.splitter_pool.add_input(adj_entity, belt_entity);
+                    self.splitter_pool.detect_mode(adj_entity);
+                }
+            }
+        }
+
+        // Behind: splitter feeds into belt input → belt is output from splitter
+        if let Some(entities) = self.world.tile_entities(tile_addr) {
+            if let Some(&adj_entity) = entities.get(&behind) {
+                if self.world.kind(adj_entity) == Some(StructureKind::Splitter)
+                    && self.belt_network.connect_splitter_to_belt(belt_entity, adj_entity)
+                {
+                    self.splitter_pool.add_output(adj_entity, belt_entity);
+                    self.splitter_pool.detect_mode(adj_entity);
+                }
+            }
+        }
+    }
+
+    /// When a splitter is placed, scan all 4 adjacent cells for existing belts
+    /// and connect them based on their direction relative to the splitter.
+    fn auto_connect_splitter_to_belts(
+        &mut self,
+        splitter_entity: EntityId,
+        tile_addr: &[u8],
+        grid_xy: (i32, i32),
+    ) {
+        for &check_dir in &[Direction::North, Direction::East, Direction::South, Direction::West] {
+            let (dx, dy) = check_dir.grid_offset_i32();
+            let adj = (grid_xy.0 + dx, grid_xy.1 + dy);
+
+            let adj_entity = match self.world.tile_entities(tile_addr)
+                .and_then(|e| e.get(&adj).copied())
+            {
+                Some(e) => e,
+                None => continue,
+            };
+
+            if self.world.kind(adj_entity) != Some(StructureKind::Belt) {
+                continue;
+            }
+            let belt_dir = match self.world.direction(adj_entity) {
+                Some(d) => d,
+                None => continue,
+            };
+
+            // Belt at adj going toward splitter: belt_dir == check_dir.opposite()
+            // → belt output feeds into splitter (belt is an input)
+            if belt_dir == check_dir.opposite() {
+                if self.belt_network.connect_belt_to_splitter(adj_entity, splitter_entity) {
+                    self.splitter_pool.add_input(splitter_entity, adj_entity);
+                }
+            }
+            // Belt at adj going away from splitter: belt_dir == check_dir
+            // → splitter feeds into belt input (belt is an output)
+            else if belt_dir == check_dir
+                && self.belt_network.connect_splitter_to_belt(adj_entity, splitter_entity)
+            {
+                self.splitter_pool.add_output(splitter_entity, adj_entity);
+            }
+        }
+
+        self.splitter_pool.detect_mode(splitter_entity);
     }
 
     fn handle_placement_click(&mut self, sx: f64, sy: f64) {
@@ -772,6 +859,17 @@ impl App {
         // Unregister from simulation systems
         match kind {
             StructureKind::Belt => {
+                // Clean up splitter connections before removing belt from network
+                let (output_splitter, input_splitter) =
+                    self.belt_network.line_splitter_connections(entity);
+                if let Some(se) = output_splitter {
+                    self.splitter_pool.disconnect_belt(se, entity);
+                    self.splitter_pool.detect_mode(se);
+                }
+                if let Some(se) = input_splitter {
+                    self.splitter_pool.disconnect_belt(se, entity);
+                    self.splitter_pool.detect_mode(se);
+                }
                 self.belt_network.on_belt_removed(entity);
             }
             StructureKind::Machine(_) => {
@@ -783,6 +881,7 @@ impl App {
                 self.power_network.remove(entity);
             }
             StructureKind::Splitter => {
+                self.belt_network.disconnect_splitter_ports(entity);
                 self.splitter_pool.remove(entity);
             }
             StructureKind::PowerNode | StructureKind::PowerSource => {

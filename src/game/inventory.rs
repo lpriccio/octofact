@@ -17,6 +17,7 @@ impl Inventory {
         let mut inv = Self::new();
         inv.add(ItemId::Belt, 2000);
         inv.add(ItemId::Splitter, 100);
+        inv.add(ItemId::Storage, 20);
         inv.add(ItemId::Quadrupole, 1);
         inv
     }

@@ -97,6 +97,7 @@ pub struct App {
     belt_network: BeltNetwork,
     machine_pool: crate::sim::machine::MachinePool,
     splitter_pool: crate::sim::splitter::SplitterPool,
+    storage_pool: crate::sim::storage::StoragePool,
     power_network: crate::sim::power::PowerNetwork,
     ui: UiState,
     grid_enabled: bool,
@@ -120,6 +121,7 @@ impl App {
             belt_network: BeltNetwork::new(),
             machine_pool: crate::sim::machine::MachinePool::new(),
             splitter_pool: crate::sim::splitter::SplitterPool::new(),
+            storage_pool: crate::sim::storage::StoragePool::new(),
             power_network: crate::sim::power::PowerNetwork::new(),
             ui: UiState::new(),
             grid_enabled: false,
@@ -311,6 +313,11 @@ impl App {
         if mode.item == crate::game::items::ItemId::Splitter {
             self.splitter_pool.add(entity);
             self.auto_connect_splitter_to_belts(entity, address, grid_xy);
+        }
+
+        // Register storage building with simulation pool
+        if mode.item == crate::game::items::ItemId::Storage {
+            self.storage_pool.add(entity);
         }
 
         // Auto-connect belt to adjacent machines and splitters
@@ -897,6 +904,17 @@ impl App {
                 self.belt_network.disconnect_splitter_ports(entity);
                 self.splitter_pool.remove(entity);
             }
+            StructureKind::Storage => {
+                // Return stored items to inventory
+                if let Some(state) = self.storage_pool.get(entity) {
+                    for slot in &state.slots {
+                        if slot.count > 0 {
+                            self.inventory.add(slot.item, slot.count as u32);
+                        }
+                    }
+                }
+                self.storage_pool.remove(entity);
+            }
             StructureKind::PowerNode | StructureKind::PowerSource => {
                 self.power_network.remove(entity);
             }
@@ -1109,6 +1127,7 @@ impl App {
                     Some(StructureKind::PowerNode) => (6.0, false),
                     Some(StructureKind::PowerSource) => (7.0, false),
                     Some(StructureKind::Splitter) => (8.0, false),
+                    Some(StructureKind::Storage) => (9.0, false),
                     _ => continue,
                 };
 

@@ -49,6 +49,7 @@ fn machine_size_canonical(mt: u32) -> vec2<f32> {
         case 8u: { return vec2<f32>(1.0, 1.0); }  // Splitter
         case 0u: { return vec2<f32>(2.0, 2.0); }  // Composer
         case 7u: { return vec2<f32>(2.0, 2.0); }  // Dynamo
+        case 9u: { return vec2<f32>(2.0, 2.0); }  // Storage
         default: { return vec2<f32>(3.0, 3.0); }   // Inverter, Embedder, Quotient, Transformer
     }
 }
@@ -75,6 +76,7 @@ fn machine_color(mt: u32) -> vec3<f32> {
         case 6u: { return vec3<f32>(0.9, 0.8, 0.2); }   // Quadrupole: gold
         case 7u: { return vec3<f32>(1.0, 0.9, 0.3); }   // Dynamo: bright gold
         case 8u: { return vec3<f32>(0.3, 0.8, 0.7); }   // Splitter: teal
+        case 9u: { return vec3<f32>(0.8, 0.6, 0.3); }   // Storage: amber
         default: { return vec3<f32>(0.5, 0.5, 0.5); }
     }
 }

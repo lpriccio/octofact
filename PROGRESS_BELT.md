@@ -133,11 +133,11 @@ being infinite.
 
 ### Phase B3a: Data Model & Placement
 
-- [ ] Add `Storage` variant to `ItemId` enum — new infrastructure item
-- [ ] Add display_name ("Storage"), description ("Buffered vault. Stores up to 20 stacks of items."), icon_params to ItemId impl
-- [ ] Add `Storage` variant to `StructureKind` enum with 2x2 footprint
-- [ ] Wire `StructureKind::from_item(ItemId::Storage)` → `StructureKind::Storage`
-- [ ] Define `StoragePool` struct in new file `src/sim/storage.rs`:
+- [x] Add `Storage` variant to `ItemId` enum — new infrastructure item
+- [x] Add display_name ("Storage"), description ("Buffered vault. Stores up to 20 stacks of items."), icon_params to ItemId impl
+- [x] Add `Storage` variant to `StructureKind` enum with 2x2 footprint
+- [x] Wire `StructureKind::from_item(ItemId::Storage)` → `StructureKind::Storage`
+- [x] Define `StoragePool` struct in new file `src/sim/storage.rs`:
   ```
   StoragePool {
       entities: SlotMap<StorageId, StorageState>,
@@ -149,10 +149,10 @@ being infinite.
       input_filter: Option<ItemId>,  // optional: only accept this item (future)
   }
   ```
-- [ ] Define `STORAGE_SLOTS: usize = 20` and `STORAGE_STACK_SIZE: u16 = 50` constants
-- [ ] Register storage in world placement flow
-- [ ] On removal, return stored items to player inventory (or drop — decide policy)
-- [ ] Add Storage to build menu / inventory
+- [x] Define `STORAGE_SLOTS: usize = 20` and `STORAGE_STACK_SIZE: u16 = 50` constants
+- [x] Register storage in world placement flow
+- [x] On removal, return stored items to player inventory (or drop — decide policy)
+- [x] Add Storage to build menu / inventory
 
 ### Phase B3b: Port Definitions
 

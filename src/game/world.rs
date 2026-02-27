@@ -133,6 +133,7 @@ pub enum StructureKind {
     PowerNode,   // Quadrupole
     PowerSource, // Dynamo
     Splitter,
+    Storage,
 }
 
 impl StructureKind {
@@ -144,6 +145,7 @@ impl StructureKind {
             Self::PowerNode => (1, 1),   // Quadrupole
             Self::PowerSource => (2, 2), // Dynamo
             Self::Splitter => (1, 1),
+            Self::Storage => (2, 2),
         }
     }
 
@@ -153,6 +155,7 @@ impl StructureKind {
         match item {
             ItemId::Belt => Some(Self::Belt),
             ItemId::Splitter => Some(Self::Splitter),
+            ItemId::Storage => Some(Self::Storage),
             ItemId::Quadrupole => Some(Self::PowerNode),
             ItemId::Dynamo => Some(Self::PowerSource),
             ItemId::Composer => Some(Self::Machine(MachineType::Composer)),

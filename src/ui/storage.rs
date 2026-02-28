@@ -1,6 +1,6 @@
 use crate::game::world::EntityId;
 use crate::sim::belt::BeltNetwork;
-use crate::sim::storage::StoragePool;
+use crate::sim::storage::{StoragePool, STORAGE_SLOTS, STORAGE_STACK_SIZE};
 
 /// Actions the storage panel can produce.
 pub enum StorageAction {
@@ -56,15 +56,28 @@ pub fn storage_panel(
 
             ui.separator();
 
-            // --- Capacity ---
+            // --- Capacity bar ---
+            let max_items = (STORAGE_SLOTS as u32) * (STORAGE_STACK_SIZE as u32);
+            let fill_frac = total_items as f32 / max_items as f32;
             ui.horizontal(|ui| {
                 ui.label("Capacity:");
-                ui.label(format!("{}/20 slots", used_slots));
+                ui.label(format!("{}/{}", total_items, max_items));
             });
+            let bar_color = if fill_frac > 0.9 {
+                egui::Color32::from_rgb(220, 80, 80)   // red when nearly full
+            } else if fill_frac > 0.7 {
+                egui::Color32::from_rgb(220, 180, 60)   // yellow when getting full
+            } else {
+                egui::Color32::from_rgb(80, 160, 80)    // green otherwise
+            };
+            let bar = egui::ProgressBar::new(fill_frac)
+                .text(format!("{:.0}%", fill_frac * 100.0))
+                .fill(bar_color);
+            ui.add(bar);
 
             if total_items > 0 {
                 ui.separator();
-                ui.label("Contents:");
+                ui.label(format!("Contents ({}/20 slots):", used_slots));
                 for slot in &state.slots {
                     if slot.count > 0 {
                         ui.horizontal(|ui| {

@@ -1274,6 +1274,9 @@ impl App {
                 } else if machine_type_float == 8.0 {
                     // Splitter: encode connection bitmask in progress field
                     self.splitter_pool.connection_bitmask(entity, &self.world) as f32
+                } else if machine_type_float == 9.0 {
+                    // Storage: encode fill fraction (0.0-1.0) in progress field
+                    self.storage_pool.fill_fraction(entity)
                 } else {
                     -1.0 // Power nodes are always "idle" visually
                 };

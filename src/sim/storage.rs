@@ -98,6 +98,16 @@ impl StoragePool {
         false // all slots full or occupied by different items at max stack
     }
 
+    /// Returns the fill fraction (0.0 = empty, 1.0 = full) for a storage entity.
+    pub fn fill_fraction(&self, entity: EntityId) -> f32 {
+        let Some(state) = self.get(entity) else {
+            return 0.0;
+        };
+        let total: u32 = state.slots.iter().map(|s| s.count as u32).sum();
+        let max = (STORAGE_SLOTS as u32) * (STORAGE_STACK_SIZE as u32);
+        total as f32 / max as f32
+    }
+
     /// Try to take one item from the storage for output.
     /// Scans slots sequentially and takes from the first non-empty stack.
     /// Returns the ItemId taken, or None if the storage is empty.

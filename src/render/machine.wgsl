@@ -326,7 +326,12 @@ fn fs_machine(in: VertexOutput) -> @location(0) vec4<f32> {
         var side_color = side_lit * grad;
 
         // State dimming for side walls too (skip for splitters)
-        if mt != 8u {
+        if mt == 9u {
+            // Storage: fill-level brightness on side walls too
+            let fill = clamp(in.progress, 0.0, 1.0);
+            let brightness = 0.5 + 0.5 * fill;
+            side_color *= brightness;
+        } else if mt != 8u {
             if in.progress >= 0.0 {
                 let pulse = 0.8 + 0.2 * sin(in.progress * 6.2832);
                 side_color *= pulse;
@@ -363,7 +368,12 @@ fn fs_machine(in: VertexOutput) -> @location(0) vec4<f32> {
     color *= lighting;
 
     // State-based pulsing glow (skip for splitters and storage — they don't craft)
-    if mt != 8u && mt != 9u {
+    if mt == 9u {
+        // Storage: fill-level brightness. progress = 0.0 (empty) to 1.0 (full).
+        let fill = clamp(in.progress, 0.0, 1.0);
+        let brightness = 0.5 + 0.5 * fill;
+        color *= brightness;
+    } else if mt != 8u {
         if in.progress >= 0.0 {
             let pulse = 0.8 + 0.2 * sin(in.progress * 6.2832);
             color *= pulse;

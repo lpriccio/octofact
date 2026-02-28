@@ -190,10 +190,10 @@ being infinite.
 
 ### Phase B3d: Rendering & UI
 
-- [ ] Add storage to instance buffer system (reuse MachineInstance or create StorageInstance)
-- [ ] Write storage visuals: 2x2 building with distinct appearance (crate/chest look), fill indicator based on how full the storage is
-- [ ] Click-to-inspect UI: show all 20 slots with item icons and counts, total capacity bar
-- [ ] Add Storage recipe to crafting (e.g., Composer: 4x Square → Storage)
+- [x] Add storage to instance buffer system (reuse MachineInstance or create StorageInstance)
+- [x] Write storage visuals: 2x2 building with distinct appearance (crate/chest look), fill indicator based on how full the storage is
+- [x] Click-to-inspect UI: show all 20 slots with item icons and counts, total capacity bar
+- [x] Add Storage recipe to crafting (e.g., Composer: 4x Square → Storage)
 
 
 ## Dependencies

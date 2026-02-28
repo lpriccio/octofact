@@ -159,7 +159,9 @@ impl TilingState {
         // Add 0.5 buffer to ensure full coverage of the outermost ring.
         let required_dist = (min_layers as f64 + 0.5) * d;
 
-        for _ in 0..20 {
+        // Cap at 5 rounds per call to avoid frame spikes after eviction.
+        // Any remaining expansion happens over subsequent frames.
+        for _ in 0..5 {
             if self.frontier.is_empty() {
                 break;
             }
@@ -225,50 +227,64 @@ impl TilingState {
     /// Returns the new index of the center tile after compaction.
     pub fn recenter_on(&mut self, center_idx: usize) -> usize {
         const EVICTION_RADIUS: f64 = 0.99;
+        let threshold_sq = EVICTION_RADIUS * EVICTION_RADIUS;
 
         let inv_center = self.tiles[center_idx].transform.inverse();
-        for tile in &mut self.tiles {
-            tile.transform = inv_center.compose(&tile.transform);
-        }
 
-        // Compact: retain only tiles within the eviction radius.
-        // Track the new index of the center tile.
-        let mut new_tiles = Vec::with_capacity(self.tiles.len());
-        let mut new_center_idx = 0;
-        for (old_idx, tile) in self.tiles.drain(..).enumerate() {
-            let center = tile.transform.apply(Complex::ZERO);
-            if center.norm_sq() > EVICTION_RADIUS * EVICTION_RADIUS {
-                continue;
-            }
-            if old_idx == center_idx {
-                new_center_idx = new_tiles.len();
-            }
-            new_tiles.push(tile);
-        }
-        self.tiles = new_tiles;
-
-        // Rebuild seen set and spatial index from surviving tiles
+        // Single fused pass: transform, evict, find center, build spatial index.
+        // Each tile's center is computed exactly once (was 3x before).
         self.seen.clear();
         self.spatial_to_tile.clear();
-        for (idx, tile) in self.tiles.iter().enumerate() {
-            let center = tile.transform.apply(Complex::ZERO);
+        let mut write = 0usize;
+        let mut new_center_idx = 0usize;
+        let mut best_dist_sq = f64::MAX;
+        let mut any_evicted = false;
+
+        for read in 0..self.tiles.len() {
+            // Apply inverse transform
+            self.tiles[read].transform = inv_center.compose(&self.tiles[read].transform);
+            let center = self.tiles[read].transform.apply(Complex::ZERO);
+            let dist_sq = center.norm_sq();
+
+            // Eviction check
+            if dist_sq > threshold_sq {
+                any_evicted = true;
+                continue;
+            }
+
+            // Track center tile (nearest to origin)
+            if dist_sq < best_dist_sq {
+                best_dist_sq = dist_sq;
+                new_center_idx = write;
+            }
+
+            // Build spatial index inline
             let key = spatial_key(center);
             self.seen.insert(key);
-            self.spatial_to_tile.insert(key, idx);
-        }
+            self.spatial_to_tile.insert(key, write);
 
-        // Rebuild frontier: tiles with any missing neighbor
-        self.frontier.clear();
-        for (idx, tile) in self.tiles.iter().enumerate() {
-            let parity = tile.parity;
-            let xforms = &self.neighbor_xforms[parity as usize];
-            let is_boundary = (0..self.cfg.p as u8).any(|dir| {
-                let neighbor = tile.transform.compose(&xforms[dir as usize]);
-                let center = neighbor.apply(Complex::ZERO);
-                !self.seen.contains(&spatial_key(center))
-            });
-            if is_boundary {
-                self.frontier.push_back(idx);
+            // Compact in-place
+            if write != read {
+                self.tiles.swap(write, read);
+            }
+            write += 1;
+        }
+        self.tiles.truncate(write);
+
+        // Only rebuild frontier when tiles were actually evicted.
+        if any_evicted {
+            self.frontier.clear();
+            for (idx, tile) in self.tiles.iter().enumerate() {
+                let parity = tile.parity;
+                let xforms = &self.neighbor_xforms[parity as usize];
+                let is_boundary = (0..self.cfg.p as u8).any(|dir| {
+                    let neighbor = tile.transform.compose(&xforms[dir as usize]);
+                    let center = neighbor.apply(Complex::ZERO);
+                    !self.seen.contains(&spatial_key(center))
+                });
+                if is_boundary {
+                    self.frontier.push_back(idx);
+                }
             }
         }
 

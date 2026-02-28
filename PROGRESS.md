@@ -114,10 +114,10 @@
 > Support unbounded world exploration without running out of tile/GPU memory.
 > Simulation always runs — Factorio-style. Only tile geometry is streamed.
 
-- [ ] LRU tile eviction in `TilingState`: evict tile geometry far from camera
-- [ ] Tune `ensure_coverage` radius for on-demand tile generation
-- [ ] Ensure simulation is fully decoupled from tile visibility (belts/machines tick by entity, not by tile presence)
-- [ ] Verify: walk far, return — factory kept running the whole time
+- [x] LRU tile eviction in `TilingState`: evict tile geometry far from camera
+- [x] Tune `ensure_coverage` radius for on-demand tile generation
+- [x] Ensure simulation is fully decoupled from tile visibility (belts/machines tick by entity, not by tile presence)
+- [x] Verify: walk far, return — factory kept running the whole time
 
 
 

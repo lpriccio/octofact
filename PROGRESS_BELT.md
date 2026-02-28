@@ -170,23 +170,23 @@ being infinite.
 
 ### Phase B3c: Simulation Tick
 
-- [ ] Implement `StoragePool::accept_input(entity, slot, item, count) -> bool` — try to store items:
+- [x] Implement `StoragePool::accept_input(entity, slot, item, count) -> bool` — try to store items:
   - Find first slot with matching item and room, or first empty slot
   - Stack up to STORAGE_STACK_SIZE per slot
   - Return false if all 20 slots are full
-- [ ] Implement `StoragePool::provide_output(entity, slot) -> Option<ItemId>` — take one item for output:
+- [x] Implement `StoragePool::provide_output(entity, slot) -> Option<ItemId>` — take one item for output:
   - Scan slots for any non-empty stack
   - Prefer round-robin across slots to drain evenly
   - Remove 1 from the stack, return the ItemId
-- [ ] Wire storage I/O into `tick_port_transfers()` in belt.rs — same pattern as machine ports:
+- [x] Wire storage I/O into `tick_port_transfers()` in belt.rs — same pattern as machine ports:
   - Belt → Storage: items at pos=0 with StorageInput endpoint transfer into storage
   - Storage → Belt: storage provides items to belt input end with StorageOutput endpoint
-- [ ] Unit tests: items flow into storage from belt
-- [ ] Unit tests: items flow out of storage onto belt
-- [ ] Unit tests: storage fills up and backpressures input belt
-- [ ] Unit tests: storage empties and output belt starves
-- [ ] Unit tests: mixed item types stored in separate slots
-- [ ] Unit tests: full round-trip — belt → storage → belt
+- [x] Unit tests: items flow into storage from belt
+- [x] Unit tests: items flow out of storage onto belt
+- [x] Unit tests: storage fills up and backpressures input belt
+- [x] Unit tests: storage empties and output belt starves
+- [x] Unit tests: mixed item types stored in separate slots
+- [x] Unit tests: full round-trip — belt → storage → belt
 
 ### Phase B3d: Rendering & UI
 

@@ -156,17 +156,17 @@ being infinite.
 
 ### Phase B3b: Port Definitions
 
-- [ ] Add storage port layout to `inserter.rs` (or a new `port_layout` match arm):
+- [x] Add storage port layout to `inserter.rs` (or a new `port_layout` match arm):
   - 2x2 footprint, canonical facing North:
     - Input 0: South side, slot 0, cell (0, 1)
     - Input 1: South side, slot 1, cell (1, 1)
     - Output 0: North side, slot 0, cell (0, 0)
     - Output 1: North side, slot 1, cell (1, 0)
   - This gives 2 inputs on the back, 2 outputs on the front — rotation works via existing port rotation system
-- [ ] Extend `port_layout()` to handle Storage (requires accepting StructureKind or a new StorageType, since Storage isn't a MachineType)
-- [ ] Belt-to-storage and storage-to-belt connections use the same `BeltEnd::MachineInput` / `BeltEnd::MachineOutput` mechanism, or introduce `BeltEnd::StorageInput` / `BeltEnd::StorageOutput` variants
-- [ ] Unit tests: port positions for all 4 rotations
-- [ ] Unit tests: belt compatibility with storage ports
+- [x] Extend `port_layout()` to handle Storage (requires accepting StructureKind or a new StorageType, since Storage isn't a MachineType)
+- [x] Belt-to-storage and storage-to-belt connections use the same `BeltEnd::MachineInput` / `BeltEnd::MachineOutput` mechanism, or introduce `BeltEnd::StorageInput` / `BeltEnd::StorageOutput` variants
+- [x] Unit tests: port positions for all 4 rotations
+- [x] Unit tests: belt compatibility with storage ports
 
 ### Phase B3c: Simulation Tick
 

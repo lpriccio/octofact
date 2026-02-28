@@ -59,6 +59,8 @@ pub struct UiState {
     pub machine_panel_entity: Option<EntityId>,
     /// Currently inspected splitter entity (opens the splitter panel).
     pub splitter_panel_entity: Option<EntityId>,
+    /// Currently inspected storage entity (opens the storage panel).
+    pub storage_panel_entity: Option<EntityId>,
 }
 
 impl UiState {
@@ -76,11 +78,12 @@ impl UiState {
             belt_drag: None,
             machine_panel_entity: None,
             splitter_panel_entity: None,
+            storage_panel_entity: None,
         }
     }
 
     fn is_panel_open(&self) -> bool {
-        self.settings_open || self.inventory_open || self.machine_panel_entity.is_some() || self.splitter_panel_entity.is_some()
+        self.settings_open || self.inventory_open || self.machine_panel_entity.is_some() || self.splitter_panel_entity.is_some() || self.storage_panel_entity.is_some()
     }
 }
 
@@ -315,15 +318,17 @@ impl App {
             self.auto_connect_splitter_to_belts(entity, address, grid_xy);
         }
 
-        // Register storage building with simulation pool
+        // Register storage building with simulation pool and auto-connect ports
         if mode.item == crate::game::items::ItemId::Storage {
             self.storage_pool.add(entity);
+            self.auto_connect_storage_to_belts(entity, address, grid_xy, mode.direction);
         }
 
-        // Auto-connect belt to adjacent machines and splitters
+        // Auto-connect belt to adjacent machines, splitters, and storage
         if mode.item == crate::game::items::ItemId::Belt {
             self.auto_connect_belt_to_machines(entity, address, grid_xy, mode.direction);
             self.auto_connect_belt_to_splitters(entity, address, grid_xy, mode.direction);
+            self.auto_connect_belt_to_storage(entity, address, grid_xy, mode.direction);
         }
 
         // Flash feedback
@@ -615,6 +620,108 @@ impl App {
         self.splitter_pool.detect_mode(splitter_entity);
     }
 
+    /// When a belt is placed, check all 4 adjacent cells for storage buildings and connect ports.
+    /// Uses `structure_port_at_cell_on_side` to match by the port's exact cell offset.
+    fn auto_connect_belt_to_storage(
+        &mut self,
+        belt_entity: EntityId,
+        tile_addr: &[u8],
+        grid_xy: (i32, i32),
+        belt_dir: Direction,
+    ) {
+        use crate::sim::inserter::{belt_compatible_with_port, structure_port_at_cell_on_side, PortKind};
+
+        for &check_dir in &[Direction::North, Direction::East, Direction::South, Direction::West] {
+            let (dx, dy) = check_dir.grid_offset_i32();
+            let adj = (grid_xy.0 + dx, grid_xy.1 + dy);
+
+            if let Some(entities) = self.world.tile_entities(tile_addr) {
+                if let Some(&adj_entity) = entities.get(&adj) {
+                    if self.world.kind(adj_entity) == Some(StructureKind::Storage) {
+                        if let Some(facing) = self.world.direction(adj_entity) {
+                            if let Some(origin) = self.world.position(adj_entity) {
+                                let cell_offset = (
+                                    adj.0 - origin.gx as i32,
+                                    adj.1 - origin.gy as i32,
+                                );
+                                if let Some(port) = structure_port_at_cell_on_side(
+                                    StructureKind::Storage,
+                                    facing,
+                                    cell_offset,
+                                    check_dir.opposite(),
+                                ) {
+                                    if belt_compatible_with_port(&port, belt_dir) {
+                                        match port.kind {
+                                            PortKind::Input => {
+                                                self.belt_network.connect_belt_to_storage_input(
+                                                    belt_entity,
+                                                    adj_entity,
+                                                    port.slot,
+                                                );
+                                            }
+                                            PortKind::Output => {
+                                                self.belt_network.connect_storage_output_to_belt(
+                                                    belt_entity,
+                                                    adj_entity,
+                                                    port.slot,
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// When a storage building is placed, scan adjacent cells for existing belts
+    /// and connect them to the storage's ports.
+    fn auto_connect_storage_to_belts(
+        &mut self,
+        storage_entity: EntityId,
+        tile_addr: &[u8],
+        grid_xy: (i32, i32),
+        facing: Direction,
+    ) {
+        use crate::sim::inserter::{belt_compatible_with_port, rotated_structure_ports, PortKind};
+
+        for port in rotated_structure_ports(StructureKind::Storage, facing) {
+            let (dx, dy) = port.side.grid_offset_i32();
+            let port_cell = (grid_xy.0 + port.cell_offset.0, grid_xy.1 + port.cell_offset.1);
+            let adj = (port_cell.0 + dx, port_cell.1 + dy);
+
+            if let Some(entities) = self.world.tile_entities(tile_addr) {
+                if let Some(&belt_entity) = entities.get(&adj) {
+                    if self.world.kind(belt_entity) == Some(StructureKind::Belt) {
+                        if let Some(belt_dir) = self.world.direction(belt_entity) {
+                            if belt_compatible_with_port(&port, belt_dir) {
+                                match port.kind {
+                                    PortKind::Input => {
+                                        self.belt_network.connect_belt_to_storage_input(
+                                            belt_entity,
+                                            storage_entity,
+                                            port.slot,
+                                        );
+                                    }
+                                    PortKind::Output => {
+                                        self.belt_network.connect_storage_output_to_belt(
+                                            belt_entity,
+                                            storage_entity,
+                                            port.slot,
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fn handle_placement_click(&mut self, sx: f64, sy: f64) {
         let mode = match self.ui.placement_mode.as_ref() {
             Some(m) => m.clone(),
@@ -836,12 +943,20 @@ impl App {
         match self.world.kind(entity) {
             Some(StructureKind::Machine(_)) => {
                 self.ui.splitter_panel_entity = None;
+                self.ui.storage_panel_entity = None;
                 self.ui.machine_panel_entity = Some(entity);
                 true
             }
             Some(StructureKind::Splitter) => {
                 self.ui.machine_panel_entity = None;
+                self.ui.storage_panel_entity = None;
                 self.ui.splitter_panel_entity = Some(entity);
+                true
+            }
+            Some(StructureKind::Storage) => {
+                self.ui.machine_panel_entity = None;
+                self.ui.splitter_panel_entity = None;
+                self.ui.storage_panel_entity = Some(entity);
                 true
             }
             _ => false,
@@ -905,6 +1020,9 @@ impl App {
                 self.splitter_pool.remove(entity);
             }
             StructureKind::Storage => {
+                if self.ui.storage_panel_entity == Some(entity) {
+                    self.ui.storage_panel_entity = None;
+                }
                 // Return stored items to inventory
                 if let Some(state) = self.storage_pool.get(entity) {
                     for slot in &state.slots {
@@ -913,6 +1031,7 @@ impl App {
                         }
                     }
                 }
+                self.belt_network.disconnect_storage_ports(entity);
                 self.storage_pool.remove(entity);
             }
             StructureKind::PowerNode | StructureKind::PowerSource => {
@@ -983,16 +1102,19 @@ impl App {
             None => return false,
         };
 
-        // Only rotate machines and power structures (not belts — belt direction is functional)
+        // Only rotate machines, storage, and power structures (not belts — belt direction is functional)
         let machine_type = match kind {
             StructureKind::Machine(mt) => Some(mt),
-            StructureKind::PowerSource => None,
+            StructureKind::Storage | StructureKind::PowerSource => None,
             _ => return false,
         };
 
-        // Disconnect old belt connections for machines
+        // Disconnect old belt connections for machines and storage
         if machine_type.is_some() {
             self.belt_network.disconnect_machine_ports(entity);
+        }
+        if kind == StructureKind::Storage {
+            self.belt_network.disconnect_storage_ports(entity);
         }
 
         // Rotate direction
@@ -1001,13 +1123,20 @@ impl App {
             None => return false,
         };
 
-        // Auto-reconnect ports for machines
+        // Auto-reconnect ports for machines and storage
         if let Some(mt) = machine_type {
             let origin = match self.world.position(entity) {
                 Some(p) => (p.gx as i32, p.gy as i32),
                 None => return false,
             };
             self.auto_connect_machine_ports(entity, &address, origin, new_dir, mt);
+        }
+        if kind == StructureKind::Storage {
+            let origin = match self.world.position(entity) {
+                Some(p) => (p.gx as i32, p.gy as i32),
+                None => return false,
+            };
+            self.auto_connect_storage_to_belts(entity, &address, origin, new_dir);
         }
 
         // Flash feedback
@@ -1318,6 +1447,23 @@ impl App {
             }
         }
 
+        // Storage inspection panel
+        if let Some(entity) = self.ui.storage_panel_entity {
+            let egui_ctx = re.egui.ctx.clone();
+            if let Some(action) = crate::ui::storage::storage_panel(
+                &egui_ctx,
+                entity,
+                &self.storage_pool,
+                &self.belt_network,
+            ) {
+                match action {
+                    crate::ui::storage::StorageAction::Close => {
+                        self.ui.storage_panel_entity = None;
+                    }
+                }
+            }
+        }
+
         // Debug click flash
         if self.ui.flash_timer > 0.0 {
             if let Some((fx, fy)) = self.ui.flash_screen_pos {
@@ -1521,12 +1667,13 @@ impl ApplicationHandler for App {
                                 if !self.try_open_machine_panel(pos.x, pos.y) {
                                     self.handle_debug_click(pos.x, pos.y);
                                 }
-                            } else if self.ui.machine_panel_entity.is_some() || self.ui.splitter_panel_entity.is_some() {
+                            } else if self.ui.machine_panel_entity.is_some() || self.ui.splitter_panel_entity.is_some() || self.ui.storage_panel_entity.is_some() {
                                 // Clicking outside while inspection panel is open:
                                 // try to click another building, else close panel
                                 if !self.try_open_machine_panel(pos.x, pos.y) {
                                     self.ui.machine_panel_entity = None;
                                     self.ui.splitter_panel_entity = None;
+                                    self.ui.storage_panel_entity = None;
                                 }
                             }
                         }

@@ -40,6 +40,10 @@ pub enum BeltEnd {
     /// When on output_end: belt feeds items into the splitter (splitter input).
     /// When on input_end: splitter feeds items into the belt (splitter output).
     Splitter { entity: EntityId },
+    /// Belt output feeds into a storage building's input port.
+    StorageInput { entity: EntityId, slot: usize },
+    /// Storage output port feeds into belt input.
+    StorageOutput { entity: EntityId, slot: usize },
 }
 
 /// An item riding on a transport line.
@@ -572,6 +576,95 @@ impl BeltNetwork {
                 }
             }
         }
+    }
+
+    /// Connect a belt's transport line output to a storage input port.
+    /// Only succeeds if the belt entity is at the output end of its line.
+    pub fn connect_belt_to_storage_input(
+        &mut self,
+        belt_entity: EntityId,
+        storage_entity: EntityId,
+        slot: usize,
+    ) {
+        let seg = match self.segments.get(belt_entity) {
+            Some(s) => *s,
+            None => return,
+        };
+        if seg.offset != 0 {
+            return;
+        }
+        if let Some(line) = self.lines.get_mut(seg.line) {
+            line.output_end = BeltEnd::StorageInput {
+                entity: storage_entity,
+                slot,
+            };
+        }
+    }
+
+    /// Connect a storage output port to a belt's transport line input.
+    /// Only succeeds if the belt entity is at the input end of its line.
+    pub fn connect_storage_output_to_belt(
+        &mut self,
+        belt_entity: EntityId,
+        storage_entity: EntityId,
+        slot: usize,
+    ) {
+        let seg = match self.segments.get(belt_entity) {
+            Some(s) => *s,
+            None => return,
+        };
+        let line_len = match self.lines.get(seg.line) {
+            Some(l) => l.length,
+            None => return,
+        };
+        if seg.offset != line_len - FP_SCALE {
+            return;
+        }
+        if let Some(line) = self.lines.get_mut(seg.line) {
+            line.input_end = BeltEnd::StorageOutput {
+                entity: storage_entity,
+                slot,
+            };
+        }
+    }
+
+    /// Disconnect all belt connections to/from a storage entity.
+    /// Sets any BeltEnd::StorageInput/StorageOutput referencing this storage back to Open.
+    pub fn disconnect_storage_ports(&mut self, storage_entity: EntityId) {
+        for (_id, line) in self.lines.iter_mut() {
+            match line.output_end {
+                BeltEnd::StorageInput { entity, .. } if entity == storage_entity => {
+                    line.output_end = BeltEnd::Open;
+                }
+                _ => {}
+            }
+            match line.input_end {
+                BeltEnd::StorageOutput { entity, .. } if entity == storage_entity => {
+                    line.input_end = BeltEnd::Open;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Count how many belt lines are connected to a storage entity as inputs/outputs.
+    /// Returns (input_count, output_count).
+    pub fn storage_connection_counts(&self, storage_entity: EntityId) -> (usize, usize) {
+        let mut inputs = 0;
+        let mut outputs = 0;
+        for (_id, line) in self.lines.iter() {
+            if let BeltEnd::StorageInput { entity, .. } = line.output_end {
+                if entity == storage_entity {
+                    inputs += 1;
+                }
+            }
+            if let BeltEnd::StorageOutput { entity, .. } = line.input_end {
+                if entity == storage_entity {
+                    outputs += 1;
+                }
+            }
+        }
+        (inputs, outputs)
     }
 
     /// Check if a belt entity's line has a front item at pos=0 ready to take.

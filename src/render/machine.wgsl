@@ -227,6 +227,12 @@ fn port_indicators(uv: vec2<f32>, mt: u32, facing: u32) -> vec4<f32> {
         case 5u: { // Source (1×1): output North@(0,0)
             best = max(best, check_port(uv, canon_size, vec2<f32>(0.0, 0.0), 0u, facing, 1u));
         }
+        case 9u: { // Storage (2×2): input0 South@(0,1), input1 South@(1,1), output0 North@(0,0), output1 North@(1,0)
+            best = max(best, check_port(uv, canon_size, vec2<f32>(0.0, 1.0), 2u, facing, 0u));
+            best = max(best, check_port(uv, canon_size, vec2<f32>(1.0, 1.0), 2u, facing, 0u));
+            best = max(best, check_port(uv, canon_size, vec2<f32>(0.0, 0.0), 0u, facing, 1u));
+            best = max(best, check_port(uv, canon_size, vec2<f32>(1.0, 0.0), 0u, facing, 1u));
+        }
         default: { } // Quadrupole, Dynamo: no ports
     }
     return best;
@@ -356,8 +362,8 @@ fn fs_machine(in: VertexOutput) -> @location(0) vec4<f32> {
     // Apply lighting
     color *= lighting;
 
-    // State-based pulsing glow (skip for splitters — they use progress as bitmask)
-    if mt != 8u {
+    // State-based pulsing glow (skip for splitters and storage — they don't craft)
+    if mt != 8u && mt != 9u {
         if in.progress >= 0.0 {
             let pulse = 0.8 + 0.2 * sin(in.progress * 6.2832);
             color *= pulse;

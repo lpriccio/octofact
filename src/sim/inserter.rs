@@ -5,7 +5,7 @@
 //! and machine input/output slots during the simulation tick.
 
 use crate::game::items::MachineType;
-use crate::game::world::Direction;
+use crate::game::world::{Direction, StructureKind};
 
 /// Whether a port accepts or produces items.
 #[allow(dead_code)]
@@ -80,6 +80,34 @@ pub fn port_layout(machine_type: MachineType) -> &'static [PortDef] {
     }
 }
 
+/// Get the canonical port layout for a Storage building (defined facing North).
+///
+/// Storage is 2×2:
+/// ```text
+///   (0,0) (1,0)   ← North edge: Output 0, Output 1
+///   (0,1) (1,1)   ← South edge: Input 0, Input 1
+/// ```
+pub fn storage_port_layout() -> &'static [PortDef] {
+    use Direction::*;
+    use PortKind::*;
+    &[
+        PortDef { side: South, kind: Input, slot: 0, cell_offset: (0, 1) },
+        PortDef { side: South, kind: Input, slot: 1, cell_offset: (1, 1) },
+        PortDef { side: North, kind: Output, slot: 0, cell_offset: (0, 0) },
+        PortDef { side: North, kind: Output, slot: 1, cell_offset: (1, 0) },
+    ]
+}
+
+/// Get the canonical port layout for any structure kind that has ports.
+/// Returns `None` for structure types without ports (Belt, PowerNode, etc.).
+pub fn structure_port_layout(kind: StructureKind) -> Option<&'static [PortDef]> {
+    match kind {
+        StructureKind::Machine(mt) => Some(port_layout(mt)),
+        StructureKind::Storage => Some(storage_port_layout()),
+        _ => None,
+    }
+}
+
 /// A port with its actual direction after rotation for the machine's facing.
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
@@ -110,6 +138,38 @@ pub fn rotated_ports(machine_type: MachineType, facing: Direction) -> Vec<Rotate
             cell_offset: facing.rotate_cell(def.cell_offset.0, def.cell_offset.1, w, h),
         })
         .collect()
+}
+
+/// Get the rotated port layout for any structure kind at the given facing direction.
+/// Returns empty vec for structure types without ports.
+pub fn rotated_structure_ports(kind: StructureKind, facing: Direction) -> Vec<RotatedPort> {
+    let ports = match structure_port_layout(kind) {
+        Some(p) => p,
+        None => return Vec::new(),
+    };
+    let n = facing.rotations_from_north();
+    let (w, h) = kind.footprint();
+    ports
+        .iter()
+        .map(|def| RotatedPort {
+            side: def.side.rotate_n_cw(n),
+            kind: def.kind,
+            slot: def.slot,
+            cell_offset: facing.rotate_cell(def.cell_offset.0, def.cell_offset.1, w, h),
+        })
+        .collect()
+}
+
+/// Find a port at a specific cell offset and facing side for any structure kind.
+pub fn structure_port_at_cell_on_side(
+    kind: StructureKind,
+    facing: Direction,
+    cell_offset: (i32, i32),
+    side: Direction,
+) -> Option<RotatedPort> {
+    rotated_structure_ports(kind, facing)
+        .into_iter()
+        .find(|p| p.side == side && p.cell_offset == cell_offset)
 }
 
 /// Find which port (if any) is on the given side of a machine.
@@ -573,5 +633,213 @@ mod tests {
                 }
             }
         }
+    }
+
+    // --- Storage port tests ---
+
+    #[test]
+    fn storage_has_two_inputs_two_outputs() {
+        let ports = storage_port_layout();
+        assert_eq!(ports.len(), 4);
+        assert_eq!(
+            ports.iter().filter(|p| p.kind == PortKind::Input).count(),
+            2
+        );
+        assert_eq!(
+            ports.iter().filter(|p| p.kind == PortKind::Output).count(),
+            2
+        );
+    }
+
+    #[test]
+    fn storage_canonical_layout() {
+        let ports = storage_port_layout();
+        // Input 0: South side, cell (0,1)
+        assert_eq!(ports[0].side, Direction::South);
+        assert_eq!(ports[0].kind, PortKind::Input);
+        assert_eq!(ports[0].slot, 0);
+        assert_eq!(ports[0].cell_offset, (0, 1));
+        // Input 1: South side, cell (1,1)
+        assert_eq!(ports[1].side, Direction::South);
+        assert_eq!(ports[1].kind, PortKind::Input);
+        assert_eq!(ports[1].slot, 1);
+        assert_eq!(ports[1].cell_offset, (1, 1));
+        // Output 0: North side, cell (0,0)
+        assert_eq!(ports[2].side, Direction::North);
+        assert_eq!(ports[2].kind, PortKind::Output);
+        assert_eq!(ports[2].slot, 0);
+        assert_eq!(ports[2].cell_offset, (0, 0));
+        // Output 1: North side, cell (1,0)
+        assert_eq!(ports[3].side, Direction::North);
+        assert_eq!(ports[3].kind, PortKind::Output);
+        assert_eq!(ports[3].slot, 1);
+        assert_eq!(ports[3].cell_offset, (1, 0));
+    }
+
+    #[test]
+    fn storage_rotation_north_is_identity() {
+        let ports = rotated_structure_ports(StructureKind::Storage, Direction::North);
+        assert_eq!(ports.len(), 4);
+        // Same as canonical
+        assert_eq!(ports[0].side, Direction::South);
+        assert_eq!(ports[0].cell_offset, (0, 1));
+        assert_eq!(ports[2].side, Direction::North);
+        assert_eq!(ports[2].cell_offset, (0, 0));
+    }
+
+    #[test]
+    fn storage_rotation_east() {
+        // 2×2 footprint stays (2, 2) — square.
+        // Canonical input (0,1) South → East rotation: (0,0) West
+        // Canonical input (1,1) South → East rotation: (0,1) West
+        // Canonical output (0,0) North → East rotation: (1,0) East
+        // Canonical output (1,0) North → East rotation: (1,1) East
+        let ports = rotated_structure_ports(StructureKind::Storage, Direction::East);
+        assert_eq!(ports.len(), 4);
+        let in0 = &ports[0];
+        assert_eq!(in0.kind, PortKind::Input);
+        assert_eq!(in0.side, Direction::West);
+        assert_eq!(in0.cell_offset, (0, 0));
+        let in1 = &ports[1];
+        assert_eq!(in1.kind, PortKind::Input);
+        assert_eq!(in1.side, Direction::West);
+        assert_eq!(in1.cell_offset, (0, 1));
+        let out0 = &ports[2];
+        assert_eq!(out0.kind, PortKind::Output);
+        assert_eq!(out0.side, Direction::East);
+        assert_eq!(out0.cell_offset, (1, 0));
+        let out1 = &ports[3];
+        assert_eq!(out1.kind, PortKind::Output);
+        assert_eq!(out1.side, Direction::East);
+        assert_eq!(out1.cell_offset, (1, 1));
+    }
+
+    #[test]
+    fn storage_rotation_south() {
+        // Canonical input (0,1) South → South rotation: (1,0) North
+        // Canonical input (1,1) South → South rotation: (0,0) North
+        // Canonical output (0,0) North → South rotation: (1,1) South
+        // Canonical output (1,0) North → South rotation: (0,1) South
+        let ports = rotated_structure_ports(StructureKind::Storage, Direction::South);
+        assert_eq!(ports.len(), 4);
+        let in0 = &ports[0];
+        assert_eq!(in0.kind, PortKind::Input);
+        assert_eq!(in0.side, Direction::North);
+        assert_eq!(in0.cell_offset, (1, 0));
+        let out0 = &ports[2];
+        assert_eq!(out0.kind, PortKind::Output);
+        assert_eq!(out0.side, Direction::South);
+        assert_eq!(out0.cell_offset, (1, 1));
+    }
+
+    #[test]
+    fn storage_rotation_west() {
+        // Canonical input (0,1) South → West rotation: (1,1) East
+        // Canonical input (1,1) South → West rotation: (1,0) East
+        // Canonical output (0,0) North → West rotation: (0,1) West
+        // Canonical output (1,0) North → West rotation: (0,0) West
+        let ports = rotated_structure_ports(StructureKind::Storage, Direction::West);
+        assert_eq!(ports.len(), 4);
+        let in0 = &ports[0];
+        assert_eq!(in0.kind, PortKind::Input);
+        assert_eq!(in0.side, Direction::East);
+        assert_eq!(in0.cell_offset, (1, 1));
+        let out0 = &ports[2];
+        assert_eq!(out0.kind, PortKind::Output);
+        assert_eq!(out0.side, Direction::West);
+        assert_eq!(out0.cell_offset, (0, 1));
+    }
+
+    #[test]
+    fn storage_rotated_ports_on_correct_edge() {
+        for dir in [Direction::North, Direction::East, Direction::South, Direction::West] {
+            let (rw, rh) = dir.rotate_footprint(2, 2);
+            for port in rotated_structure_ports(StructureKind::Storage, dir) {
+                let (cx, cy) = port.cell_offset;
+                match port.side {
+                    Direction::North => assert_eq!(cy, 0,
+                        "Storage facing {:?}: North port at ({},{}) should have y=0", dir, cx, cy),
+                    Direction::South => assert_eq!(cy, rh - 1,
+                        "Storage facing {:?}: South port at ({},{}) should have y={}", dir, cx, cy, rh - 1),
+                    Direction::West => assert_eq!(cx, 0,
+                        "Storage facing {:?}: West port at ({},{}) should have x=0", dir, cx, cy),
+                    Direction::East => assert_eq!(cx, rw - 1,
+                        "Storage facing {:?}: East port at ({},{}) should have x={}", dir, cx, cy, rw - 1),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn storage_port_at_cell_on_side_finds_input() {
+        // Storage facing North: input at (0,1) South
+        let port = structure_port_at_cell_on_side(
+            StructureKind::Storage, Direction::North, (0, 1), Direction::South,
+        );
+        assert!(port.is_some());
+        assert_eq!(port.unwrap().kind, PortKind::Input);
+        assert_eq!(port.unwrap().slot, 0);
+    }
+
+    #[test]
+    fn storage_port_at_cell_on_side_finds_output() {
+        // Storage facing North: output at (1,0) North
+        let port = structure_port_at_cell_on_side(
+            StructureKind::Storage, Direction::North, (1, 0), Direction::North,
+        );
+        assert!(port.is_some());
+        assert_eq!(port.unwrap().kind, PortKind::Output);
+        assert_eq!(port.unwrap().slot, 1);
+    }
+
+    #[test]
+    fn storage_port_at_cell_on_side_rejects_wrong_cell() {
+        // Storage facing North: no port at (0,0) South (port is at (0,1) South)
+        let port = structure_port_at_cell_on_side(
+            StructureKind::Storage, Direction::North, (0, 0), Direction::South,
+        );
+        assert!(port.is_none());
+    }
+
+    #[test]
+    fn storage_port_at_cell_on_side_rotated() {
+        // Storage facing East: input ports on West side at (0,0) and (0,1)
+        let port = structure_port_at_cell_on_side(
+            StructureKind::Storage, Direction::East, (0, 0), Direction::West,
+        );
+        assert!(port.is_some());
+        assert_eq!(port.unwrap().kind, PortKind::Input);
+    }
+
+    #[test]
+    fn storage_belt_compatibility() {
+        // Storage facing North: input on south side.
+        // A belt going North (toward machine) at the south side should be compatible.
+        let port = structure_port_at_cell_on_side(
+            StructureKind::Storage, Direction::North, (0, 1), Direction::South,
+        ).unwrap();
+        assert!(belt_compatible_with_port(&port, Direction::North));
+        assert!(!belt_compatible_with_port(&port, Direction::South));
+        assert!(!belt_compatible_with_port(&port, Direction::East));
+
+        // Output on north side. Belt going North (away from machine) should be compatible.
+        let port = structure_port_at_cell_on_side(
+            StructureKind::Storage, Direction::North, (0, 0), Direction::North,
+        ).unwrap();
+        assert!(belt_compatible_with_port(&port, Direction::North));
+        assert!(!belt_compatible_with_port(&port, Direction::South));
+    }
+
+    #[test]
+    fn structure_port_layout_returns_none_for_belt() {
+        assert!(structure_port_layout(StructureKind::Belt).is_none());
+        assert!(structure_port_layout(StructureKind::PowerNode).is_none());
+        assert!(structure_port_layout(StructureKind::Splitter).is_none());
+    }
+
+    #[test]
+    fn structure_port_layout_returns_some_for_machine_and_storage() {
+        assert!(structure_port_layout(StructureKind::Storage).is_some());
+        assert!(structure_port_layout(StructureKind::Machine(MachineType::Composer)).is_some());
     }
 }

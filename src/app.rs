@@ -1507,11 +1507,14 @@ impl App {
                 .show(&egui_ctx, |ui| {
                     let fps = self.game_loop.fps;
                     let ups = self.game_loop.ups;
+                    let tile_count = re.tiling.tiles.len();
                     ui.label(
-                        egui::RichText::new(format!("FPS {fps:.0}  UPS {ups:.0}"))
-                            .color(egui::Color32::from_rgb(180, 220, 180))
-                            .size(13.0)
-                            .font(egui::FontId::monospace(13.0)),
+                        egui::RichText::new(format!(
+                            "FPS {fps:.0}  UPS {ups:.0}  Tiles {tile_count}"
+                        ))
+                        .color(egui::Color32::from_rgb(180, 220, 180))
+                        .size(13.0)
+                        .font(egui::FontId::monospace(13.0)),
                     );
                 });
         }

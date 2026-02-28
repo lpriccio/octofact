@@ -187,8 +187,7 @@ impl Camera {
                     let new_tile_xform = tiling.tiles[new_tile_idx].transform;
                     let inv_new = new_tile_xform.inverse();
                     self.local = inv_new.compose(&current_tile_xform.compose(&self.local));
-                    self.tile = new_tile_idx;
-                    tiling.recenter_on(new_tile_idx);
+                    self.tile = tiling.recenter_on(new_tile_idx);
                 }
             }
         }

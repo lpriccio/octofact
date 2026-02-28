@@ -165,7 +165,7 @@ impl Mobius {
     /// Normalize to maintain |a|^2 - |b|^2 = 1.
     pub fn normalized(self) -> Mobius {
         let det = self.a.norm_sq() - self.b.norm_sq();
-        let scale = 1.0 / det.sqrt();
+        let scale = 1.0 / det.abs().sqrt();
         Mobius {
             a: self.a * scale,
             b: self.b * scale,

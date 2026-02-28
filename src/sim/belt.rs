@@ -740,9 +740,13 @@ impl BeltNetwork {
         (output_splitter, input_splitter)
     }
 
-    /// Run port transfers: move items between belt endpoints and machine ports.
+    /// Run port transfers: move items between belt endpoints and machine/storage ports.
     /// Call this each tick after belt advance and machine tick.
-    pub fn tick_port_transfers(&mut self, machine_pool: &mut MachinePool) {
+    pub fn tick_port_transfers(
+        &mut self,
+        machine_pool: &mut MachinePool,
+        storage_pool: &mut crate::sim::storage::StoragePool,
+    ) {
         let line_ids: Vec<TransportLineId> = self.lines.keys().collect();
 
         // Phase 1: Belt → Machine (input ports)
@@ -783,6 +787,50 @@ impl BeltNetwork {
         }
         for (line_id, entity, slot) in machine_to_belt {
             if let Some(item) = machine_pool.take_output_from_slot(entity, slot) {
+                if let Some(line) = self.lines.get_mut(line_id) {
+                    line.insert_at_input(item);
+                }
+            }
+        }
+
+        // Phase 3: Belt → Storage (input ports)
+        // Items at a belt's output end (pos=0) transfer into storage slots.
+        let mut belt_to_storage: Vec<(TransportLineId, ItemId, EntityId)> = Vec::new();
+        for &line_id in &line_ids {
+            let line = match self.lines.get(line_id) {
+                Some(l) => l,
+                None => continue,
+            };
+            if let BeltEnd::StorageInput { entity, .. } = line.output_end {
+                if !line.items.is_empty() && line.items[0].pos == 0 {
+                    belt_to_storage.push((line_id, line.items[0].item, entity));
+                }
+            }
+        }
+        for (line_id, item, entity) in belt_to_storage {
+            if storage_pool.accept_input(entity, item, 1) {
+                if let Some(line) = self.lines.get_mut(line_id) {
+                    line.items.remove(0);
+                }
+            }
+        }
+
+        // Phase 4: Storage → Belt (output ports)
+        // Storage provides items to a belt's input end.
+        let mut storage_to_belt: Vec<(TransportLineId, EntityId)> = Vec::new();
+        for &line_id in &line_ids {
+            let line = match self.lines.get(line_id) {
+                Some(l) => l,
+                None => continue,
+            };
+            if let BeltEnd::StorageOutput { entity, .. } = line.input_end {
+                if line.can_accept_at_input() {
+                    storage_to_belt.push((line_id, entity));
+                }
+            }
+        }
+        for (line_id, entity) in storage_to_belt {
+            if let Some(item) = storage_pool.provide_output(entity) {
                 if let Some(line) = self.lines.get_mut(line_id) {
                     line.insert_at_input(item);
                 }
@@ -1333,6 +1381,7 @@ mod tests {
     use crate::game::items::MachineType;
     use crate::game::recipes::RecipeIndex;
     use crate::sim::machine::{MachinePool, DEFAULT_CRAFT_TICKS};
+    use crate::sim::storage::StoragePool;
 
     #[test]
     fn belt_to_machine_input_transfer() {
@@ -1361,7 +1410,8 @@ mod tests {
         assert_eq!(items[0].1, 0); // stuck at output end
 
         // Now run port transfers — item should move into machine
-        net.tick_port_transfers(&mut machines);
+        let mut storages = StoragePool::new();
+        net.tick_port_transfers(&mut machines, &mut storages);
         let items = local_items(&net, belt);
         assert_eq!(items.len(), 0); // item left the belt
         let slots = machines.input_slots(machine_entity).unwrap();
@@ -1392,7 +1442,8 @@ mod tests {
         };
 
         // Run port transfers — item should appear on belt
-        net.tick_port_transfers(&mut machines);
+        let mut storages = StoragePool::new();
+        net.tick_port_transfers(&mut machines, &mut storages);
         let seg = *net.segments.get(belt).unwrap();
         let line = net.lines.get(seg.line).unwrap();
         assert_eq!(line.items.len(), 1);
@@ -1433,9 +1484,10 @@ mod tests {
         }
 
         // Run the full cycle: belt tick + port transfer + machine tick
+        let mut storages = StoragePool::new();
         for _ in 0..(500 + DEFAULT_CRAFT_TICKS as u32 + 100) {
             net.tick();
-            net.tick_port_transfers(&mut machines);
+            net.tick_port_transfers(&mut machines, &mut storages);
             machines.tick(&recipes);
         }
 
@@ -2052,5 +2104,218 @@ mod tests {
         let (out, inp) = net.line_splitter_connections(belt);
         assert_eq!(out, Some(splitter_b));
         assert_eq!(inp, Some(splitter_a));
+    }
+
+    // --- Storage port transfer tests ---
+
+    /// Helper: place a belt, create a storage entity, connect belt→storage input, return IDs.
+    fn setup_belt_to_storage(
+        world: &mut WorldState,
+        net: &mut BeltNetwork,
+        storage_pool: &mut StoragePool,
+    ) -> (EntityId, EntityId) {
+        let addr: &[u8] = &[0];
+        // Belt at (0,0) flowing East
+        let belt = place_belt(world, net, addr, 0, 0, Direction::East);
+        // Storage at (1,0) — 2x2 footprint
+        let storage_entity = world.place(addr, (1, 0), ItemId::Storage, Direction::North).unwrap();
+        storage_pool.add(storage_entity);
+        // Connect belt output to storage input slot 0
+        net.connect_belt_to_storage_input(belt, storage_entity, 0);
+        (belt, storage_entity)
+    }
+
+    /// Helper: create storage entity with items, place belt, connect storage output→belt.
+    fn setup_storage_to_belt(
+        world: &mut WorldState,
+        net: &mut BeltNetwork,
+        storage_pool: &mut StoragePool,
+    ) -> (EntityId, EntityId) {
+        let addr: &[u8] = &[0];
+        // Storage at (0,0) — 2x2 footprint
+        let storage_entity = world.place(addr, (0, 0), ItemId::Storage, Direction::North).unwrap();
+        storage_pool.add(storage_entity);
+        // Belt at (2,0) flowing East — its input end connects to storage output
+        let belt = place_belt(world, net, addr, 2, 0, Direction::East);
+        // Connect storage output slot 0 to belt input
+        net.connect_storage_output_to_belt(belt, storage_entity, 0);
+        (belt, storage_entity)
+    }
+
+    #[test]
+    fn belt_to_storage_items_flow_in() {
+        let mut world = WorldState::new();
+        let mut net = BeltNetwork::new();
+        let mut machines = MachinePool::new();
+        let mut storages = StoragePool::new();
+
+        let (belt, storage_entity) = setup_belt_to_storage(&mut world, &mut net, &mut storages);
+
+        // Spawn item on belt
+        net.spawn_item_on_entity(belt, ItemId::Point);
+
+        // Advance until item reaches output end (pos=0)
+        for _ in 0..500 {
+            net.tick();
+        }
+        let items = local_items(&net, belt);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].1, 0); // at output end
+
+        // Port transfer should move item into storage
+        net.tick_port_transfers(&mut machines, &mut storages);
+        let items = local_items(&net, belt);
+        assert_eq!(items.len(), 0, "item should have left the belt");
+        let state = storages.get(storage_entity).unwrap();
+        assert_eq!(state.slots[0].item, ItemId::Point);
+        assert_eq!(state.slots[0].count, 1);
+    }
+
+    #[test]
+    fn storage_to_belt_items_flow_out() {
+        let mut world = WorldState::new();
+        let mut net = BeltNetwork::new();
+        let mut machines = MachinePool::new();
+        let mut storages = StoragePool::new();
+
+        let (belt, storage_entity) = setup_storage_to_belt(&mut world, &mut net, &mut storages);
+
+        // Pre-load storage with an item
+        storages.accept_input(storage_entity, ItemId::LineSegment, 1);
+
+        // Port transfer should push item onto belt input end
+        net.tick_port_transfers(&mut machines, &mut storages);
+        let seg = *net.segments.get(belt).unwrap();
+        let line = net.lines.get(seg.line).unwrap();
+        assert_eq!(line.items.len(), 1);
+        assert_eq!(line.items[0].item, ItemId::LineSegment);
+        assert_eq!(line.items[0].pos, line.length); // at input end
+
+        // Storage should now be empty
+        assert_eq!(storages.get(storage_entity).unwrap().slots[0].count, 0);
+    }
+
+    #[test]
+    fn storage_backpressures_when_full() {
+        let mut world = WorldState::new();
+        let mut net = BeltNetwork::new();
+        let mut machines = MachinePool::new();
+        let mut storages = StoragePool::new();
+
+        let (belt, storage_entity) = setup_belt_to_storage(&mut world, &mut net, &mut storages);
+
+        // Fill all storage slots to max
+        {
+            let state = storages.get_mut(storage_entity).unwrap();
+            for slot in state.slots.iter_mut() {
+                slot.item = ItemId::NullSet;
+                slot.count = crate::sim::storage::STORAGE_STACK_SIZE;
+            }
+        }
+
+        // Spawn item on belt and advance to output end
+        net.spawn_item_on_entity(belt, ItemId::Point);
+        for _ in 0..500 {
+            net.tick();
+        }
+
+        // Port transfer should NOT move item — storage is full
+        net.tick_port_transfers(&mut machines, &mut storages);
+        let items = local_items(&net, belt);
+        assert_eq!(items.len(), 1, "item should remain on belt when storage is full");
+        assert_eq!(items[0].1, 0);
+    }
+
+    #[test]
+    fn storage_output_starves_when_empty() {
+        let mut world = WorldState::new();
+        let mut net = BeltNetwork::new();
+        let mut machines = MachinePool::new();
+        let mut storages = StoragePool::new();
+
+        let (belt, _storage_entity) = setup_storage_to_belt(&mut world, &mut net, &mut storages);
+
+        // Storage is empty — port transfer should not produce anything
+        net.tick_port_transfers(&mut machines, &mut storages);
+        let seg = *net.segments.get(belt).unwrap();
+        let line = net.lines.get(seg.line).unwrap();
+        assert_eq!(line.items.len(), 0, "empty storage should not produce items");
+    }
+
+    #[test]
+    fn storage_mixed_item_types_round_trip() {
+        let mut world = WorldState::new();
+        let mut net = BeltNetwork::new();
+        let mut machines = MachinePool::new();
+        let mut storages = StoragePool::new();
+
+        let (input_belt, storage_entity) = setup_belt_to_storage(&mut world, &mut net, &mut storages);
+
+        // Send two different item types into storage
+        net.spawn_item_on_entity(input_belt, ItemId::Point);
+        for _ in 0..500 {
+            net.tick();
+        }
+        net.tick_port_transfers(&mut machines, &mut storages);
+
+        net.spawn_item_on_entity(input_belt, ItemId::LineSegment);
+        for _ in 0..500 {
+            net.tick();
+        }
+        net.tick_port_transfers(&mut machines, &mut storages);
+
+        // Check storage has both items in separate slots
+        let state = storages.get(storage_entity).unwrap();
+        assert_eq!(state.slots[0].item, ItemId::Point);
+        assert_eq!(state.slots[0].count, 1);
+        assert_eq!(state.slots[1].item, ItemId::LineSegment);
+        assert_eq!(state.slots[1].count, 1);
+    }
+
+    #[test]
+    fn full_round_trip_belt_to_storage_to_belt() {
+        let mut world = WorldState::new();
+        let mut net = BeltNetwork::new();
+        let mut machines = MachinePool::new();
+        let mut storages = StoragePool::new();
+        let addr: &[u8] = &[0];
+
+        // Storage at (5,5)
+        let storage_entity = world.place(addr, (5, 5), ItemId::Storage, Direction::North).unwrap();
+        storages.add(storage_entity);
+
+        // Input belt at (4,5) flowing East → storage input
+        let input_belt = place_belt(&mut world, &mut net, addr, 4, 5, Direction::East);
+        net.connect_belt_to_storage_input(input_belt, storage_entity, 0);
+
+        // Output belt at (7,5) flowing East ← storage output
+        let output_belt = place_belt(&mut world, &mut net, addr, 7, 5, Direction::East);
+        net.connect_storage_output_to_belt(output_belt, storage_entity, 0);
+
+        // Spawn item on input belt
+        net.spawn_item_on_entity(input_belt, ItemId::Point);
+
+        // Advance item to belt output end
+        for _ in 0..500 {
+            net.tick();
+        }
+
+        // Single tick_port_transfers handles the full round-trip:
+        // Phase 3 (Belt→Storage): item enters storage
+        // Phase 4 (Storage→Belt): item immediately exits to output belt
+        net.tick_port_transfers(&mut machines, &mut storages);
+
+        // Item should have left the input belt
+        assert_eq!(local_items(&net, input_belt).len(), 0, "item should have left input belt");
+
+        // Item passed through storage and is now on the output belt
+        let seg = *net.segments.get(output_belt).unwrap();
+        let line = net.lines.get(seg.line).unwrap();
+        assert_eq!(line.items.len(), 1, "item should appear on output belt");
+        assert_eq!(line.items[0].item, ItemId::Point);
+
+        // Storage is empty — item passed through in a single tick
+        let total: u16 = storages.get(storage_entity).unwrap().slots.iter().map(|s| s.count).sum();
+        assert_eq!(total, 0, "storage should be empty after pass-through");
     }
 }

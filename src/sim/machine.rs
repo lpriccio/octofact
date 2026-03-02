@@ -11,14 +11,14 @@ pub const DEFAULT_CRAFT_TICKS: u16 = 120;
 pub const SOURCE_CRAFT_TICKS: u16 = 30;
 
 /// An item type + count, used for machine input/output slots.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct ItemStack {
     pub item: ItemId,
     pub count: u16,
 }
 
 /// Machine processing state.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum MachineState {
     /// No recipe set, or recipe complete and waiting for new inputs.
     Idle,
@@ -36,6 +36,7 @@ pub enum MachineState {
 pub const MAX_SLOTS: usize = 4;
 
 /// Hot data — touched every simulation tick. Kept contiguous for cache performance.
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct MachineHotData {
     /// Crafting progress [0.0 .. 1.0].
     pub progress: Vec<f32>,
@@ -50,6 +51,7 @@ pub struct MachineHotData {
 }
 
 /// Cold data — touched on interaction (UI, inserter delivery, recipe selection).
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct MachineColdData {
     /// Which entity in the world this machine corresponds to.
     pub entity_id: Vec<EntityId>,
@@ -65,6 +67,7 @@ pub struct MachineColdData {
 
 /// SoA machine pool. Hot and cold vecs are indexed by the same dense index.
 /// Use `entity_to_idx` for EntityId -> index lookup.
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct MachinePool {
     pub hot: MachineHotData,
     pub cold: MachineColdData,

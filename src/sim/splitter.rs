@@ -14,7 +14,7 @@ fn side_shift(dir: Direction) -> u8 {
 }
 
 /// How a splitter behaves, auto-detected from connected belt directions.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SplitterMode {
     /// No inputs or no outputs connected.
     Inactive,
@@ -27,7 +27,7 @@ pub enum SplitterMode {
 }
 
 /// Per-splitter state.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct SplitterState {
     pub entity: EntityId,
     /// Belt entities feeding items into this splitter (output_end = Splitter).
@@ -41,6 +41,7 @@ pub struct SplitterState {
 }
 
 /// Pool of all placed splitters. Dense storage indexed by EntityId.
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct SplitterPool {
     splitters: Vec<SplitterState>,
     entity_to_idx: HashMap<EntityId, usize>,

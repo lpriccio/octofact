@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use super::items::ItemId;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Inventory {
     items: HashMap<ItemId, u32>,
 }

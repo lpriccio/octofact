@@ -12,7 +12,7 @@ use super::rewrite::{self, RewriteRule, Word, A, B};
 
 /// Canonical cell identity: the shortlex-minimum reduced word among
 /// the 4 orientations of a cell.
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, serde::Serialize, serde::Deserialize)]
 pub struct CellId {
     /// The canonical word (shortlex minimum of the 4 orientations).
     word: Word,

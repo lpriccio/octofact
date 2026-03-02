@@ -15,7 +15,7 @@ pub const DYNAMO_RATE: f32 = 8.0;
 /// Power consumption rate for a machine.
 pub const MACHINE_CONSUMPTION: f32 = 1.0;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PowerNodeKind {
     Producer,
     /// Relay nodes extend the power graph but produce no power.
@@ -23,7 +23,7 @@ pub enum PowerNodeKind {
     Consumer,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[allow(dead_code)]
 pub struct PowerNode {
     pub entity: EntityId,
@@ -39,14 +39,17 @@ pub struct PowerNode {
 /// Power network: tracks all power-relevant entities, builds a connection
 /// graph based on proximity, and solves connected-component ratio-based
 /// power distribution each tick.
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct PowerNetwork {
     nodes: Vec<PowerNode>,
     entity_to_idx: HashMap<EntityId, usize>,
     /// Per-node power satisfaction [0.0 .. 1.0].
     satisfaction: Vec<f32>,
     /// Adjacency list (rebuilt when dirty).
+    #[serde(skip)]
     adjacency: Vec<Vec<usize>>,
     /// Whether the graph needs rebuilding.
+    #[serde(skip)]
     dirty: bool,
 }
 
@@ -107,6 +110,11 @@ impl PowerNetwork {
         self.satisfaction.pop();
         self.dirty = true;
         true
+    }
+
+    /// Force a rebuild of the adjacency graph on the next tick.
+    pub fn mark_dirty(&mut self) {
+        self.dirty = true;
     }
 
     /// Get power satisfaction for an entity [0.0 .. 1.0].

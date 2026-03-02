@@ -130,6 +130,53 @@ impl TilingState {
         }
     }
 
+    /// Create a tiling centered on the given CellId instead of the origin.
+    /// The target cell will be at the center of the Poincare disk (index 0).
+    pub fn new_centered_on(cfg: TilingConfig, center_id: &CellId) -> Self {
+        assert_eq!(cfg.p, 4, "CellId tiling only supports {{4,q}} (got p={})", cfg.p);
+
+        let rules = rewrite::load_rules(cfg.q);
+        let xforms = neighbor_transforms(&cfg);
+
+        let (facing, parity) = word_facing_parity(center_id.word());
+        let absolute = word_to_mobius(center_id.word(), &xforms);
+        let view_offset = absolute.inverse();
+        // Center tile's view-space transform is view_offset * absolute ≈ identity
+        let transform = view_offset.compose(&absolute);
+        let neighbors = compute_neighbors(center_id, facing, &rules);
+
+        let tile = Tile {
+            id: center_id.clone(),
+            transform,
+            parity,
+            facing,
+            neighbors,
+        };
+
+        let key = spatial_key(transform.apply(Complex::ZERO));
+        let mut seen = HashSet::new();
+        seen.insert(center_id.clone());
+        let mut id_to_tile = HashMap::new();
+        id_to_tile.insert(center_id.clone(), 0);
+        let mut spatial_to_tile = HashMap::new();
+        spatial_to_tile.insert(key, 0);
+
+        let mut frontier = VecDeque::new();
+        frontier.push_back(0);
+
+        Self {
+            cfg,
+            tiles: vec![tile],
+            seen,
+            id_to_tile,
+            spatial_to_tile,
+            frontier,
+            neighbor_xforms: xforms,
+            rules,
+            view_offset,
+        }
+    }
+
     /// Expand only frontier tiles within `max_dist` hyperbolic distance of `target`.
     /// Uses algebraic CellId for dedup (exact, immune to floating-point drift).
     /// Stops early if the tile count reaches MAX_TILES.

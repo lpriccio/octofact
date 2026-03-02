@@ -10,13 +10,14 @@ pub const STORAGE_SLOTS: usize = 20;
 pub const STORAGE_STACK_SIZE: u16 = 50;
 
 /// Per-storage state.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct StorageState {
     pub entity: EntityId,
     pub slots: [ItemStack; STORAGE_SLOTS],
 }
 
 /// Pool of all placed storage buildings. Dense storage indexed by EntityId.
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct StoragePool {
     storages: Vec<StorageState>,
     entity_to_idx: HashMap<EntityId, usize>,

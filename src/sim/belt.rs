@@ -21,7 +21,7 @@ pub const DEFAULT_BELT_SPEED: u16 = 4;
 pub const MIN_ITEM_GAP: u32 = 64;
 
 /// What's connected at one end of a transport line.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum BeltEnd {
     /// Nothing connected — items stop here.
     Open,
@@ -47,7 +47,7 @@ pub enum BeltEnd {
 }
 
 /// An item riding on a transport line.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct BeltItem {
     pub item: ItemId,
     /// Fixed-point distance from the output end.
@@ -57,6 +57,7 @@ pub struct BeltItem {
 
 /// A single transport line — possibly spanning multiple consecutive belt segments.
 /// Items flow from input_end (pos = length) toward output_end (pos = 0).
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct TransportLine {
     /// Items on the line, ordered front (output) to back (input).
     pub items: Vec<BeltItem>,
@@ -138,7 +139,7 @@ impl TransportLine {
 }
 
 /// Tracks a belt entity's position within a (possibly merged) transport line.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct BeltSegment {
     /// Which transport line this entity belongs to.
     pub line: TransportLineId,
@@ -148,6 +149,7 @@ pub struct BeltSegment {
 }
 
 /// The belt simulation network — manages all transport lines.
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct BeltNetwork {
     lines: SlotMap<TransportLineId, TransportLine>,
     segments: SecondaryMap<EntityId, BeltSegment>,

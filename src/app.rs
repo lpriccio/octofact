@@ -62,6 +62,8 @@ pub struct UiState {
     pub splitter_panel_entity: Option<EntityId>,
     /// Currently inspected storage entity (opens the storage panel).
     pub storage_panel_entity: Option<EntityId>,
+    /// Deferred save/load action from UI (processed after UI rendering).
+    pub save_action: Option<crate::ui::settings::SettingsAction>,
 }
 
 impl UiState {
@@ -80,6 +82,7 @@ impl UiState {
             machine_panel_entity: None,
             splitter_panel_entity: None,
             storage_panel_entity: None,
+            save_action: None,
         }
     }
 
@@ -1386,13 +1389,15 @@ impl App {
         }
 
         // Settings menu
-        crate::ui::settings::settings_menu(
+        if let Some(action) = crate::ui::settings::settings_menu(
             &re.egui.ctx.clone(),
             &mut self.ui.settings_open,
             &mut self.config,
             &mut self.input_state,
             &mut self.ui.rebinding,
-        );
+        ) {
+            self.ui.save_action = Some(action);
+        }
 
         // Inventory window
         crate::ui::inventory::inventory_window(
@@ -1527,6 +1532,106 @@ impl App {
         output.present();
         Ok(())
     }
+
+    /// Serialize and save the current game state to the autosave slot.
+    fn save_game(&mut self) {
+        let Some(re) = &self.renderer else { return };
+        let tile_id = re.tiling.tiles[self.camera.tile].id.clone();
+        match crate::game::save::serialize_save(
+            self.cfg,
+            &self.camera,
+            &tile_id,
+            self.game_loop.sim_tick,
+            self.grid_enabled,
+            &self.inventory,
+            &self.world,
+            &self.belt_network,
+            &self.machine_pool,
+            &self.splitter_pool,
+            &self.storage_pool,
+            &self.power_network,
+        ) {
+            Ok(bytes) => {
+                if let Err(e) = crate::game::save::autosave(&bytes) {
+                    log::error!("Autosave failed: {e}");
+                }
+            }
+            Err(e) => log::error!("Save serialize failed: {e}"),
+        }
+    }
+
+    /// Serialize and save to a named slot.
+    fn save_game_named(&mut self, name: &str) {
+        let Some(re) = &self.renderer else { return };
+        let tile_id = re.tiling.tiles[self.camera.tile].id.clone();
+        match crate::game::save::serialize_save(
+            self.cfg,
+            &self.camera,
+            &tile_id,
+            self.game_loop.sim_tick,
+            self.grid_enabled,
+            &self.inventory,
+            &self.world,
+            &self.belt_network,
+            &self.machine_pool,
+            &self.splitter_pool,
+            &self.storage_pool,
+            &self.power_network,
+        ) {
+            Ok(bytes) => {
+                if let Err(e) = crate::game::save::save_named(&bytes, name) {
+                    log::error!("Named save failed: {e}");
+                }
+            }
+            Err(e) => log::error!("Save serialize failed: {e}"),
+        }
+    }
+
+    /// Restore game state from a RestoredState. Called after loading.
+    /// Returns an error message if the save is incompatible.
+    fn apply_restored_state(&mut self, state: crate::game::save::RestoredState) -> Result<(), String> {
+        // Check tiling config compatibility
+        if state.cfg.p != self.cfg.p || state.cfg.q != self.cfg.q {
+            return Err(format!(
+                "Save is for {{{},{}}}, but current game is {{{},{}}}",
+                state.cfg.p, state.cfg.q, self.cfg.p, self.cfg.q
+            ));
+        }
+
+        self.inventory = state.inventory;
+        self.world = state.world;
+        self.belt_network = state.belt_network;
+        self.machine_pool = state.machine_pool;
+        self.splitter_pool = state.splitter_pool;
+        self.storage_pool = state.storage_pool;
+        self.power_network = state.power_network;
+        self.power_network.mark_dirty();
+        self.grid_enabled = state.grid_enabled;
+        self.game_loop.sim_tick = state.sim_tick;
+
+        // Reconstruct tiling centered on the saved camera tile
+        if let Some(re) = &mut self.renderer {
+            use crate::hyperbolic::tiling::TilingState;
+
+            // Create tiling directly centered on the saved tile —
+            // avoids the impossible task of expanding from origin to a distant cell.
+            let mut tiling = TilingState::new_centered_on(self.cfg, &state.camera_tile_id);
+
+            // The center tile is at index 0
+            self.camera.tile = 0;
+            self.camera.local = state.camera_local;
+            self.camera.heading = state.camera_heading;
+            self.camera.height = state.camera_height;
+            self.camera.mode = state.camera_mode;
+
+            // Expand tiles around the camera position
+            let cam_pos = self.camera.local.apply(Complex::ZERO);
+            tiling.ensure_coverage(cam_pos, 3);
+
+            re.tiling = tiling;
+        }
+        Ok(())
+    }
 }
 
 impl ApplicationHandler for App {
@@ -1632,6 +1737,37 @@ impl ApplicationHandler for App {
                             self.modify_terrain(pos.x, pos.y, -0.04);
                         }
                     }
+                    if self.input_state.just_pressed(GameAction::QuickSave) {
+                        self.save_game();
+                        self.ui.flash_label = "Game saved".to_string();
+                        self.ui.flash_timer = 2.0;
+                        self.ui.flash_screen_pos = None;
+                    }
+                    if self.input_state.just_pressed(GameAction::QuickLoad) {
+                        match crate::game::save::load_autosave() {
+                            Ok(state) => {
+                                match self.apply_restored_state(state) {
+                                    Ok(()) => {
+                                        self.ui.flash_label = "Game loaded".to_string();
+                                        self.ui.flash_timer = 2.0;
+                                        self.ui.flash_screen_pos = None;
+                                    }
+                                    Err(e) => {
+                                        log::error!("Load failed: {e}");
+                                        self.ui.flash_label = format!("Load failed: {e}");
+                                        self.ui.flash_timer = 3.0;
+                                        self.ui.flash_screen_pos = None;
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                log::warn!("No save to load: {e}");
+                                self.ui.flash_label = "No save found".to_string();
+                                self.ui.flash_timer = 2.0;
+                                self.ui.flash_screen_pos = None;
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1646,6 +1782,7 @@ impl ApplicationHandler for App {
 
         match event {
             WindowEvent::CloseRequested => {
+                self.save_game();
                 event_loop.exit();
             }
             WindowEvent::Resized(new_size) => {
@@ -1708,6 +1845,60 @@ impl ApplicationHandler for App {
                         }
                         Err(wgpu::SurfaceError::OutOfMemory) => event_loop.exit(),
                         Err(e) => log::error!("render error: {e:?}"),
+                    }
+                }
+
+                // Process deferred save/load actions from UI
+                if let Some(action) = self.ui.save_action.take() {
+                    use crate::ui::settings::SettingsAction;
+                    match action {
+                        SettingsAction::Save => {
+                            self.save_game();
+                            self.ui.flash_label = "Game saved".to_string();
+                            self.ui.flash_timer = 2.0;
+                            self.ui.flash_screen_pos = None;
+                        }
+                        SettingsAction::SaveNamed(name) => {
+                            self.save_game_named(&name);
+                            self.ui.flash_label = format!("Saved as '{name}'");
+                            self.ui.flash_timer = 2.0;
+                            self.ui.flash_screen_pos = None;
+                        }
+                        SettingsAction::Load(path) => {
+                            match crate::game::save::load_from_path(&path) {
+                                Ok(state) => match self.apply_restored_state(state) {
+                                    Ok(()) => {
+                                        self.ui.flash_label = "Game loaded".to_string();
+                                        self.ui.flash_timer = 2.0;
+                                        self.ui.flash_screen_pos = None;
+                                    }
+                                    Err(e) => {
+                                        self.ui.flash_label = format!("Load failed: {e}");
+                                        self.ui.flash_timer = 3.0;
+                                        self.ui.flash_screen_pos = None;
+                                    }
+                                },
+                                Err(e) => {
+                                    self.ui.flash_label = format!("Load failed: {e}");
+                                    self.ui.flash_timer = 3.0;
+                                    self.ui.flash_screen_pos = None;
+                                }
+                            }
+                        }
+                        SettingsAction::DeleteSave(name) => {
+                            match crate::game::save::delete_save(&name) {
+                                Ok(()) => {
+                                    self.ui.flash_label = format!("Deleted '{name}'");
+                                    self.ui.flash_timer = 2.0;
+                                    self.ui.flash_screen_pos = None;
+                                }
+                                Err(e) => {
+                                    self.ui.flash_label = format!("Delete failed: {e}");
+                                    self.ui.flash_timer = 3.0;
+                                    self.ui.flash_screen_pos = None;
+                                }
+                            }
+                        }
                     }
                 }
             }

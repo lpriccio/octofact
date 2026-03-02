@@ -9,7 +9,7 @@ new_key_type! {
     pub struct EntityId;
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Direction {
     North,
     East,
@@ -126,7 +126,7 @@ impl Direction {
 /// Functional type of a placed structure. Determines which simulation
 /// system processes it. Simulation pool IDs (BeltId, MachineId, etc.)
 /// will be added in later phases.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum StructureKind {
     Belt,
     Machine(MachineType),
@@ -170,7 +170,7 @@ impl StructureKind {
 }
 
 /// Canonical position of a placed entity: tile address + grid coordinates.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct GridPos {
     pub tile: TileAddr,
     pub gx: i16,
@@ -190,6 +190,7 @@ pub fn occupied_cells(origin: (i32, i32), footprint: (i32, i32)) -> Vec<(i32, i3
     cells
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct WorldState {
     /// Spatial index: tile address → (grid position → entity). "What's at this square?"
     tile_grid: HashMap<TileAddr, HashMap<(i32, i32), EntityId>>,

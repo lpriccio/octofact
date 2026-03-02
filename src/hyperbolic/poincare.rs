@@ -4,7 +4,7 @@ use std::ops::{Add, Div, Mul, Neg, Sub};
 /// Configuration for a {p,q} hyperbolic tiling.
 /// p = sides per polygon, q = polygons meeting at each vertex.
 /// Requires (p-2)(q-2) > 4 for hyperbolicity.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct TilingConfig {
     pub p: u32,
     pub q: u32,
@@ -30,7 +30,7 @@ impl TilingConfig {
 }
 
 /// Complex number with f64 precision for hyperbolic geometry.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Complex {
     pub re: f64,
     pub im: f64,
@@ -118,7 +118,7 @@ impl Mul<f64> for Complex {
 
 /// Mobius transformation in SU(1,1) form: T(z) = (a*z + b) / (conj(b)*z + conj(a))
 /// Invariant: |a|^2 - |b|^2 = 1
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Mobius {
     pub a: Complex,
     pub b: Complex,

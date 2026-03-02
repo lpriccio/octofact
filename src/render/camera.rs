@@ -2,7 +2,7 @@ use crate::game::input::{GameAction, InputState};
 use crate::hyperbolic::poincare::{Complex, Mobius};
 use crate::hyperbolic::tiling::TilingState;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum CameraMode {
     TopDown,
     FirstPerson,

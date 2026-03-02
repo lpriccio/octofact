@@ -20,6 +20,8 @@ pub enum GameAction {
     ToggleGrid,
     OpenPlacement,
     DestroyBuilding,
+    QuickSave,
+    QuickLoad,
 }
 
 impl GameAction {
@@ -41,6 +43,8 @@ impl GameAction {
             Self::ToggleGrid => "Toggle Grid",
             Self::OpenPlacement => "Placement Menu",
             Self::DestroyBuilding => "Destroy Building",
+            Self::QuickSave => "Quick Save",
+            Self::QuickLoad => "Quick Load",
         }
     }
 
@@ -51,7 +55,7 @@ impl GameAction {
             CameraUp, CameraDown, ToggleLabels, OpenSettings,
             OpenInventory, ToggleViewMode, RaiseTerrain,
             LowerTerrain, RotateStructure, ToggleGrid, OpenPlacement,
-            DestroyBuilding,
+            DestroyBuilding, QuickSave, QuickLoad,
         ]
     }
 }
@@ -195,6 +199,8 @@ pub fn default_bindings() -> HashMap<GameAction, KeyBind> {
         (LowerTerrain, KeyBind::with_shift(KeyCode::ArrowDown)),
         (OpenPlacement, KeyBind::new(KeyCode::KeyP)),
         (DestroyBuilding, KeyBind::new(KeyCode::KeyX)),
+        (QuickSave, KeyBind::new(KeyCode::F5)),
+        (QuickLoad, KeyBind::new(KeyCode::F9)),
     ])
 }
 
@@ -346,6 +352,6 @@ mod tests {
 
     #[test]
     fn test_all_actions_listed() {
-        assert_eq!(GameAction::all().len(), 16);
+        assert_eq!(GameAction::all().len(), 18);
     }
 }

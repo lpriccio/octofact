@@ -83,6 +83,8 @@ pub struct UiState {
     pub blueprint_select: bool,
     /// Active box selection state.
     pub selection: Option<SelectionState>,
+    /// Whether paste mode is active (Ctrl-V with clipboard).
+    pub paste_mode: bool,
 }
 
 impl UiState {
@@ -104,11 +106,32 @@ impl UiState {
             save_action: None,
             blueprint_select: false,
             selection: None,
+            paste_mode: false,
         }
     }
 
     fn is_panel_open(&self) -> bool {
         self.settings_open || self.inventory_open || self.machine_panel_entity.is_some() || self.splitter_panel_entity.is_some() || self.storage_panel_entity.is_some()
+    }
+}
+
+/// Map a `StructureKind` to the `machine_type` float used in shaders.
+fn kind_to_machine_type_float(kind: StructureKind) -> f32 {
+    use crate::game::items::MachineType;
+    match kind {
+        StructureKind::Belt => 10.0,
+        StructureKind::Machine(mt) => match mt {
+            MachineType::Composer => 0.0,
+            MachineType::Inverter => 1.0,
+            MachineType::Embedder => 2.0,
+            MachineType::Quotient => 3.0,
+            MachineType::Transformer => 4.0,
+            MachineType::Source => 5.0,
+        },
+        StructureKind::PowerNode => 6.0,
+        StructureKind::PowerSource => 7.0,
+        StructureKind::Splitter => 8.0,
+        StructureKind::Storage => 9.0,
     }
 }
 
@@ -779,6 +802,90 @@ impl App {
                 last_free,
             });
         }
+    }
+
+    /// Handle a click while in paste mode: batch-place clipboard entries.
+    ///
+    /// Placement order: non-belt structures first, then belts, so that belts
+    /// can auto-connect to freshly placed machines/splitters/storage.
+    fn handle_paste_click(&mut self, sx: f64, sy: f64) {
+        let clipboard = match &self.clipboard {
+            Some(c) => c.clone(),
+            None => {
+                self.ui.paste_mode = false;
+                return;
+            }
+        };
+
+        let result = match self.find_clicked_tile(sx, sy) {
+            Some(r) => r,
+            None => return,
+        };
+
+        let anchor = result.grid_xy;
+        let running = self.renderer.as_ref().unwrap();
+        let cell_id = running.tiling.tiles[result.tile_idx].id.clone();
+        let address = cell_id.word();
+
+        // Check all entries can be placed
+        let checks = blueprint::can_paste(&self.world, address, anchor, &clipboard);
+        if checks.iter().any(|(_i, ok)| !*ok) {
+            self.ui.flash_label = "Can't paste: collision".to_string();
+            self.ui.flash_timer = 1.5;
+            self.ui.flash_screen_pos = None;
+            return;
+        }
+
+        // Check inventory has enough items
+        if !self.config.debug.free_placement {
+            let costs = blueprint::required_items(&clipboard);
+            for &(item, count) in &costs {
+                if self.inventory.count(item) < count as u32 {
+                    self.ui.flash_label = format!(
+                        "Need {} more {}",
+                        count as u32 - self.inventory.count(item),
+                        item.display_name(),
+                    );
+                    self.ui.flash_timer = 1.5;
+                    self.ui.flash_screen_pos = None;
+                    return;
+                }
+            }
+        }
+
+        // Partition entries: non-belts first, belts second
+        let mut non_belts: Vec<&blueprint::BlueprintEntry> = Vec::new();
+        let mut belts: Vec<&blueprint::BlueprintEntry> = Vec::new();
+        for entry in &clipboard.entries {
+            if entry.kind == StructureKind::Belt {
+                belts.push(entry);
+            } else {
+                non_belts.push(entry);
+            }
+        }
+
+        let mut placed = 0u32;
+
+        // Place non-belt structures first
+        for entry in non_belts.iter().chain(belts.iter()) {
+            let grid_xy = (anchor.0 + entry.offset.0, anchor.1 + entry.offset.1);
+            let mode = PlacementMode {
+                item: entry.kind.to_item(),
+                direction: entry.direction,
+            };
+            if self.try_place_at(result.tile_idx, address, grid_xy, &mode) {
+                placed += 1;
+            }
+        }
+
+        // Deduct items (try_place_at already deducts per-structure)
+        // No extra deduction needed — try_place_at handles it.
+
+        self.ui.flash_label = format!("Pasted {placed} structures");
+        self.ui.flash_timer = 1.5;
+        self.ui.flash_screen_pos = None;
+
+        // Stay in paste mode for repeated pasting
     }
 
     fn handle_placement_drag(&mut self, sx: f64, sy: f64) {
@@ -1500,9 +1607,9 @@ impl App {
         }
         re.item_instances.upload(&re.gpu.device, &re.gpu.queue);
 
-        // Build ghost preview instance (0 or 1) for placement mode
+        // Build ghost preview instances for placement mode or paste mode
         re.ghost_instances.clear();
-        if let (Some(mode), Some(cursor)) = (&self.ui.placement_mode, self.ui.cursor_pos) {
+        if let Some(cursor) = self.ui.cursor_pos {
             let width = re.gpu.config.width as f32;
             let height = re.gpu.config.height as f32;
             let khs = self.klein_half_side;
@@ -1531,42 +1638,49 @@ impl App {
                     let gx = gx.clamp(-32, 32);
                     let gy = gy.clamp(-32, 32);
 
-                    // Find the combined Mobius for this tile from visible list
                     let combined = visible.iter()
                         .find(|&&(idx, _)| idx == tile_vis_idx)
                         .map(|&(_, m)| m)
                         .unwrap();
 
-                    // Map item to machine_type float
-                    let machine_type_float = match StructureKind::from_item(mode.item) {
-                        Some(StructureKind::Belt) => 10.0,
-                        Some(StructureKind::Machine(mt)) => {
-                            use crate::game::items::MachineType;
-                            match mt {
-                                MachineType::Composer => 0.0,
-                                MachineType::Inverter => 1.0,
-                                MachineType::Embedder => 2.0,
-                                MachineType::Quotient => 3.0,
-                                MachineType::Transformer => 4.0,
-                                MachineType::Source => 5.0,
+                    let ma = [combined.a.re as f32, combined.a.im as f32];
+                    let mb = [combined.b.re as f32, combined.b.im as f32];
+
+                    if self.ui.paste_mode {
+                        // Paste mode: multi-ghost preview for all clipboard entries
+                        if let Some(clip) = &self.clipboard {
+                            let tile = &re.tiling.tiles[tile_vis_idx];
+                            let checks = blueprint::can_paste(
+                                &self.world, tile.id.word(), (gx, gy), clip,
+                            );
+                            for (i, entry) in clip.entries.iter().enumerate() {
+                                let egx = gx + entry.offset.0;
+                                let egy = gy + entry.offset.1;
+                                let blocked = !checks.get(i).is_none_or(|&(_, ok)| ok);
+                                re.ghost_instances.push(MachineInstance {
+                                    mobius_a: ma,
+                                    mobius_b: mb,
+                                    grid_pos: [egx as f32, egy as f32],
+                                    machine_type: kind_to_machine_type_float(entry.kind),
+                                    progress: if blocked { -3.0 } else { -1.0 },
+                                    power_sat: -1.0,
+                                    facing: entry.direction.rotations_from_north() as f32,
+                                });
                             }
                         }
-                        Some(StructureKind::PowerNode) => 6.0,
-                        Some(StructureKind::PowerSource) => 7.0,
-                        Some(StructureKind::Splitter) => 8.0,
-                        Some(StructureKind::Storage) => 9.0,
-                        None => 10.0, // fallback
-                    };
-
-                    re.ghost_instances.push(MachineInstance {
-                        mobius_a: [combined.a.re as f32, combined.a.im as f32],
-                        mobius_b: [combined.b.re as f32, combined.b.im as f32],
-                        grid_pos: [gx as f32, gy as f32],
-                        machine_type: machine_type_float,
-                        progress: -1.0,
-                        power_sat: -1.0,
-                        facing: mode.direction.rotations_from_north() as f32,
-                    });
+                    } else if let Some(mode) = &self.ui.placement_mode {
+                        // Single-structure ghost preview
+                        let sk = StructureKind::from_item(mode.item);
+                        re.ghost_instances.push(MachineInstance {
+                            mobius_a: ma,
+                            mobius_b: mb,
+                            grid_pos: [gx as f32, gy as f32],
+                            machine_type: sk.map_or(10.0, kind_to_machine_type_float),
+                            progress: -1.0,
+                            power_sat: -1.0,
+                            facing: mode.direction.rotations_from_north() as f32,
+                        });
+                    }
                 }
             }
         }
@@ -2081,6 +2195,32 @@ impl ApplicationHandler for App {
                         self.blueprint_cut();
                     }
 
+                    // Ctrl+V: enter paste mode with clipboard contents
+                    if self.input_state.ctrl_held
+                        && code == winit::keyboard::KeyCode::KeyV
+                        && self.clipboard.is_some()
+                    {
+                        self.ui.paste_mode = true;
+                        self.ui.placement_mode = None;
+                        self.ui.blueprint_select = false;
+                        self.ui.selection = None;
+                        log::info!("paste mode: ON");
+                    }
+
+                    // R key in paste mode: rotate clipboard 90° CW
+                    if self.ui.paste_mode && code == winit::keyboard::KeyCode::KeyR {
+                        if let Some(clip) = &mut self.clipboard {
+                            clip.rotate_cw();
+                            log::info!("clipboard rotated CW");
+                        }
+                    }
+
+                    // Escape exits paste mode
+                    if self.ui.paste_mode && code == winit::keyboard::KeyCode::Escape {
+                        self.ui.paste_mode = false;
+                        log::info!("paste mode: OFF");
+                    }
+
                     if self.input_state.just_pressed(GameAction::QuickLoad) {
                         match crate::game::save::load_autosave() {
                             Ok(state) => {
@@ -2167,6 +2307,8 @@ impl ApplicationHandler for App {
                             if self.input_state.shift_held {
                                 // Shift+click: debug spawn item on belt
                                 self.debug_spawn_item(pos.x, pos.y);
+                            } else if self.ui.paste_mode {
+                                self.handle_paste_click(pos.x, pos.y);
                             } else if self.ui.placement_mode.is_some() {
                                 self.handle_placement_click(pos.x, pos.y);
                             } else if !self.ui_is_open() {

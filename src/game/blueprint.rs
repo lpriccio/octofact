@@ -17,13 +17,85 @@ pub struct BlueprintEntry {
 
 /// A clipboard buffer holding captured structures.
 #[derive(Clone, Debug)]
-#[allow(dead_code)] // width/height/tiling_q read by Phase BP2 (paste mode)
 pub struct Clipboard {
     pub entries: Vec<BlueprintEntry>,
     pub width: i32,
     pub height: i32,
     /// The tiling q parameter when this was captured.
     pub tiling_q: u32,
+}
+
+impl Clipboard {
+    /// Rotate the entire clipboard 90° clockwise.
+    ///
+    /// Each entry's offset is transformed via `Direction::East.rotate_cell()`
+    /// (which is the 90° CW rotation), and each entry's direction is rotated
+    /// one step clockwise. Width and height are swapped.
+    pub fn rotate_cw(&mut self) {
+        let w = self.width;
+        let h = self.height;
+        for entry in &mut self.entries {
+            // Rotate the grid offset 90° CW within the bounding box
+            let (ox, oy) = Direction::East.rotate_cell(entry.offset.0, entry.offset.1, w, h);
+            // Also rotate the footprint-relative origin for multi-cell structures
+            let (fw, fh) = entry.kind.footprint();
+            let (rfw, _rfh) = Direction::East.rotate_footprint(fw, fh);
+            // rotate_cell maps the top-left corner through the rotation, but for
+            // multi-cell structures the top-left of the rotated footprint isn't at
+            // the same place as the rotated top-left of the original. Adjust so
+            // the origin stays at the top-left of the rotated footprint.
+            let adjusted_ox = ox - (rfw - 1);
+            entry.offset = (adjusted_ox, oy);
+            entry.direction = entry.direction.rotate_cw();
+        }
+        self.width = h;
+        self.height = w;
+    }
+}
+
+/// Check whether each clipboard entry can be pasted at `anchor` on the given tile.
+///
+/// Returns a `Vec` of `(index, passable)` for each entry in the clipboard.
+/// An entry passes if all cells it would occupy are currently unoccupied.
+pub fn can_paste(
+    world: &WorldState,
+    tile_address: &[u8],
+    anchor: (i32, i32),
+    clipboard: &Clipboard,
+) -> Vec<(usize, bool)> {
+    use super::world::occupied_cells;
+    clipboard
+        .entries
+        .iter()
+        .enumerate()
+        .map(|(i, entry)| {
+            let origin = (anchor.0 + entry.offset.0, anchor.1 + entry.offset.1);
+            let (fw, fh) = entry.kind.footprint();
+            let footprint = entry.direction.rotate_footprint(fw, fh);
+            let cells = occupied_cells(origin, footprint);
+            let passable = cells.iter().all(|&cell| {
+                world
+                    .tile_entities(tile_address)
+                    .and_then(|m| m.get(&cell))
+                    .is_none()
+            });
+            (i, passable)
+        })
+        .collect()
+}
+
+/// Tally the items required to paste all entries in a clipboard.
+///
+/// Each structure requires one of its corresponding `ItemId`.
+/// Returns a consolidated list of `(ItemId, count)`.
+pub fn required_items(clipboard: &Clipboard) -> Vec<(ItemId, u16)> {
+    use std::collections::HashMap;
+    let mut counts: HashMap<ItemId, u16> = HashMap::new();
+    for entry in &clipboard.entries {
+        let item = entry.kind.to_item();
+        *counts.entry(item).or_insert(0) += 1;
+    }
+    counts.into_iter().collect()
 }
 
 /// Capture all structures within a rectangle on a single tile.
@@ -234,5 +306,171 @@ mod tests {
         // Give bottom_right as "top_left" and vice versa
         let clip = capture_region(&world, &pool, &addr, (5, 5), (5, 5), 5);
         assert_eq!(clip.entries.len(), 1);
+    }
+
+    // --- Phase BP2 tests ---
+
+    fn make_belt_clipboard(offsets: &[(i32, i32, Direction)], w: i32, h: i32) -> Clipboard {
+        Clipboard {
+            entries: offsets
+                .iter()
+                .map(|&(x, y, dir)| BlueprintEntry {
+                    offset: (x, y),
+                    kind: StructureKind::Belt,
+                    direction: dir,
+                    items: Vec::new(),
+                })
+                .collect(),
+            width: w,
+            height: h,
+            tiling_q: 5,
+        }
+    }
+
+    #[test]
+    fn rotate_cw_single_belt() {
+        // Belt at (0,0) in 1x1 bounding box facing East
+        let mut clip = make_belt_clipboard(&[(0, 0, Direction::East)], 1, 1);
+        clip.rotate_cw();
+        assert_eq!(clip.entries[0].offset, (0, 0));
+        assert_eq!(clip.entries[0].direction, Direction::South);
+        assert_eq!(clip.width, 1);
+        assert_eq!(clip.height, 1);
+    }
+
+    #[test]
+    fn rotate_cw_identity_after_4() {
+        // 4 rotations should return to original
+        let mut clip = make_belt_clipboard(
+            &[(0, 0, Direction::North), (2, 1, Direction::East)],
+            3,
+            2,
+        );
+        let original_entries: Vec<_> = clip.entries.iter().map(|e| (e.offset, e.direction)).collect();
+        let orig_w = clip.width;
+        let orig_h = clip.height;
+        for _ in 0..4 {
+            clip.rotate_cw();
+        }
+        assert_eq!(clip.width, orig_w);
+        assert_eq!(clip.height, orig_h);
+        for (i, entry) in clip.entries.iter().enumerate() {
+            assert_eq!(entry.offset, original_entries[i].0, "entry {i} offset");
+            assert_eq!(entry.direction, original_entries[i].1, "entry {i} direction");
+        }
+    }
+
+    #[test]
+    fn rotate_cw_line_of_belts() {
+        // 3 belts in a horizontal line: (0,0), (1,0), (2,0) in a 3x1 box
+        let mut clip = make_belt_clipboard(
+            &[
+                (0, 0, Direction::East),
+                (1, 0, Direction::East),
+                (2, 0, Direction::East),
+            ],
+            3,
+            1,
+        );
+        clip.rotate_cw();
+        // After 90° CW, 3x1 → 1x3, belts should be vertical
+        assert_eq!(clip.width, 1);
+        assert_eq!(clip.height, 3);
+        // (0,0) in 3x1 → rotate_cell(0,0,3,1) = (1-1-0, 0) = (0,0)
+        assert_eq!(clip.entries[0].offset, (0, 0));
+        // (1,0) → rotate_cell(1,0,3,1) = (0,1)
+        assert_eq!(clip.entries[1].offset, (0, 1));
+        // (2,0) → rotate_cell(2,0,3,1) = (0,2)
+        assert_eq!(clip.entries[2].offset, (0, 2));
+        // All should now face South (East rotated CW)
+        for entry in &clip.entries {
+            assert_eq!(entry.direction, Direction::South);
+        }
+    }
+
+    #[test]
+    fn rotate_cw_2x2_machine() {
+        // Composer (2x2) at (0,0) in a 2x2 bounding box
+        let mut clip = Clipboard {
+            entries: vec![BlueprintEntry {
+                offset: (0, 0),
+                kind: StructureKind::Machine(MachineType::Composer),
+                direction: Direction::North,
+                items: Vec::new(),
+            }],
+            width: 2,
+            height: 2,
+            tiling_q: 5,
+        };
+        clip.rotate_cw();
+        // 2x2 in 2x2 box: should stay at (0,0)
+        assert_eq!(clip.entries[0].offset, (0, 0));
+        assert_eq!(clip.entries[0].direction, Direction::East);
+        assert_eq!(clip.width, 2);
+        assert_eq!(clip.height, 2);
+    }
+
+    #[test]
+    fn can_paste_empty_world() {
+        let world = WorldState::new();
+        let clip = make_belt_clipboard(
+            &[(0, 0, Direction::North), (1, 0, Direction::North)],
+            2,
+            1,
+        );
+        let checks = can_paste(&world, &[0], (5, 5), &clip);
+        assert_eq!(checks.len(), 2);
+        assert!(checks.iter().all(|&(_, ok)| ok));
+    }
+
+    #[test]
+    fn can_paste_detects_collision() {
+        let mut world = WorldState::new();
+        let addr = vec![0u8];
+        world.place(&addr, (5, 5), ItemId::Belt, Direction::North).unwrap();
+
+        let clip = make_belt_clipboard(
+            &[(0, 0, Direction::East), (1, 0, Direction::East)],
+            2,
+            1,
+        );
+        let checks = can_paste(&world, &addr, (5, 5), &clip);
+        // First entry at (5,5) should collide, second at (6,5) should be fine
+        assert!(!checks[0].1);
+        assert!(checks[1].1);
+    }
+
+    #[test]
+    fn required_items_tallies_correctly() {
+        let clip = Clipboard {
+            entries: vec![
+                BlueprintEntry {
+                    offset: (0, 0),
+                    kind: StructureKind::Belt,
+                    direction: Direction::North,
+                    items: Vec::new(),
+                },
+                BlueprintEntry {
+                    offset: (1, 0),
+                    kind: StructureKind::Belt,
+                    direction: Direction::North,
+                    items: Vec::new(),
+                },
+                BlueprintEntry {
+                    offset: (0, 1),
+                    kind: StructureKind::Machine(MachineType::Composer),
+                    direction: Direction::North,
+                    items: Vec::new(),
+                },
+            ],
+            width: 3,
+            height: 3,
+            tiling_q: 5,
+        };
+        let items = required_items(&clip);
+        let belt_count = items.iter().find(|&&(id, _)| id == ItemId::Belt).map(|&(_, c)| c).unwrap_or(0);
+        let composer_count = items.iter().find(|&&(id, _)| id == ItemId::Composer).map(|&(_, c)| c).unwrap_or(0);
+        assert_eq!(belt_count, 2);
+        assert_eq!(composer_count, 1);
     }
 }

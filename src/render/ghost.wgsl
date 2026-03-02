@@ -38,6 +38,7 @@ struct VertexOutput {
     @location(1) machine_type: f32,
     @location(2) disk_r: f32,
     @location(3) world_normal: vec3<f32>,
+    @location(4) @interpolate(flat) progress: f32,
 };
 
 // Machine footprint in grid cells: (width, height), canonical (facing North).
@@ -140,6 +141,7 @@ fn vs_ghost(vert: VertexInput, inst: InstanceInput) -> VertexOutput {
     out.machine_type = inst.machine_type;
     out.disk_r = length(disk);
     out.world_normal = normal;
+    out.progress = inst.progress;
 
     return out;
 }
@@ -151,7 +153,12 @@ fn fs_ghost(in: VertexOutput) -> @location(0) vec4<f32> {
     if fade < 0.01 { discard; }
 
     let mt = u32(in.machine_type + 0.5);
-    let base_color = machine_color(mt);
+    // Blocked ghost sentinel: progress <= -2.5 → red tint
+    let blocked = in.progress < -2.5;
+    var base_color = machine_color(mt);
+    if blocked {
+        base_color = vec3<f32>(0.85, 0.15, 0.15);
+    }
 
     // Diffuse lighting
     let light_dir = normalize(vec3<f32>(0.3, 1.0, -0.2));

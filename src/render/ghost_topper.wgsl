@@ -306,8 +306,13 @@ fn fs_ghost_topper(in: VertexOutput) -> @location(0) vec4<f32> {
     let fparams = topper_fresnel_params(mt);
     let fresnel = pow(1.0 - abs(dot(normal, view_dir)), fparams.y);
 
-    let base_color = topper_color(mt) * 1.3;
-    var color = base_color * (ambient + diffuse) + vec3<f32>(fresnel * fparams.x);
+    // Blocked ghost sentinel: progress <= -2.5 → red tint
+    let blocked = in.progress < -2.5;
+    var base_c = topper_color(mt) * 1.3;
+    if blocked {
+        base_c = vec3<f32>(0.85, 0.15, 0.15);
+    }
+    var color = base_c * (ambient + diffuse) + vec3<f32>(fresnel * fparams.x);
 
     // Ghost pulse
     let pulse = 0.85 + 0.15 * sin(globals.time * 3.0);

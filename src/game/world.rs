@@ -149,6 +149,25 @@ impl StructureKind {
         }
     }
 
+    /// Reverse mapping: structure kind → the item that produces it.
+    pub fn to_item(self) -> ItemId {
+        match self {
+            Self::Belt => ItemId::Belt,
+            Self::Splitter => ItemId::Splitter,
+            Self::Storage => ItemId::Storage,
+            Self::PowerNode => ItemId::Quadrupole,
+            Self::PowerSource => ItemId::Dynamo,
+            Self::Machine(mt) => match mt {
+                MachineType::Composer => ItemId::Composer,
+                MachineType::Inverter => ItemId::Inverter,
+                MachineType::Embedder => ItemId::Embedder,
+                MachineType::Quotient => ItemId::Quotient,
+                MachineType::Transformer => ItemId::Transformer,
+                MachineType::Source => ItemId::SourceMachine,
+            },
+        }
+    }
+
     /// Derive structure kind from the item being placed.
     /// Returns `None` for non-placeable items (raw resources, intermediates).
     pub fn from_item(item: ItemId) -> Option<Self> {

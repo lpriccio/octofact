@@ -1,0 +1,9 @@
+[('bB', ''),
+ ('Bb', ''),
+ ('aa', ''),
+ ('bbb', 'B'),
+ ('A', 'a'),
+ ('BB', 'bb'),
+ ('aBaBaBaB', 'babababa'),
+ ('aBaBaBabb', 'babababaB'),
+ ('abababab', 'BaBaBaBa')]

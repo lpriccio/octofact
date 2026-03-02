@@ -122,7 +122,7 @@ same `MachineInstance` instance data (reused — no new instance type).
 
 ### Tasks
 
-- [ ] Add fresnel rim glow intensity tuning per machine type
+- [x] Add fresnel rim glow intensity tuning per machine type
 - [ ] Add animated contour shimmer overlay on shapes
 - [ ] Make crafting progress drive animation speed (acceleration/deceleration within craft cycle)
 - [ ] Add soft shadow on machine base (darken center area based on topper shape)

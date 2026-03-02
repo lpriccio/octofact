@@ -85,6 +85,25 @@ fn topper_height(mt: u32) -> f32 {
     }
 }
 
+// Per-machine-type fresnel rim glow parameters.
+// Returns vec2(intensity, power_exponent).
+// Round shapes get stronger, wider glow; angular shapes get subtle, tight glow.
+fn topper_fresnel_params(mt: u32) -> vec2<f32> {
+    switch mt {
+        case 0u: { return vec2<f32>(0.20, 2.5); }  // Composer: round tori — strong, wide
+        case 1u: { return vec2<f32>(0.10, 4.0); }  // Inverter: angular octahedron — subtle
+        case 2u: { return vec2<f32>(0.18, 3.0); }  // Embedder: mixed curves — moderate
+        case 3u: { return vec2<f32>(0.12, 3.5); }  // Quotient: pointy stella — restrained
+        case 4u: { return vec2<f32>(0.22, 2.5); }  // Transformer: round twist — strong
+        case 5u: { return vec2<f32>(0.25, 2.0); }  // Source: smooth sphere — strongest
+        case 6u: { return vec2<f32>(0.15, 3.0); }  // Quadrupole: diamond — standard
+        case 7u: { return vec2<f32>(0.18, 3.0); }  // Dynamo: cylinder+fins — moderate
+        case 8u: { return vec2<f32>(0.08, 4.0); }  // Splitter: angular prism — subtle
+        case 9u: { return vec2<f32>(0.10, 4.0); }  // Storage: boxy cubes — subtle
+        default: { return vec2<f32>(0.15, 3.0); }
+    }
+}
+
 // Machine type color (matching machine.wgsl).
 fn topper_color(mt: u32) -> vec3<f32> {
     switch mt {
@@ -330,9 +349,10 @@ fn fs_topper(in: VertexOutput) -> @location(0) vec4<f32> {
     let ambient = 0.35;
     let diffuse = 0.65 * ndotl;
 
-    // Fresnel rim glow
+    // Fresnel rim glow (per-machine-type intensity and falloff)
     let view_dir = -local_rd;
-    let fresnel = pow(1.0 - abs(dot(normal, view_dir)), 3.0);
+    let fparams = topper_fresnel_params(mt);
+    let fresnel = pow(1.0 - abs(dot(normal, view_dir)), fparams.y);
 
     // Base color (brighter than machine base)
     var base_color = topper_color(mt) * 1.3;
@@ -347,7 +367,7 @@ fn fs_topper(in: VertexOutput) -> @location(0) vec4<f32> {
         base_color *= 0.7;
     }
 
-    let color = base_color * (ambient + diffuse) + vec3<f32>(fresnel * 0.15);
+    let color = base_color * (ambient + diffuse) + vec3<f32>(fresnel * fparams.x);
 
     return vec4<f32>(color * fade, 1.0);
 }

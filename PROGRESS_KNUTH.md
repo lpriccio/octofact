@@ -80,25 +80,25 @@ inverse cancellation, and identity insertion (500 random trials per order).
 - `struct RewriteSystem { rules: Vec<(Word, Word)>, vertex_order: u32 }`
 
 **Core algorithms** (direct port from Python):
-- [ ] `word_lt_shortlex(u, v) -> bool` — shortlex comparison
-- [ ] `invert_word(w) -> Word` — reverse + swap A↔a, B→BBB
-- [ ] `RewriteSystem::new(vertex_order, max_length)` — Knuth-Bendix completion
+- [x] `word_lt_shortlex(u, v) -> bool` — shortlex comparison
+- [x] `invert_word(w) -> Word` — reverse + swap A↔a, B→BBB
+- [x] `RewriteSystem::new(vertex_order, max_length)` — Knuth-Bendix completion
   - Seed rules from group presentation: Aa→ε, aA→ε, BBBB→ε, (AB)^n→ε, (BA)^n→ε
   - Orient each rule: shortlex-greater LHS → smaller RHS
   - Iterate: find critical pairs from rule overlaps, reduce both sides, add new
     rules when they differ, interreduce
   - Terminate when no new rules within max_length bound are generated
-- [ ] `reduce(word) -> Word` — apply rules left-to-right until fixed point
-- [ ] `interreduce(rules)` — clean up redundant rules
+- [x] `reduce(word) -> Word` — apply rules left-to-right until fixed point
+- [x] `interreduce(rules)` — clean up redundant rules
 
 **Tests** (mirror Python test suite + extras):
-- [ ] Defining relations: Aa=ε, aA=ε, B⁴=ε, (AB)^n=ε, (BA)^n=ε, (AB)^{2n}=ε
-- [ ] Idempotency: reduce(reduce(w)) == reduce(w) for 1000 random words
-- [ ] Inverse: reduce(w · invert(w)) == ε for 1000 random words
-- [ ] Identity insertion: inserting a relator at any position doesn't change result
-- [ ] Growth rate: count distinct elements by word length (compare to Python output)
-- [ ] Test for n=5, n=6, n=7 (at minimum)
-- [ ] Benchmark: reduction of 10K random words, completion time for various max_length
+- [x] Defining relations: Aa=ε, aA=ε, B⁴=ε, (AB)^n=ε, (BA)^n=ε, (AB)^{2n}=ε
+- [x] Idempotency: reduce(reduce(w)) == reduce(w) for 1000 random words
+- [x] Inverse: reduce(w · invert(w)) == ε for 1000 random words
+- [x] Identity insertion: inserting a relator at any position doesn't change result
+- [x] Growth rate: count distinct elements by word length (compare to Python output)
+- [x] Test for n=5, n=6, n=7 (at minimum)
+- [x] Benchmark: reduction of 10K random words, completion time for various max_length
 
 **Performance notes**:
 - Completion runs once at startup (~100ms for max_length=40 in Python; Rust
@@ -406,4 +406,14 @@ Always check out `knuth` before starting a session on this workstream.
 
 ## Session Notes
 
-_(To be filled in by each agent session that works on this refactor.)_
+### Session 1
+
+**Accomplished**: Phase 1 complete — ported Knuth-Bendix rewriting system from Python to Rust.
+- `src/hyperbolic/knuth_bendix.rs`: all core algorithms (word_lt_shortlex, invert_word, RewriteSystem with KB completion, reduce, interreduce)
+- 20 tests: defining relations, idempotency (1000 random × 3 orders), inverse (1000 random × 3 orders), identity insertion (1000 random × 3 orders), growth rates, bulk reduction (10K words)
+- Rule counts match Python exactly: n=5→8, n=6→5, n=7→8
+- Growth rates match Python exactly through word length 7
+
+**Next**: Phase 2 — Canonical Cell Identity (`cell_id.rs`): CellId, OrientedCell, canonicalize, neighbor computation, BFS expansion.
+
+**Notes**: No tricky issues. The port was straightforward. Dead-code warnings on the module are expected since nothing in the game loop uses it yet.

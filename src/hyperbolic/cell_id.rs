@@ -146,7 +146,7 @@ mod tests {
     use std::collections::HashSet;
 
     fn rules() -> Vec<RewriteRule> {
-        rewrite::rules_45()
+        rewrite::load_rules(5)
     }
 
     // --- Basic canonicalization ---

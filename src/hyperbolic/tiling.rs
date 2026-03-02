@@ -84,7 +84,7 @@ pub struct TilingState {
     frontier: VecDeque<usize>,
     /// `[0]` = transforms for even-parity tiles, `[1]` = for odd-parity tiles.
     pub neighbor_xforms: [Vec<Mobius>; 2],
-    /// Cached confluent rewrite rules for {4,5}.
+    /// Cached confluent rewrite rules for {4,q}.
     rules: Vec<RewriteRule>,
     /// View offset: maps absolute (word_to_mobius) coordinates to view-relative coordinates.
     /// Recomputed on each recenter to avoid holonomy accumulation.
@@ -94,9 +94,8 @@ pub struct TilingState {
 impl TilingState {
     pub fn new(cfg: TilingConfig) -> Self {
         assert_eq!(cfg.p, 4, "CellId tiling only supports {{4,q}} (got p={})", cfg.p);
-        assert_eq!(cfg.q, 5, "CellId tiling only supports {{4,5}} (got q={})", cfg.q);
 
-        let rules = rewrite::rules_45();
+        let rules = rewrite::load_rules(cfg.q);
         let origin_id = CellId::origin();
         let origin_neighbors = compute_neighbors(&origin_id, 0, &rules);
         let origin = Tile {
@@ -414,7 +413,7 @@ mod tests {
     #[test]
     fn test_format_cell_id() {
         assert_eq!(format_cell_id(&CellId::origin()), "O");
-        let r = rewrite::rules_45();
+        let r = rewrite::load_rules(5);
         let word = rewrite::string_to_word("a");
         let oc = cell_id::canonicalize(&word, &r);
         assert!(!format_cell_id(&oc.id).is_empty());

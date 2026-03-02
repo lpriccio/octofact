@@ -1,8 +1,8 @@
-//! Knuth-Bendix confluent rewrite engine for {4,5} hyperbolic tiling.
+//! Knuth-Bendix confluent rewrite engine for {4,q} hyperbolic tilings.
 //!
 //! Alphabet: a (move forward & flip), B (turn left), b (turn right).
-//! 10 confluent rewrite rules reduce any word to a unique canonical form.
-//! (The 11th rule A→a is handled at parse time by our byte encoding.)
+//! Confluent rewrite rules reduce any word to a unique canonical form.
+//! Rules are loaded from `extern/rewrite-pairs-4-{q}.txt`.
 
 
 /// Byte encoding for the turtle alphabet.
@@ -20,45 +20,58 @@ pub struct RewriteRule {
     pub rhs: Vec<u8>,
 }
 
-/// Return the 11 confluent rewrite rules for {4,5}.
-/// Derived from Knuth-Bendix completion of: a^2 = B^4 = (aB)^5 = e, bB = Bb = e.
-/// Rules are ordered longest-LHS-first for efficient matching.
-pub fn rules_45() -> Vec<RewriteRule> {
-    // Parse from the notation used in extern/rewrite-pairs.txt.
-    // Letters: a, B, b. Uppercase A → a (rule 4).
-    fn parse(s: &str) -> Vec<u8> {
-        s.bytes()
-            .map(|c| match c {
-                b'a' | b'A' => A,
-                b'B' => B,
-                b'b' => B_INV,
-                _ => panic!("invalid letter: {}", c as char),
-            })
-            .collect()
-    }
-
-    let pairs: &[(&str, &str)] = &[
-        // Sorted longest-LHS-first so we try longer matches before shorter ones.
-        // Rule 4 (A→a) is omitted: our byte encoding already normalizes A to a at parse time.
-        ("aBabbaBabb", "bababbabaB"),
-        ("ababbabab", "BaBabbaBa"),
-        ("aBabbaBaB", "bababbaba"),
-        ("aBaBa", "babab"),
-        ("ababa", "BaBaB"),
-        ("bbb", "B"),
-        ("BB", "bb"),
-        ("bB", ""),
-        ("Bb", ""),
-        ("aa", ""),
-    ];
-
-    pairs
-        .iter()
-        .map(|(l, r)| RewriteRule {
-            lhs: parse(l),
-            rhs: parse(r),
+/// Parse a letter string (a, A, B, b) into our byte encoding.
+fn parse_letters(s: &str) -> Vec<u8> {
+    s.bytes()
+        .map(|c| match c {
+            b'a' | b'A' => A,
+            b'B' => B,
+            b'b' => B_INV,
+            _ => panic!("invalid letter: {}", c as char),
         })
         .collect()
+}
+
+/// Load confluent rewrite rules for {4,q} from `extern/rewrite-pairs-4-{q}.txt`.
+///
+/// File format (Python repr): `[('lhs', 'rhs'), ...]`
+/// Rules are sorted longest-LHS-first for efficient matching.
+/// The rule A→a is omitted (handled by our byte encoding).
+pub fn load_rules(q: u32) -> Vec<RewriteRule> {
+    let path = format!("extern/rewrite-pairs-4-{q}.txt");
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("failed to read {path}: {e}"));
+
+    // Parse Python repr: [('lhs', 'rhs'), ('lhs', 'rhs'), ...]
+    // Extract pairs by finding ('...', '...') patterns.
+    let mut rules: Vec<RewriteRule> = Vec::new();
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '(' {
+            // Expect 'lhs'
+            assert_eq!(chars.next(), Some('\''), "expected quote in {path}");
+            let lhs: String = chars.by_ref().take_while(|&c| c != '\'').collect();
+            // Skip ", '"
+            chars.by_ref().take_while(|&c| c != '\'').for_each(drop);
+            let rhs: String = chars.by_ref().take_while(|&c| c != '\'').collect();
+            // Skip to closing ')'
+            chars.by_ref().take_while(|&c| c != ')').for_each(drop);
+
+            // Skip A→a rule (handled at parse time)
+            if lhs == "A" {
+                continue;
+            }
+
+            rules.push(RewriteRule {
+                lhs: parse_letters(&lhs),
+                rhs: parse_letters(&rhs),
+            });
+        }
+    }
+
+    // Sort longest-LHS-first for greedy matching.
+    rules.sort_by(|a, b| b.lhs.len().cmp(&a.lhs.len()));
+    rules
 }
 
 /// Reduce a word by repeatedly applying rewrite rules until no rule matches.
@@ -171,7 +184,7 @@ mod tests {
     use std::cmp::Ordering;
 
     fn r() -> Vec<RewriteRule> {
-        rules_45()
+        load_rules(5)
     }
 
     // --- Individual rule tests ---

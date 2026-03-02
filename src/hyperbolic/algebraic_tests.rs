@@ -15,7 +15,7 @@ mod tests {
     use crate::hyperbolic::tiling::TilingState;
 
     fn rules() -> Vec<RewriteRule> {
-        rewrite::rules_45()
+        rewrite::load_rules(5)
     }
 
     fn cfg45() -> TilingConfig {

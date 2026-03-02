@@ -32,7 +32,7 @@ pub struct CellData {
 pub struct CellGraph {
     /// All loaded cells, keyed by canonical CellId.
     pub cells: HashMap<CellId, CellData>,
-    /// Cached rewrite rules for {4,5}.
+    /// Cached rewrite rules for {4,q}.
     rules: Vec<RewriteRule>,
     /// Neighbor transforms for even/odd parity tiles.
     neighbor_xforms: [Vec<Mobius>; 2],
@@ -42,12 +42,10 @@ pub struct CellGraph {
 
 impl CellGraph {
     /// Create a new CellGraph for the given tiling configuration.
-    /// Currently only supports {4,5}.
     pub fn new(cfg: &TilingConfig) -> Self {
         assert_eq!(cfg.p, 4, "CellGraph only supports {{4,q}} tilings");
-        assert_eq!(cfg.q, 5, "CellGraph only supports {{4,5}}");
 
-        let rules = rewrite::rules_45();
+        let rules = rewrite::load_rules(cfg.q);
         let neighbor_xforms = neighbor_transforms(cfg);
         let origin = CellId::origin();
 
@@ -411,7 +409,7 @@ mod tests {
         // Verify incremental BFS Mobius matches word_to_mobius for all cells.
         let cfg = cfg45();
         let xforms = neighbor_transforms(&cfg);
-        let rules = rewrite::rules_45();
+        let rules = rewrite::load_rules(5);
 
         // Manual BFS with incremental Mobius computation.
         let origin = CellId::origin();

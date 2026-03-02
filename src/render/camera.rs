@@ -261,6 +261,42 @@ impl CameraSnapshot {
         }
     }
 
+    pub fn unproject_to_disk(&self, sx: f64, sy: f64, width: f32, height: f32) -> Option<Complex> {
+        let aspect = width / height;
+        let view_proj = self.build_view_proj(aspect);
+        let inv_vp = view_proj.inverse();
+
+        let ndc_x = 2.0 * (sx as f32 / width) - 1.0;
+        let ndc_y = 1.0 - 2.0 * (sy as f32 / height);
+
+        let near = inv_vp * glam::Vec4::new(ndc_x, ndc_y, -1.0, 1.0);
+        let far = inv_vp * glam::Vec4::new(ndc_x, ndc_y, 1.0, 1.0);
+        let near = glam::Vec3::new(near.x / near.w, near.y / near.w, near.z / near.w);
+        let far = glam::Vec3::new(far.x / far.w, far.y / far.w, far.z / far.w);
+
+        let dir = far - near;
+        if dir.y.abs() < 1e-8 {
+            return None;
+        }
+
+        let mut target_y = 0.0_f32;
+        for _ in 0..5 {
+            let t = (target_y - near.y) / dir.y;
+            if t < 0.0 {
+                return None;
+            }
+            let hit = near + dir * t;
+            let r2 = hit.x * hit.x + hit.z * hit.z;
+            target_y = 0.4 * r2 / (1.0 + r2);
+        }
+        let t = (target_y - near.y) / dir.y;
+        if t < 0.0 {
+            return None;
+        }
+        let hit = near + dir * t;
+        Some(Complex::new(hit.x as f64, hit.z as f64))
+    }
+
     /// Linearly interpolate between two snapshots for smooth rendering.
     /// Uses `self` as the "previous" state and `next` as the "current" state.
     pub fn lerp(&self, next: &CameraSnapshot, alpha: f64) -> CameraSnapshot {

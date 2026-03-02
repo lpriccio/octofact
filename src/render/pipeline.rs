@@ -508,6 +508,206 @@ impl ItemPipeline {
     }
 }
 
+/// Ghost preview pipeline: translucent placement preview.
+/// Uses the same Globals uniform bind group as TilePipeline.
+/// Alpha-blended, reads depth but doesn't write.
+pub struct GhostPipeline {
+    pub pipeline: wgpu::RenderPipeline,
+    pub vertex_buffer: wgpu::Buffer,
+    pub index_buffer: wgpu::Buffer,
+    pub num_indices: u32,
+}
+
+impl GhostPipeline {
+    pub fn new(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        globals_layout: &wgpu::BindGroupLayout,
+    ) -> Self {
+        use wgpu::util::DeviceExt;
+
+        let common_src = include_str!("common.wgsl");
+        let ghost_src = include_str!("ghost.wgsl");
+        let full_src = format!("{}\n{}", common_src, ghost_src);
+
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("ghost instanced shader"),
+            source: wgpu::ShaderSource::Wgsl(full_src.into()),
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("ghost pipeline layout"),
+            bind_group_layouts: &[globals_layout],
+            push_constant_ranges: &[],
+        });
+
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("ghost instanced pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_ghost"),
+                buffers: &[QuadVertex::desc(), MachineInstance::desc()],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_ghost"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview: None,
+            cache: None,
+        });
+
+        // Reuse the subdivided box mesh (same as MachinePipeline)
+        let (quad_verts, quad_indices) = crate::render::mesh::build_subdivided_box_mesh(8);
+
+        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("ghost vertex buffer"),
+            contents: bytemuck::cast_slice(&quad_verts),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("ghost index buffer"),
+            contents: bytemuck::cast_slice(&quad_indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+
+        Self {
+            pipeline,
+            vertex_buffer,
+            index_buffer,
+            num_indices: quad_indices.len() as u32,
+        }
+    }
+}
+
+/// Ghost topper pipeline: translucent ray-marched 3D shapes for placement preview.
+/// Alpha-blended, reads depth but doesn't write.
+pub struct GhostTopperPipeline {
+    pub pipeline: wgpu::RenderPipeline,
+    pub vertex_buffer: wgpu::Buffer,
+    pub index_buffer: wgpu::Buffer,
+    pub num_indices: u32,
+}
+
+impl GhostTopperPipeline {
+    pub fn new(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        globals_layout: &wgpu::BindGroupLayout,
+    ) -> Self {
+        use wgpu::util::DeviceExt;
+
+        let common_src = include_str!("common.wgsl");
+        let ghost_topper_src = include_str!("ghost_topper.wgsl");
+        let full_src = format!("{}\n{}", common_src, ghost_topper_src);
+
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("ghost topper shader"),
+            source: wgpu::ShaderSource::Wgsl(full_src.into()),
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("ghost topper pipeline layout"),
+            bind_group_layouts: &[globals_layout],
+            push_constant_ranges: &[],
+        });
+
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("ghost topper pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_ghost_topper"),
+                buffers: &[TopperVertex::desc(), MachineInstance::desc()],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_ghost_topper"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: Some(wgpu::Face::Back),
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview: None,
+            cache: None,
+        });
+
+        let (cube_verts, cube_indices) = crate::render::mesh::build_topper_mesh(4);
+
+        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("ghost topper vertex buffer"),
+            contents: bytemuck::cast_slice(&cube_verts),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("ghost topper index buffer"),
+            contents: bytemuck::cast_slice(&cube_indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+
+        Self {
+            pipeline,
+            vertex_buffer,
+            index_buffer,
+            num_indices: cube_indices.len() as u32,
+        }
+    }
+}
+
 /// Instanced topper pipeline: ray-marched 3D shapes above machine bases.
 /// Uses the same Globals uniform bind group as TilePipeline.
 pub struct TopperPipeline {

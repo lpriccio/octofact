@@ -4,7 +4,7 @@ use winit::window::Window;
 use crate::hyperbolic::poincare::{Complex, Mobius};
 use crate::hyperbolic::tiling::TilingState;
 use crate::render::instances::{BeltInstance, InstanceBuffer, ItemInstance, MachineInstance, TileInstance};
-use crate::render::pipeline::{BeltPipeline, Globals, ItemPipeline, MachinePipeline, RenderState, TilePipeline, TopperPipeline, MAX_TILES};
+use crate::render::pipeline::{BeltPipeline, GhostPipeline, GhostTopperPipeline, Globals, ItemPipeline, MachinePipeline, RenderState, TilePipeline, TopperPipeline, MAX_TILES};
 use crate::ui::icons::IconAtlas;
 use crate::ui::integration::EguiIntegration;
 use crate::ui::style::apply_octofact_style;
@@ -99,6 +99,9 @@ pub struct RenderEngine {
     pub item_instances: InstanceBuffer<ItemInstance>,
     pub topper_pipeline: TopperPipeline,
     pub topper_instances: InstanceBuffer<MachineInstance>,
+    pub ghost_pipeline: GhostPipeline,
+    pub ghost_topper_pipeline: GhostTopperPipeline,
+    pub ghost_instances: InstanceBuffer<MachineInstance>,
     pub tiling: TilingState,
     pub extra_elevation: std::collections::HashMap<usize, f32>,
     pub egui: EguiIntegration,
@@ -141,6 +144,10 @@ impl RenderEngine {
         let topper_pipeline = TopperPipeline::new(&gpu.device, gpu.config.format, &globals_layout);
         let topper_instances = InstanceBuffer::new(&gpu.device, "topper instances", 64);
 
+        let ghost_pipeline = GhostPipeline::new(&gpu.device, gpu.config.format, &globals_layout);
+        let ghost_topper_pipeline = GhostTopperPipeline::new(&gpu.device, gpu.config.format, &globals_layout);
+        let ghost_instances = InstanceBuffer::new(&gpu.device, "ghost instances", 2);
+
         let egui = EguiIntegration::new(&gpu.device, gpu.config.format, window);
         apply_octofact_style(&egui.ctx);
         let icon_atlas = IconAtlas::generate(&egui.ctx);
@@ -158,6 +165,9 @@ impl RenderEngine {
             item_instances,
             topper_pipeline,
             topper_instances,
+            ghost_pipeline,
+            ghost_topper_pipeline,
+            ghost_instances,
             tiling,
             extra_elevation: std::collections::HashMap::new(),
             egui,
@@ -353,6 +363,32 @@ impl RenderEngine {
                     wgpu::IndexFormat::Uint16,
                 );
                 pass.draw_indexed(0..self.item_pipeline.num_indices, 0, 0..item_count);
+            }
+
+            // Draw ghost preview (translucent, after all opaque objects)
+            let ghost_count = self.ghost_instances.count();
+            if ghost_count > 0 {
+                // Ghost base (machine box)
+                pass.set_pipeline(&self.ghost_pipeline.pipeline);
+                pass.set_bind_group(0, &self.tile_pipeline.globals_bind_group, &[]);
+                pass.set_vertex_buffer(0, self.ghost_pipeline.vertex_buffer.slice(..));
+                pass.set_vertex_buffer(1, self.ghost_instances.slice());
+                pass.set_index_buffer(
+                    self.ghost_pipeline.index_buffer.slice(..),
+                    wgpu::IndexFormat::Uint16,
+                );
+                pass.draw_indexed(0..self.ghost_pipeline.num_indices, 0, 0..ghost_count);
+
+                // Ghost topper (ray-marched 3D shape)
+                pass.set_pipeline(&self.ghost_topper_pipeline.pipeline);
+                pass.set_bind_group(0, &self.tile_pipeline.globals_bind_group, &[]);
+                pass.set_vertex_buffer(0, self.ghost_topper_pipeline.vertex_buffer.slice(..));
+                pass.set_vertex_buffer(1, self.ghost_instances.slice());
+                pass.set_index_buffer(
+                    self.ghost_topper_pipeline.index_buffer.slice(..),
+                    wgpu::IndexFormat::Uint16,
+                );
+                pass.draw_indexed(0..self.ghost_topper_pipeline.num_indices, 0, 0..ghost_count);
             }
         }
 

@@ -1351,6 +1351,78 @@ impl App {
         }
         re.item_instances.upload(&re.gpu.device, &re.gpu.queue);
 
+        // Build ghost preview instance (0 or 1) for placement mode
+        re.ghost_instances.clear();
+        if let (Some(mode), Some(cursor)) = (&self.ui.placement_mode, self.ui.cursor_pos) {
+            let width = re.gpu.config.width as f32;
+            let height = re.gpu.config.height as f32;
+            let khs = self.klein_half_side;
+            if let Some(click_disk) = render_camera.unproject_to_disk(cursor.x, cursor.y, width, height) {
+                // Find containing tile (inline find_clicked_tile logic using render_camera)
+                let mut best_tile: Option<(usize, f64, f64)> = None;
+                let mut best_max_norm = f64::MAX;
+                for &(i, combined) in &visible {
+                    let inv_combined = combined.inverse();
+                    let local_p = inv_combined.apply(click_disk);
+                    let r2 = local_p.re * local_p.re + local_p.im * local_p.im;
+                    let local_kx = 2.0 * local_p.re / (1.0 + r2);
+                    let local_ky = 2.0 * local_p.im / (1.0 + r2);
+                    let norm_x = local_kx / (2.0 * khs);
+                    let norm_y = local_ky / (2.0 * khs);
+                    let max_norm = norm_x.abs().max(norm_y.abs());
+                    if max_norm < best_max_norm {
+                        best_max_norm = max_norm;
+                        best_tile = Some((i, norm_x, norm_y));
+                    }
+                }
+                if let Some((tile_vis_idx, norm_x, norm_y)) = best_tile {
+                    let divisions = 64.0_f64;
+                    let gx = (norm_x * divisions).round() as i32;
+                    let gy = (norm_y * divisions).round() as i32;
+                    let gx = gx.clamp(-32, 32);
+                    let gy = gy.clamp(-32, 32);
+
+                    // Find the combined Mobius for this tile from visible list
+                    let combined = visible.iter()
+                        .find(|&&(idx, _)| idx == tile_vis_idx)
+                        .map(|&(_, m)| m)
+                        .unwrap();
+
+                    // Map item to machine_type float
+                    let machine_type_float = match StructureKind::from_item(mode.item) {
+                        Some(StructureKind::Belt) => 10.0,
+                        Some(StructureKind::Machine(mt)) => {
+                            use crate::game::items::MachineType;
+                            match mt {
+                                MachineType::Composer => 0.0,
+                                MachineType::Inverter => 1.0,
+                                MachineType::Embedder => 2.0,
+                                MachineType::Quotient => 3.0,
+                                MachineType::Transformer => 4.0,
+                                MachineType::Source => 5.0,
+                            }
+                        }
+                        Some(StructureKind::PowerNode) => 6.0,
+                        Some(StructureKind::PowerSource) => 7.0,
+                        Some(StructureKind::Splitter) => 8.0,
+                        Some(StructureKind::Storage) => 9.0,
+                        None => 10.0, // fallback
+                    };
+
+                    re.ghost_instances.push(MachineInstance {
+                        mobius_a: [combined.a.re as f32, combined.a.im as f32],
+                        mobius_b: [combined.b.re as f32, combined.b.im as f32],
+                        grid_pos: [gx as f32, gy as f32],
+                        machine_type: machine_type_float,
+                        progress: -1.0,
+                        power_sat: -1.0,
+                        facing: mode.direction.rotations_from_north() as f32,
+                    });
+                }
+            }
+        }
+        re.ghost_instances.upload(&re.gpu.device, &re.gpu.queue);
+
         let window = re.gpu.window.clone();
         let width = re.width();
         let height = re.height();

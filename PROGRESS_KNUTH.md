@@ -1,7 +1,7 @@
 # Knuth-Bendix Cell Identity Refactor
 
 **Branch**: `knuth`
-**Status**: Phase 4 — Phases 1, 2 & 3 complete
+**Status**: Phase 5 — Phases 1, 2, 3 & 4 complete
 **Goal**: Replace floating-point spatial dedup with exact algebraic cell identity using confluent rewrite rules, enabling reliable exploration far from origin.
 
 ---
@@ -210,29 +210,29 @@ Verify early: `(aB)^5` and `aa` must compose to Mobius identity. BFS cells must 
 
 ## Phase 4: Comprehensive Algebraic Tests
 
-**Status**: NOT STARTED
+**Status**: DONE (12 tests passing)
 **Depends on**: Phase 3
 
 **STOP HERE before touching the rendering/game layer.** This phase ensures the algebraic system is rock-solid.
 
 ### Test Suite
 
-- [ ] **Long walk test**: Walk 100 steps in one direction, then 100 steps back. Final CellId = origin.
-- [ ] **Random walk test**: Random sequence of 1000 turtle moves, verify:
+- [x] **Long walk test**: Walk 100 steps in one direction, then 100 steps back. Final CellId = origin.
+- [x] **Random walk test**: Random sequence of 1000 turtle moves, verify:
   - Every intermediate CellId is valid (reduces to itself)
   - All neighbors exist and are consistent
   - No panics or infinite loops in reduction
-- [ ] **Cross-validation**: Expand BFS to depth 5 with BOTH old spatial system and new algebraic system. Verify 1:1 correspondence of cells. Every spatial position maps to exactly one CellId and vice versa.
-- [ ] **Orientation consistency**: For every cell, verify that all 4 orientations produce the same CellId.
-- [ ] **Neighbor symmetry**: If A is neighbor of B across edge j, then B is neighbor of A across some edge k. Verify for all cells in BFS depth 4.
-- [ ] **Growth rate**: {4,5} exponential growth. Verified so far: depth 0→3 = 1, 5, 17, 45. Continue to depth 5+.
+- [x] **Cross-validation**: Expand BFS to depth 5 with BOTH old spatial system and new algebraic system. Verify 1:1 correspondence of cells. Every spatial position maps to exactly one CellId and vice versa.
+- [x] **Orientation consistency**: For every cell, verify that all 4 orientations produce the same CellId.
+- [x] **Neighbor symmetry**: If A is neighbor of B across edge j, then B is neighbor of A across some edge k. Verify for all cells in BFS depth 4.
+- [x] **Growth rate**: {4,5} exponential growth. Verified so far: depth 0→3 = 1, 5, 17, 45. Continue to depth 5+.
 
 ### Benchmark
 
-- [ ] Time `reduce()` for words of length 10, 50, 100, 500
-- [ ] Time `canonicalize()` for same lengths
-- [ ] Time BFS expansion to depth 5, 8, 10
-- [ ] Ensure reduction of typical words (length < 50) takes < 1ms
+- [x] Time `reduce()` for words of length 10, 50, 100, 500
+- [x] Time `canonicalize()` for same lengths
+- [x] Time BFS expansion to depth 5, 8, 10
+- [x] Ensure reduction of typical words (length < 50) takes < 1ms
 
 ---
 
@@ -413,4 +413,20 @@ module-level #![allow(dead_code)] for Knuth modules (not used from
 binary until Phase 5).
 Removed stale `pub mod knuth_bendix` from mod.rs (old approach).
 Next: Phase 4 (comprehensive algebraic tests).
+```
+
+```
+[2026-03-02] [Phase 4] [DONE]
+Created algebraic_tests.rs with 12 comprehensive tests:
+- Long walk: 100 steps forward + 100 back = origin (all 4 directions)
+- Random walk: 1000 steps with canonical/neighbor consistency checks
+- Random walk retrace: 500-step walk + retrace = origin
+- Cross-validation: algebraic CellGraph vs spatial TilingState at depth 5 (1:1 match)
+- Orientation consistency: all 4 orientations produce same CellId (depth 4)
+- Neighbor symmetry: back-edge verification for all cells (depth 4)
+- Growth rate: verified 1, 5, 17, 45 and non-decreasing growth to depth 7
+- Benchmarks: reduce/canonicalize timing at lengths 10-500, BFS at depths 5/8/10
+- All 100 typical words (length 40) reduce in < 1ms
+Total test suite: 322 tests passing.
+Next: Phase 5 (TilingState refactor to use CellId).
 ```

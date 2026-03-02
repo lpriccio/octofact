@@ -125,9 +125,9 @@
 
 > Persist world state across sessions.
 
-- [ ] Create `game/save.rs`
-- [ ] Define save format: world state + sim state + inventory + camera position
-- [ ] Serialize with `bincode` or `rmp-serde`
-- [ ] Auto-save on exit, manual save via UI
-- [ ] Load on startup if save file exists
-- [ ] Version the save format for forward compatibility
+- [x] Create `game/save.rs`
+- [x] Define save format: world state + sim state + inventory + camera position
+- [x] Serialize with `bincode` or `rmp-serde`
+- [x] Auto-save on exit, manual save via UI
+- [x] Load on startup if save file exists
+- [x] Version the save format for forward compatibility

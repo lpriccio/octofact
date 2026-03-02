@@ -6,6 +6,8 @@ struct Globals {
     grid_params: vec4<f32>,  // (enabled, divisions, line_width, klein_half_side)
     color_cycle: f32,
     time: f32,               // elapsed seconds since startup
+    _pad: vec2<f32>,
+    camera_world: vec4<f32>, // .xyz = camera eye position in bowl space
 };
 
 @group(0) @binding(0)

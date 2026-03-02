@@ -1197,7 +1197,7 @@ impl App {
         // Visibility culling + instanced tile rendering setup
         let visible = re.visible_tiles(&inv_view);
         let time = self.game_loop.elapsed_secs();
-        re.build_tile_instances(&visible, &view_proj, self.grid_enabled, self.klein_half_side as f32, time);
+        re.build_tile_instances(&visible, &view_proj, self.grid_enabled, self.klein_half_side as f32, time, render_camera.height);
 
         // Build belt instances from visible tiles + world state
         re.belt_instances.clear();
@@ -1234,6 +1234,7 @@ impl App {
         // Build machine instances from visible tiles + world state
         // Only emit one instance per entity (at its origin cell).
         re.machine_instances.clear();
+        re.topper_instances.clear();
         for &(tile_idx, combined) in &visible {
             let tile = &re.tiling.tiles[tile_idx];
             let entities = match self.world.tile_entities(tile.id.word()) {
@@ -1290,7 +1291,7 @@ impl App {
                 let facing = self.world.direction(entity).unwrap_or(Direction::North);
                 let facing_float = facing.rotations_from_north() as f32;
 
-                re.machine_instances.push(MachineInstance {
+                let inst = MachineInstance {
                     mobius_a: [combined.a.re as f32, combined.a.im as f32],
                     mobius_b: [combined.b.re as f32, combined.b.im as f32],
                     grid_pos: [gx as f32, gy as f32],
@@ -1298,10 +1299,13 @@ impl App {
                     progress,
                     power_sat,
                     facing: facing_float,
-                });
+                };
+                re.machine_instances.push(inst);
+                re.topper_instances.push(inst);
             }
         }
         re.machine_instances.upload(&re.gpu.device, &re.gpu.queue);
+        re.topper_instances.upload(&re.gpu.device, &re.gpu.queue);
 
         // Build item instances from items riding on visible belts
         re.item_instances.clear();

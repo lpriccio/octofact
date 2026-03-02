@@ -1,15 +1,16 @@
 use super::instances::{BeltInstance, ItemInstance, MachineInstance, TileInstance};
-use super::mesh::{QuadVertex, Vertex};
+use super::mesh::{QuadVertex, TopperVertex, Vertex};
 
 /// Global uniforms shared across all instanced draw calls.
 /// Per-tile data (Mobius, depth, elevation) lives in instance buffers.
 ///
-/// WGSL layout (96 bytes):
+/// WGSL layout (112 bytes):
 ///   view_proj: mat4x4<f32>  (64)
 ///   grid_params: vec4<f32>  (16) — enabled, divisions, line_width, klein_half_side
 ///   color_cycle: f32        (4)
 ///   time: f32               (4)  — elapsed seconds since startup (for animation)
 ///   _pad: 8 bytes           (align to 16)
+///   camera_world: vec4<f32> (16) — .xyz = camera eye position in bowl space
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Globals {
@@ -18,6 +19,7 @@ pub struct Globals {
     pub color_cycle: f32,
     pub time: f32,
     pub _pad: [f32; 2],
+    pub camera_world: [f32; 4],
 }
 
 /// Max tiles we can draw per frame.
@@ -502,6 +504,105 @@ impl ItemPipeline {
             vertex_buffer,
             index_buffer,
             num_indices: quad_indices.len() as u32,
+        }
+    }
+}
+
+/// Instanced topper pipeline: ray-marched 3D shapes above machine bases.
+/// Uses the same Globals uniform bind group as TilePipeline.
+pub struct TopperPipeline {
+    pub pipeline: wgpu::RenderPipeline,
+    pub vertex_buffer: wgpu::Buffer,
+    pub index_buffer: wgpu::Buffer,
+    pub num_indices: u32,
+}
+
+impl TopperPipeline {
+    pub fn new(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        globals_layout: &wgpu::BindGroupLayout,
+    ) -> Self {
+        use wgpu::util::DeviceExt;
+
+        let common_src = include_str!("common.wgsl");
+        let topper_src = include_str!("topper.wgsl");
+        let full_src = format!("{}\n{}", common_src, topper_src);
+
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("topper instanced shader"),
+            source: wgpu::ShaderSource::Wgsl(full_src.into()),
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("topper pipeline layout"),
+            bind_group_layouts: &[globals_layout],
+            push_constant_ranges: &[],
+        });
+
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("topper instanced pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_topper"),
+                buffers: &[TopperVertex::desc(), MachineInstance::desc()],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_topper"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: Some(wgpu::Face::Back),
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview: None,
+            cache: None,
+        });
+
+        let (cube_verts, cube_indices) = crate::render::mesh::build_topper_mesh(4);
+
+        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("topper vertex buffer"),
+            contents: bytemuck::cast_slice(&cube_verts),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("topper index buffer"),
+            contents: bytemuck::cast_slice(&cube_indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+
+        Self {
+            pipeline,
+            vertex_buffer,
+            index_buffer,
+            num_indices: cube_indices.len() as u32,
         }
     }
 }

@@ -4,7 +4,7 @@ use winit::window::Window;
 use crate::hyperbolic::poincare::{Complex, Mobius};
 use crate::hyperbolic::tiling::TilingState;
 use crate::render::instances::{BeltInstance, InstanceBuffer, ItemInstance, MachineInstance, TileInstance};
-use crate::render::pipeline::{BeltPipeline, Globals, ItemPipeline, MachinePipeline, RenderState, TilePipeline, MAX_TILES};
+use crate::render::pipeline::{BeltPipeline, Globals, ItemPipeline, MachinePipeline, RenderState, TilePipeline, TopperPipeline, MAX_TILES};
 use crate::ui::icons::IconAtlas;
 use crate::ui::integration::EguiIntegration;
 use crate::ui::style::apply_octofact_style;
@@ -97,6 +97,8 @@ pub struct RenderEngine {
     pub machine_instances: InstanceBuffer<MachineInstance>,
     pub item_pipeline: ItemPipeline,
     pub item_instances: InstanceBuffer<ItemInstance>,
+    pub topper_pipeline: TopperPipeline,
+    pub topper_instances: InstanceBuffer<MachineInstance>,
     pub tiling: TilingState,
     pub extra_elevation: std::collections::HashMap<usize, f32>,
     pub egui: EguiIntegration,
@@ -136,6 +138,9 @@ impl RenderEngine {
         let item_pipeline = ItemPipeline::new(&gpu.device, gpu.config.format, &globals_layout);
         let item_instances = InstanceBuffer::new(&gpu.device, "item instances", 256);
 
+        let topper_pipeline = TopperPipeline::new(&gpu.device, gpu.config.format, &globals_layout);
+        let topper_instances = InstanceBuffer::new(&gpu.device, "topper instances", 64);
+
         let egui = EguiIntegration::new(&gpu.device, gpu.config.format, window);
         apply_octofact_style(&egui.ctx);
         let icon_atlas = IconAtlas::generate(&egui.ctx);
@@ -151,6 +156,8 @@ impl RenderEngine {
             machine_instances,
             item_pipeline,
             item_instances,
+            topper_pipeline,
+            topper_instances,
             tiling,
             extra_elevation: std::collections::HashMap::new(),
             egui,
@@ -185,6 +192,7 @@ impl RenderEngine {
         grid_enabled: bool,
         klein_half_side: f32,
         time: f32,
+        camera_height: f32,
     ) {
         // Build instance data
         self.tile_instances.clear();
@@ -212,6 +220,7 @@ impl RenderEngine {
             color_cycle: 13.0,
             time,
             _pad: [0.0; 2],
+            camera_world: [0.0, camera_height, 0.0, 0.0],
         };
         self.tile_pipeline.upload_globals(&self.gpu.queue, &globals);
     }
@@ -316,6 +325,20 @@ impl RenderEngine {
                     wgpu::IndexFormat::Uint16,
                 );
                 pass.draw_indexed(0..self.machine_pipeline.num_indices, 0, 0..machine_count);
+            }
+
+            // Draw toppers above machines (ray-marched 3D shapes)
+            let topper_count = self.topper_instances.count();
+            if topper_count > 0 {
+                pass.set_pipeline(&self.topper_pipeline.pipeline);
+                pass.set_bind_group(0, &self.tile_pipeline.globals_bind_group, &[]);
+                pass.set_vertex_buffer(0, self.topper_pipeline.vertex_buffer.slice(..));
+                pass.set_vertex_buffer(1, self.topper_instances.slice());
+                pass.set_index_buffer(
+                    self.topper_pipeline.index_buffer.slice(..),
+                    wgpu::IndexFormat::Uint16,
+                );
+                pass.draw_indexed(0..self.topper_pipeline.num_indices, 0, 0..topper_count);
             }
 
             // Draw items on belts (instanced)

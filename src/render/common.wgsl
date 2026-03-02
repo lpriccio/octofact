@@ -189,3 +189,80 @@ fn vnoise(p: vec2<f32>) -> f32 {
     let d = hash21(i + vec2<f32>(1.0, 1.0));
     return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
+
+// --- 3D SDF primitives ---
+
+fn sdf3_sphere(p: vec3<f32>, r: f32) -> f32 {
+    return length(p) - r;
+}
+
+fn sdf3_box(p: vec3<f32>, b: vec3<f32>) -> f32 {
+    let q = abs(p) - b;
+    return length(max(q, vec3<f32>(0.0))) + min(max(q.x, max(q.y, q.z)), 0.0);
+}
+
+fn sdf3_round_box(p: vec3<f32>, b: vec3<f32>, r: f32) -> f32 {
+    return sdf3_box(p, b) - r;
+}
+
+fn sdf3_torus(p: vec3<f32>, R: f32, r: f32) -> f32 {
+    let q = vec2<f32>(length(p.xz) - R, p.y);
+    return length(q) - r;
+}
+
+fn sdf3_octahedron(p: vec3<f32>, s: f32) -> f32 {
+    let q = abs(p);
+    return (q.x + q.y + q.z - s) * 0.57735027;
+}
+
+fn sdf3_cylinder(p: vec3<f32>, h: f32, r: f32) -> f32 {
+    let d = vec2<f32>(length(p.xz) - r, abs(p.y) - h);
+    return min(max(d.x, d.y), 0.0) + length(max(d, vec2<f32>(0.0)));
+}
+
+fn sdf3_capsule(p: vec3<f32>, a: vec3<f32>, b: vec3<f32>, r: f32) -> f32 {
+    let pa = p - a;
+    let ba = b - a;
+    let h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+    return length(pa - ba * h) - r;
+}
+
+// Twist around Y axis — returns modified position.
+fn sdf3_twist_y(p: vec3<f32>, k: f32) -> vec3<f32> {
+    let c = cos(k * p.y);
+    let s = sin(k * p.y);
+    let q = vec2<f32>(c * p.x - s * p.z, s * p.x + c * p.z);
+    return vec3<f32>(q.x, p.y, q.y);
+}
+
+// --- 3D rotation matrices ---
+
+fn rot3_x(a: f32) -> mat3x3<f32> {
+    let c = cos(a);
+    let s = sin(a);
+    return mat3x3<f32>(
+        1.0, 0.0, 0.0,
+        0.0, c,   s,
+        0.0, -s,  c
+    );
+}
+
+fn rot3_y(a: f32) -> mat3x3<f32> {
+    let c = cos(a);
+    let s = sin(a);
+    return mat3x3<f32>(
+        c,   0.0, -s,
+        0.0, 1.0, 0.0,
+        s,   0.0, c
+    );
+}
+
+fn rot3_z(a: f32) -> mat3x3<f32> {
+    let c = cos(a);
+    let s = sin(a);
+    return mat3x3<f32>(
+        c,   s,   0.0,
+        -s,  c,   0.0,
+        0.0, 0.0, 1.0
+    );
+}

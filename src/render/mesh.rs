@@ -214,6 +214,80 @@ pub fn build_box_mesh() -> (Vec<QuadVertex>, Vec<u16>) {
     build_subdivided_box_mesh(1)
 }
 
+/// 16-byte 3D cube vertex for topper bounding volumes.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct TopperVertex {
+    pub pos: [f32; 3],
+    pub _pad: f32,
+}
+
+impl TopperVertex {
+    pub fn desc() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<TopperVertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 0,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+            ],
+        }
+    }
+}
+
+/// Build a subdivided cube mesh for topper ray-march bounding volumes.
+/// Each face is an n×n grid. Vertices in [-0.5, 0.5]³.
+pub fn build_topper_mesh(n: u32) -> (Vec<TopperVertex>, Vec<u16>) {
+    let mut verts = Vec::new();
+    let mut indices = Vec::new();
+    let nf = n as f32;
+
+    // 6 faces: (normal_axis, sign, u_axis, v_axis, flip_winding).
+    // flip_winding is true when cross(e_u, e_v) opposes the outward normal.
+    let face_defs: [(usize, f32, usize, usize, bool); 6] = [
+        (1,  0.5, 0, 2, true),   // +Y (top)
+        (1, -0.5, 0, 2, false),  // -Y (bottom)
+        (0,  0.5, 2, 1, true),   // +X (right)
+        (0, -0.5, 2, 1, false),  // -X (left)
+        (2,  0.5, 0, 1, false),  // +Z (front)
+        (2, -0.5, 0, 1, true),   // -Z (back)
+    ];
+
+    for &(normal_axis, sign, u_axis, v_axis, flip) in &face_defs {
+        let base = verts.len() as u16;
+        for j in 0..=n {
+            for i in 0..=n {
+                let u = -0.5 + (i as f32 / nf);
+                let v = -0.5 + (j as f32 / nf);
+                let mut pos = [0.0_f32; 3];
+                pos[normal_axis] = sign;
+                pos[u_axis] = u;
+                pos[v_axis] = v;
+                verts.push(TopperVertex { pos, _pad: 0.0 });
+            }
+        }
+        let stride = (n + 1) as u16;
+        for j in 0..n {
+            for i in 0..n {
+                let tl = base + j as u16 * stride + i as u16;
+                let tr = tl + 1;
+                let bl = tl + stride;
+                let br = bl + 1;
+                if flip {
+                    indices.extend_from_slice(&[tl, bl, br, tl, br, tr]);
+                } else {
+                    indices.extend_from_slice(&[tl, tr, br, tl, br, bl]);
+                }
+            }
+        }
+    }
+
+    (verts, indices)
+}
+
 /// Build a subdivided box mesh for multi-cell machines.
 /// The top face is an `n × n` grid so intermediate vertices get properly
 /// transformed through Klein → Poincaré → Möbius → bowl in the shader,

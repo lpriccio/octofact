@@ -6,6 +6,7 @@ use winit::{
     window::{Window, WindowId},
 };
 
+use crate::game::blueprint::{self, Clipboard};
 use crate::game::config::GameConfig;
 use crate::game::input::{GameAction, InputState};
 use crate::game::inventory::Inventory;
@@ -29,6 +30,20 @@ struct ClickResult {
 }
 
 
+
+/// State for an active box selection (blueprint mode).
+pub(crate) struct SelectionState {
+    /// Index into the visible tile array where the selection lives.
+    tile_idx: usize,
+    /// Tile address for the selection.
+    id: CellId,
+    /// Grid coordinate where the mouse went down.
+    start: (i32, i32),
+    /// Current grid coordinate (tracks mouse during drag).
+    current: (i32, i32),
+    /// True after mouse-up finalizes the selection.
+    finalized: bool,
+}
 
 /// State for dragging belts along a gridline.
 struct BeltDrag {
@@ -64,6 +79,10 @@ pub struct UiState {
     pub storage_panel_entity: Option<EntityId>,
     /// Deferred save/load action from UI (processed after UI rendering).
     pub save_action: Option<crate::ui::settings::SettingsAction>,
+    /// Whether blueprint box-select mode is active (B key toggle).
+    pub blueprint_select: bool,
+    /// Active box selection state.
+    pub selection: Option<SelectionState>,
 }
 
 impl UiState {
@@ -83,6 +102,8 @@ impl UiState {
             splitter_panel_entity: None,
             storage_panel_entity: None,
             save_action: None,
+            blueprint_select: false,
+            selection: None,
         }
     }
 
@@ -109,6 +130,7 @@ pub struct App {
     ui: UiState,
     grid_enabled: bool,
     klein_half_side: f64,
+    clipboard: Option<Clipboard>,
 }
 
 impl App {
@@ -131,6 +153,7 @@ impl App {
             storage_pool: crate::sim::storage::StoragePool::new(),
             power_network: crate::sim::power::PowerNetwork::new(),
             ui: UiState::new(),
+            clipboard: None,
             grid_enabled: false,
             klein_half_side: {
                 // For {4,n} squares: Klein half-side = r_klein / sqrt(2)
@@ -967,35 +990,17 @@ impl App {
         }
     }
 
-    /// Destroy the structure at the given screen position. Unregisters from
-    /// all simulation systems and refunds the building item to inventory.
-    fn destroy_at_cursor(&mut self, sx: f64, sy: f64) -> bool {
-        let result = match self.find_clicked_tile(sx, sy) {
-            Some(r) => r,
-            None => return false,
-        };
-        let address = {
-            let running = self.renderer.as_ref().unwrap();
-            running.tiling.tiles[result.tile_idx].id.clone()
-        };
-        let entities = match self.world.tile_entities(address.word()) {
-            Some(e) => e,
-            None => return false,
-        };
-        let &entity = match entities.get(&result.grid_xy) {
-            Some(e) => e,
-            None => return false,
-        };
-
-        let kind = match self.world.kind(entity) {
-            Some(k) => k,
-            None => return false,
-        };
+    /// Unregister an entity from all simulation pools and remove it from the
+    /// world. Returns the refunded item if successful. Does NOT add to inventory
+    /// — callers decide what to do with the returned item.
+    fn destroy_entity_at(&mut self, tile_address: &[u8], grid_xy: (i32, i32)) -> Option<crate::game::items::ItemId> {
+        let entities = self.world.tile_entities(tile_address)?;
+        let &entity = entities.get(&grid_xy)?;
+        let kind = self.world.kind(entity)?;
 
         // Unregister from simulation systems
         match kind {
             StructureKind::Belt => {
-                // Clean up splitter connections before removing belt from network
                 let (output_splitter, input_splitter) =
                     self.belt_network.line_splitter_connections(entity);
                 if let Some(se) = output_splitter {
@@ -1009,7 +1014,6 @@ impl App {
                 self.belt_network.on_belt_removed(entity);
             }
             StructureKind::Machine(_) => {
-                // Close machine panel if inspecting this entity
                 if self.ui.machine_panel_entity == Some(entity) {
                     self.ui.machine_panel_entity = None;
                 }
@@ -1043,8 +1047,22 @@ impl App {
             }
         }
 
-        // Remove from world (handles multi-cell footprints)
-        if let Some(item) = self.world.remove(address.word(), result.grid_xy) {
+        self.world.remove(tile_address, grid_xy)
+    }
+
+    /// Destroy the structure at the given screen position. Unregisters from
+    /// all simulation systems and refunds the building item to inventory.
+    fn destroy_at_cursor(&mut self, sx: f64, sy: f64) -> bool {
+        let result = match self.find_clicked_tile(sx, sy) {
+            Some(r) => r,
+            None => return false,
+        };
+        let address = {
+            let running = self.renderer.as_ref().unwrap();
+            running.tiling.tiles[result.tile_idx].id.clone()
+        };
+
+        if let Some(item) = self.destroy_entity_at(address.word(), result.grid_xy) {
             self.inventory.add(item, 1);
 
             // Flash feedback
@@ -1079,6 +1097,137 @@ impl App {
             return true;
         }
         false
+    }
+
+    /// Copy selected structures to the clipboard.
+    fn blueprint_copy(&mut self) {
+        // Accept any selection (finalized or in-progress drag)
+        let sel = match &self.ui.selection {
+            Some(s) => s,
+            None => return,
+        };
+        let min_x = sel.start.0.min(sel.current.0);
+        let max_x = sel.start.0.max(sel.current.0);
+        let min_y = sel.start.1.min(sel.current.1);
+        let max_y = sel.start.1.max(sel.current.1);
+        let tile_addr = sel.id.word();
+        let clip = blueprint::capture_region(
+            &self.world,
+            &self.storage_pool,
+            tile_addr,
+            (min_x, min_y),
+            (max_x, max_y),
+            self.cfg.q,
+        );
+        let count = clip.entries.len();
+        self.clipboard = Some(clip);
+        self.ui.flash_label = format!("Copied {count} structure{}", if count == 1 { "" } else { "s" });
+        self.ui.flash_timer = 1.5;
+        self.ui.flash_screen_pos = None;
+        log::info!("blueprint copy: {count} structures");
+    }
+
+    /// Cut selected structures: copy to clipboard, then destroy originals.
+    fn blueprint_cut(&mut self) {
+        // Accept any selection (finalized or in-progress drag)
+        let sel = match &self.ui.selection {
+            Some(s) => s,
+            None => return,
+        };
+        let min_x = sel.start.0.min(sel.current.0);
+        let max_x = sel.start.0.max(sel.current.0);
+        let min_y = sel.start.1.min(sel.current.1);
+        let max_y = sel.start.1.max(sel.current.1);
+        let tile_addr_owned: Vec<u8> = sel.id.word().to_vec();
+
+        // Capture first
+        let clip = blueprint::capture_region(
+            &self.world,
+            &self.storage_pool,
+            &tile_addr_owned,
+            (min_x, min_y),
+            (max_x, max_y),
+            self.cfg.q,
+        );
+        let count = clip.entries.len();
+
+        // Destroy all entities in the selection rectangle.
+        // Collect entity grid positions first to avoid borrow issues.
+        let mut to_destroy = Vec::new();
+        if let Some(entities) = self.world.tile_entities(&tile_addr_owned) {
+            let mut seen = std::collections::HashSet::new();
+            for gy in min_y..=max_y {
+                for gx in min_x..=max_x {
+                    if let Some(&entity) = entities.get(&(gx, gy)) {
+                        if seen.insert(entity) {
+                            // Use origin position for removal
+                            if let Some(pos) = self.world.position(entity) {
+                                to_destroy.push((pos.gx as i32, pos.gy as i32));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        for grid_xy in to_destroy {
+            if let Some(item) = self.destroy_entity_at(&tile_addr_owned, grid_xy) {
+                self.inventory.add(item, 1);
+            }
+        }
+
+        self.clipboard = Some(clip);
+        self.ui.selection = None;
+        self.ui.flash_label = format!("Cut {count} structure{}", if count == 1 { "" } else { "s" });
+        self.ui.flash_timer = 1.5;
+        self.ui.flash_screen_pos = None;
+        log::info!("blueprint cut: {count} structures");
+    }
+
+    /// Handle box selection mouse-down: begin a new selection at the clicked grid cell.
+    fn begin_box_selection(&mut self, sx: f64, sy: f64) {
+        let result = match self.find_clicked_tile(sx, sy) {
+            Some(r) => r,
+            None => return,
+        };
+        let address = {
+            let running = self.renderer.as_ref().unwrap();
+            running.tiling.tiles[result.tile_idx].id.clone()
+        };
+        self.ui.selection = Some(SelectionState {
+            tile_idx: result.tile_idx,
+            id: address,
+            start: result.grid_xy,
+            current: result.grid_xy,
+            finalized: false,
+        });
+    }
+
+    /// Handle box selection mouse-move: update the current corner of the selection.
+    fn update_box_selection(&mut self, sx: f64, sy: f64) {
+        let sel = match &self.ui.selection {
+            Some(s) if !s.finalized => s,
+            _ => return,
+        };
+        let result = match self.find_clicked_tile(sx, sy) {
+            Some(r) => r,
+            None => return,
+        };
+        // Only update if we're still on the same tile
+        let sel_tile_idx = sel.tile_idx;
+        if result.tile_idx == sel_tile_idx {
+            if let Some(sel) = &mut self.ui.selection {
+                sel.current = result.grid_xy;
+            }
+        }
+    }
+
+    /// Handle box selection mouse-up: finalize the selection.
+    fn finalize_box_selection(&mut self) {
+        if let Some(sel) = &mut self.ui.selection {
+            if !sel.finalized {
+                sel.finalized = true;
+            }
+        }
     }
 
     /// Rotate the structure at the given screen position 90° clockwise.
@@ -1550,6 +1699,83 @@ impl App {
             }
         }
 
+        // Blueprint selection rectangle overlay
+        if let Some(sel) = &self.ui.selection {
+            let khs = self.klein_half_side;
+            let divisions = 64.0_f64;
+            // Find the Mobius transform for the selection tile from the visible list
+            if let Some(&(_, combined)) = visible.iter().find(|&&(idx, _)| idx == sel.tile_idx) {
+                let min_gx = sel.start.0.min(sel.current.0);
+                let max_gx = sel.start.0.max(sel.current.0);
+                let min_gy = sel.start.1.min(sel.current.1);
+                let max_gy = sel.start.1.max(sel.current.1);
+
+                // Project each cell in the selection to screen space and draw a tinted rect
+                let color = if sel.finalized {
+                    egui::Color32::from_rgba_unmultiplied(60, 180, 255, 60)
+                } else {
+                    egui::Color32::from_rgba_unmultiplied(60, 180, 255, 40)
+                };
+                let border_color = egui::Color32::from_rgba_unmultiplied(60, 180, 255, 140);
+
+                // Project the 4 corners of the bounding box to get screen-space rect
+                let corners = [
+                    (min_gx as f64 - 0.5, min_gy as f64 - 0.5), // top-left
+                    (max_gx as f64 + 0.5, min_gy as f64 - 0.5), // top-right
+                    (max_gx as f64 + 0.5, max_gy as f64 + 0.5), // bottom-right
+                    (min_gx as f64 - 0.5, max_gy as f64 + 0.5), // bottom-left
+                ];
+                let mut screen_pts = Vec::new();
+                for &(cx, cy) in &corners {
+                    let snap_kx = (cx / divisions) * 2.0 * khs;
+                    let snap_ky = (cy / divisions) * 2.0 * khs;
+                    let kr2 = snap_kx * snap_kx + snap_ky * snap_ky;
+                    let denom = 1.0 + (1.0 - kr2).max(0.0).sqrt();
+                    let local_disk = Complex::new(snap_kx / denom, snap_ky / denom);
+                    let world_disk = combined.apply(local_disk);
+                    let bowl = crate::hyperbolic::embedding::disk_to_bowl(world_disk);
+                    let elevation = re.extra_elevation.get(&sel.tile_idx).copied().unwrap_or(0.0);
+                    let world_pos = glam::Vec3::new(bowl[0], bowl[1] + elevation, bowl[2]);
+                    if let Some((sx, sy)) = project_to_screen(world_pos, &view_proj, width, height) {
+                        screen_pts.push(egui::pos2(sx / scale, sy / scale));
+                    }
+                }
+                // Draw using layer_painter (unclipped) instead of Area + ui.painter()
+                if screen_pts.len() >= 2 {
+                    let egui_ctx = re.egui.ctx.clone();
+                    let layer_id = egui::LayerId::new(egui::Order::Background, egui::Id::new("blueprint_selection"));
+                    let painter = egui_ctx.layer_painter(layer_id);
+                    let min_x = screen_pts.iter().map(|p| p.x).fold(f32::INFINITY, f32::min);
+                    let max_x = screen_pts.iter().map(|p| p.x).fold(f32::NEG_INFINITY, f32::max);
+                    let min_y = screen_pts.iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
+                    let max_y = screen_pts.iter().map(|p| p.y).fold(f32::NEG_INFINITY, f32::max);
+                    let rect = egui::Rect::from_min_max(
+                        egui::pos2(min_x, min_y),
+                        egui::pos2(max_x, max_y),
+                    );
+                    painter.rect_filled(rect, 2.0, color);
+                    painter.rect_stroke(rect, 2.0, egui::Stroke::new(1.5, border_color), egui::StrokeKind::Outside);
+                }
+            }
+        }
+
+        // Blueprint select mode indicator
+        if self.ui.blueprint_select {
+            let egui_ctx = re.egui.ctx.clone();
+            egui::Area::new(egui::Id::new("blueprint_mode_indicator"))
+                .order(egui::Order::Foreground)
+                .fixed_pos(egui::pos2(8.0, 26.0))
+                .interactable(false)
+                .show(&egui_ctx, |ui| {
+                    ui.label(
+                        egui::RichText::new("SELECT MODE (B to exit, drag to select, Ctrl+C copy, Ctrl+X cut)")
+                            .color(egui::Color32::from_rgb(60, 180, 255))
+                            .size(13.0)
+                            .font(egui::FontId::monospace(13.0)),
+                    );
+                });
+        }
+
         // Debug click flash
         if self.ui.flash_timer > 0.0 {
             if let Some((fx, fy)) = self.ui.flash_screen_pos {
@@ -1737,9 +1963,14 @@ impl ApplicationHandler for App {
         // Handle game toggle keys BEFORE egui so Tab/Esc aren't consumed
         if let WindowEvent::KeyboardInput { ref event, .. } = event {
             if let PhysicalKey::Code(code) = event.physical_key {
-                // Track shift state before rebinding check
+                // Track modifier state before rebinding check
                 if code == winit::keyboard::KeyCode::ShiftLeft || code == winit::keyboard::KeyCode::ShiftRight {
                     self.input_state.shift_held = event.state.is_pressed();
+                }
+                if code == winit::keyboard::KeyCode::ControlLeft || code == winit::keyboard::KeyCode::ControlRight
+                    || code == winit::keyboard::KeyCode::SuperLeft || code == winit::keyboard::KeyCode::SuperRight
+                {
+                    self.input_state.ctrl_held = event.state.is_pressed();
                 }
 
                 // Handle rebinding mode
@@ -1799,7 +2030,9 @@ impl ApplicationHandler for App {
                             self.rotate_at_cursor(pos.x, pos.y);
                         }
                     }
-                    if self.input_state.just_pressed(GameAction::DestroyBuilding) {
+                    if self.input_state.just_pressed(GameAction::DestroyBuilding)
+                        && !self.input_state.ctrl_held
+                    {
                         if let Some(pos) = self.ui.cursor_pos {
                             self.destroy_at_cursor(pos.x, pos.y);
                         }
@@ -1820,6 +2053,34 @@ impl ApplicationHandler for App {
                         self.ui.flash_timer = 2.0;
                         self.ui.flash_screen_pos = None;
                     }
+                    // B key: toggle blueprint box-select mode
+                    if code == winit::keyboard::KeyCode::KeyB
+                        && !self.input_state.ctrl_held
+                        && !self.input_state.shift_held
+                    {
+                        self.ui.blueprint_select = !self.ui.blueprint_select;
+                        if !self.ui.blueprint_select {
+                            self.ui.selection = None;
+                        } else {
+                            // Entering selection mode — clear placement mode
+                            self.ui.placement_mode = None;
+                        }
+                        log::info!(
+                            "blueprint select: {}",
+                            if self.ui.blueprint_select { "ON" } else { "OFF" }
+                        );
+                    }
+
+                    // Ctrl+C: copy selected structures to clipboard
+                    if self.input_state.ctrl_held && code == winit::keyboard::KeyCode::KeyC {
+                        self.blueprint_copy();
+                    }
+
+                    // Ctrl+X: cut selected structures to clipboard
+                    if self.input_state.ctrl_held && code == winit::keyboard::KeyCode::KeyX {
+                        self.blueprint_cut();
+                    }
+
                     if self.input_state.just_pressed(GameAction::QuickLoad) {
                         match crate::game::save::load_autosave() {
                             Ok(state) => {
@@ -1846,6 +2107,30 @@ impl ApplicationHandler for App {
                         }
                     }
                 }
+            }
+        }
+
+        // Handle blueprint selection mouse events BEFORE egui so they aren't consumed
+        if self.ui.blueprint_select {
+            match &event {
+                WindowEvent::CursorMoved { position, .. } => {
+                    self.ui.cursor_pos = Some(*position);
+                    if self.ui.selection.as_ref().is_some_and(|s| !s.finalized) {
+                        self.update_box_selection(position.x, position.y);
+                    }
+                }
+                WindowEvent::MouseInput { state, button, .. } => {
+                    if *button == winit::event::MouseButton::Left {
+                        if *state == winit::event::ElementState::Pressed {
+                            if let Some(pos) = self.ui.cursor_pos {
+                                self.begin_box_selection(pos.x, pos.y);
+                            }
+                        } else {
+                            self.finalize_box_selection();
+                        }
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -1899,7 +2184,7 @@ impl ApplicationHandler for App {
                             }
                         }
                     } else {
-                        // Mouse released — end drag
+                        // Mouse released — end belt drag
                         self.ui.belt_drag = None;
                     }
                 }

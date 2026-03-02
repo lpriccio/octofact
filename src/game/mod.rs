@@ -1,3 +1,4 @@
+pub mod blueprint;
 pub mod items;
 pub mod inventory;
 pub mod input;

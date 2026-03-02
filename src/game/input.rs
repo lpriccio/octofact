@@ -210,6 +210,7 @@ pub struct InputState {
     active_actions: HashSet<GameAction>,
     just_pressed_actions: HashSet<GameAction>,
     pub shift_held: bool,
+    pub ctrl_held: bool,
 }
 
 impl InputState {
@@ -221,6 +222,7 @@ impl InputState {
             active_actions: HashSet::new(),
             just_pressed_actions: HashSet::new(),
             shift_held: false,
+            ctrl_held: false,
         }
     }
 
@@ -230,9 +232,14 @@ impl InputState {
     }
 
     pub fn on_key_event(&mut self, code: KeyCode, pressed: bool) {
-        // Track shift modifier state
+        // Track modifier states
         if code == KeyCode::ShiftLeft || code == KeyCode::ShiftRight {
             self.shift_held = pressed;
+        }
+        if code == KeyCode::ControlLeft || code == KeyCode::ControlRight
+            || code == KeyCode::SuperLeft || code == KeyCode::SuperRight
+        {
+            self.ctrl_held = pressed;
         }
 
         if let Some(actions) = self.reverse_map.get(&code) {

@@ -20,10 +20,6 @@ impl TilingConfig {
         Self { p, q }
     }
 
-    pub fn num_sides(&self) -> usize {
-        self.p as usize
-    }
-
     pub fn vertex_angle_step(&self) -> f64 {
         2.0 * PI / self.p as f64
     }
@@ -169,7 +165,7 @@ impl Mobius {
     /// Normalize to maintain |a|^2 - |b|^2 = 1.
     pub fn normalized(self) -> Mobius {
         let det = self.a.norm_sq() - self.b.norm_sq();
-        let scale = 1.0 / det.sqrt();
+        let scale = 1.0 / det.abs().sqrt();
         Mobius {
             a: self.a * scale,
             b: self.b * scale,

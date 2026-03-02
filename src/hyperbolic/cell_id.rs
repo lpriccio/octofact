@@ -43,6 +43,11 @@ impl CellId {
     pub fn is_empty(&self) -> bool {
         self.word.is_empty()
     }
+
+    /// Number of hops (A generators) in the word, ignoring turns.
+    pub fn hop_count(&self) -> usize {
+        self.word.iter().filter(|&&g| g == A).count()
+    }
 }
 
 impl Hash for CellId {

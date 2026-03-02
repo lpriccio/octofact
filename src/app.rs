@@ -1196,7 +1196,8 @@ impl App {
 
         // Visibility culling + instanced tile rendering setup
         let visible = re.visible_tiles(&inv_view);
-        re.build_tile_instances(&visible, &view_proj, self.grid_enabled, self.klein_half_side as f32);
+        let time = self.game_loop.elapsed_secs();
+        re.build_tile_instances(&visible, &view_proj, self.grid_enabled, self.klein_half_side as f32, time);
 
         // Build belt instances from visible tiles + world state
         re.belt_instances.clear();

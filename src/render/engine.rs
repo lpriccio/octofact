@@ -184,6 +184,7 @@ impl RenderEngine {
         view_proj: &glam::Mat4,
         grid_enabled: bool,
         klein_half_side: f32,
+        time: f32,
     ) {
         // Build instance data
         self.tile_instances.clear();
@@ -209,7 +210,8 @@ impl RenderEngine {
                 klein_half_side,
             ],
             color_cycle: 13.0,
-            _pad: [0.0; 3],
+            time,
+            _pad: [0.0; 2],
         };
         self.tile_pipeline.upload_globals(&self.gpu.queue, &globals);
     }

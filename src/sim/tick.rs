@@ -11,6 +11,7 @@ pub struct GameLoop {
     pub accumulator: f64,
     pub sim_tick: u64,
     pub last_frame: Option<std::time::Instant>,
+    pub start_time: std::time::Instant,
     pub prev_camera: Option<CameraSnapshot>,
     pub curr_camera: Option<CameraSnapshot>,
     // FPS/UPS tracking
@@ -27,6 +28,7 @@ impl GameLoop {
             accumulator: 0.0,
             sim_tick: 0,
             last_frame: None,
+            start_time: std::time::Instant::now(),
             prev_camera: None,
             curr_camera: None,
             fps_samples: Vec::with_capacity(60),
@@ -35,6 +37,11 @@ impl GameLoop {
             fps: 0.0,
             ups: 0.0,
         }
+    }
+
+    /// Elapsed seconds since the game loop started.
+    pub fn elapsed_secs(&self) -> f32 {
+        self.start_time.elapsed().as_secs_f32()
     }
 
     /// Call at the start of each frame. Returns the frame dt (capped) if we

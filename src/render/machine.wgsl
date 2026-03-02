@@ -10,6 +10,7 @@ struct Globals {
     view_proj: mat4x4<f32>,
     grid_params: vec4<f32>,  // (enabled, divisions, line_width, klein_half_side)
     color_cycle: f32,
+    time: f32,               // elapsed seconds since startup
 };
 
 @group(0) @binding(0)

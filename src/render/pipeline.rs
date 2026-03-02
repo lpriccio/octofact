@@ -8,14 +8,16 @@ use super::mesh::{QuadVertex, Vertex};
 ///   view_proj: mat4x4<f32>  (64)
 ///   grid_params: vec4<f32>  (16) — enabled, divisions, line_width, klein_half_side
 ///   color_cycle: f32        (4)
-///   _pad: 12 bytes          (align to 16)
+///   time: f32               (4)  — elapsed seconds since startup (for animation)
+///   _pad: 8 bytes           (align to 16)
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Globals {
     pub view_proj: [[f32; 4]; 4],
     pub grid_params: [f32; 4],
     pub color_cycle: f32,
-    pub _pad: [f32; 3],
+    pub time: f32,
+    pub _pad: [f32; 2],
 }
 
 /// Max tiles we can draw per frame.

@@ -69,28 +69,28 @@ Implement the string rewriting engine.
 
 ### Deliverables
 
-- [ ] `Word` type: `Vec<u8>` with constants `A_LETTER=0, B_LETTER=1, B_INV=2`
-- [ ] `RewriteRule` struct: `lhs: Vec<u8>`, `rhs: Vec<u8>`
-- [ ] `fn load_rules_45() -> Vec<RewriteRule>` — hardcode the 11 rules for {4,5}
-- [ ] `fn reduce(word: &mut Word, rules: &[RewriteRule])` — apply rules until fixed point
+- [x] `Word` type: `Vec<u8>` with constants `A_LETTER=0, B_LETTER=1, B_INV=2`
+- [x] `RewriteRule` struct: `lhs: Vec<u8>`, `rhs: Vec<u8>`
+- [x] `fn load_rules_45() -> Vec<RewriteRule>` — hardcode the 11 rules for {4,5}
+- [x] `fn reduce(word: &mut Word, rules: &[RewriteRule])` — apply rules until fixed point
   - Scan left-to-right for first matching LHS substring
   - Replace with RHS
   - Back up scan position by `max(0, rhs.len() - 1)` to catch cascading rewrites
   - Repeat until no rule matches in a full scan
-- [ ] `fn shortlex_cmp(a: &Word, b: &Word) -> Ordering` — length first, then lex with b(2) < B(1) < a(0)
-- [ ] `fn word_to_string(w: &Word) -> String` and `fn string_to_word(s: &str) -> Word` for display/debugging
-- [ ] Parse functions to read `extern/rewrite-pairs.txt` (for validation; runtime uses hardcoded rules)
+- [x] `fn shortlex_cmp(a: &Word, b: &Word) -> Ordering` — length first, then lex with b(2) < B(1) < a(0)
+- [x] `fn word_to_string(w: &Word) -> String` and `fn string_to_word(s: &str) -> Word` for display/debugging
+- [x] Parse functions to read `extern/rewrite-pairs.txt` (for validation; runtime uses hardcoded rules)
 
 ### Tests
 
-- [ ] Each of the 11 rules individually: input LHS reduces to RHS
-- [ ] `aa` → empty
-- [ ] `bB` → empty, `Bb` → empty
-- [ ] `BBBB` → empty (4 left turns = identity via rules 6, then 1/2)
-- [ ] `aBaBaBaBaB` → empty (vertex relation `(aB)^5 = e`)
-- [ ] Cascading: `abBa` → empty (inner `bB` cancels, then `aa` cancels)
-- [ ] Idempotence: reducing an already-reduced word returns it unchanged
-- [ ] Known words from the tiling: verify reduction of specific paths
+- [x] Each of the 11 rules individually: input LHS reduces to RHS
+- [x] `aa` → empty
+- [x] `bB` → empty, `Bb` → empty
+- [x] `BBBB` → empty (4 left turns = identity via rules 6, then 1/2)
+- [x] `aBaBaBaBaB` → empty (vertex relation `(aB)^5 = e`)
+- [x] Cascading: `abBa` → empty (inner `bB` cancels, then `aa` cancels)
+- [x] Idempotence: reducing an already-reduced word returns it unchanged
+- [x] Known words from the tiling: verify reduction of specific paths
 
 ### Implementation Notes
 
@@ -106,32 +106,32 @@ The rewrite engine is a standard leftmost-innermost strategy. Words for {4,5} ar
 
 ### Deliverables
 
-- [ ] `CellId` struct: wraps a canonical `Word` (the shortlex minimum of 4 orientations)
+- [x] `CellId` struct: wraps a canonical `Word` (the shortlex minimum of 4 orientations)
   - Implements `Eq`, `Hash`, `Ord`, `Clone`, `Debug`
   - Display as the string form of the canonical word (empty = "e" for origin)
-- [ ] `OrientedCell` struct: `CellId` + `orientation: u8` (0–3)
+- [x] `OrientedCell` struct: `CellId` + `orientation: u8` (0–3)
   - Represents a specific turtle state (cell + facing direction)
-- [ ] `fn canonicalize(word: &Word, rules: &[RewriteRule]) -> (CellId, u8)`
+- [x] `fn canonicalize(word: &Word, rules: &[RewriteRule]) -> (CellId, u8)`
   - Reduce `word`, `word·B`, `word·BB`, `word·BBB`
   - Return (shortlex minimum, index of minimum)
-- [ ] `fn neighbor(cell: &CellId, orientation: u8, edge: u8, rules: &[RewriteRule]) -> OrientedCell`
+- [x] `fn neighbor(cell: &CellId, orientation: u8, edge: u8, rules: &[RewriteRule]) -> OrientedCell`
   - Compute `word · B^((edge - orientation) mod 4) · a`
   - Reduce and canonicalize
   - The returned orientation tells which edge of the neighbor connects back
-- [ ] `fn all_neighbors(cell: &CellId, rules: &[RewriteRule]) -> [(CellId, u8); 4]`
+- [x] `fn all_neighbors(cell: &CellId, rules: &[RewriteRule]) -> [(CellId, u8); 4]`
   - Compute all 4 neighbors (one per edge) using canonical orientation (0)
 
 ### Tests
 
-- [ ] Origin cell: empty word canonicalizes to `(CellId(""), 0)`
-- [ ] All 4 rotations of origin → same CellId
-- [ ] `a` (cross edge 0) and `Ba` (turn left, cross) give different CellIds (different cells)
-- [ ] Round-trip: neighbor of neighbor across the same edge returns to original CellId
-- [ ] Vertex consistency: 5 successive `neighbor(edge=k)` calls around a vertex return to original cell
-- [ ] BFS expansion to depth N produces correct number of unique CellIds
+- [x] Origin cell: empty word canonicalizes to `(CellId(""), 0)`
+- [x] All 4 rotations of origin → same CellId
+- [x] `a` (cross edge 0) and `Ba` (turn left, cross) give different CellIds (different cells)
+- [x] Round-trip: neighbor of neighbor across the same edge returns to original CellId
+- [x] Vertex consistency: 5 successive `neighbor(edge=k)` calls around a vertex return to original cell
+- [x] BFS expansion to depth N produces correct number of unique CellIds
   - Depth 1: 4 neighbors + origin = 5
   - Depth 2: 17 (verified)
-- [ ] CellId equality: two different paths to the same cell produce the same CellId
+- [x] CellId equality: two different paths to the same cell produce the same CellId
   - e.g., `aBa` and `bab` (if they represent the same cell — verify)
 
 ---
@@ -352,7 +352,8 @@ This refactor spans 7 phases and will likely require multiple sessions. Each ses
 | File | Role |
 |------|------|
 | `src/hyperbolic/rewrite.rs` | NEW — Rewrite engine (Phase 1) |
-| `src/hyperbolic/cell_id.rs` | NEW — CellId, canonicalization, neighbors (Phase 2–3) |
+| `src/hyperbolic/cell_id.rs` | NEW — CellId, canonicalization, neighbors (Phase 2) |
+| `src/hyperbolic/cell_graph.rs` | NEW — CellGraph, word_to_mobius, BFS expansion (Phase 3) |
 | `src/hyperbolic/tiling.rs` | MODIFY — Replace spatial dedup with CellId (Phase 5) |
 | `src/hyperbolic/poincare.rs` | READ ONLY — Mobius, Complex types, neighbor_xforms |
 | `src/game/world.rs` | MODIFY — TileAddr → CellId (Phase 6) |
@@ -369,7 +370,8 @@ This refactor spans 7 phases and will likely require multiple sessions. Each ses
 ```sh
 PATH="$HOME/.cargo/bin:$PATH" cargo test --release                    # all tests
 PATH="$HOME/.cargo/bin:$PATH" cargo test --release rewrite            # Phase 1 tests
-PATH="$HOME/.cargo/bin:$PATH" cargo test --release cell_id            # Phase 2-3 tests
+PATH="$HOME/.cargo/bin:$PATH" cargo test --release cell_id            # Phase 2 tests
+PATH="$HOME/.cargo/bin:$PATH" cargo test --release cell_graph         # Phase 3 tests
 PATH="$HOME/.cargo/bin:$PATH" cargo test --release tiling             # Phase 5 tests
 PATH="$HOME/.cargo/bin:$PATH" cargo clippy --release                  # lint
 PATH="$HOME/.cargo/bin:$PATH" cargo run --release                     # visual check
@@ -381,7 +383,7 @@ _Record decisions here as they are made:_
 
 - **Byte encoding**: `a=0, B=1, b=2`. Shortlex comparison: length first, then lex with custom order `b(2) < B(1) < a(0)` — implement via mapped comparison, not raw byte order.
 - **{4,5} only**: Rules are hardcoded for {4,5}. Generalizing to other {4,q} requires re-running Knuth-Bendix completion (out of scope).
-- **Incremental Mobius**: Cell Mobius transforms are computed incrementally during BFS (compose parent + neighbor xform), NOT from the word. Word→Mobius is used only for verification.
+- **Mobius from word**: CellGraph computes Mobius via `word_to_mobius(canonical_word)`. Incremental BFS composition verified to match within 1e-10. Word-based is simpler and correct for rendering-distance words (< 50 chars). Phase 5 may switch to incremental if needed for performance.
 - **CellIds are absolute**: They don't change on recenter. Only Mobius transforms are recentered.
 
 ### Session Log
@@ -397,14 +399,18 @@ Bug found & fixed: rule 4 (A→a) caused infinite loop since both encode to byte
 Omitted from rule set since parse already normalizes A→a.
 Turn direction confirmed parity-independent: B always means facing+1.
 Next: Phase 3 (CellGraph with Mobius) and Phase 4 (comprehensive tests).
+```
 
+```
 [2026-03-02] [Phase 3] [DONE]
 Implemented cell_graph.rs: CellData, CellGraph, word_to_mobius, expand_bfs,
 ensure_neighborhood, cells_within. 22 tests passing.
-Key design: Mobius computed from canonical word via word_to_mobius (not incremental),
-verified against incremental BFS composition within 1e-10.
-Back-edges (neighbor_orientations) computed by brute-force check of all 4 neighbor edges.
-B (turn) only changes facing, not Mobius — all 4 orientations of a cell share the same transform.
-Added #![allow(dead_code)] to rewrite/cell_id/cell_graph modules (used only in tests until Phase 5).
+BFS depth counts verified: 1, 5, 17, 45 (exact match with Phase 2).
+Mobius from word matches incremental BFS within 1e-10.
+Neighbor roundtrips, symmetry, back-edge computation all verified.
+Cleaned up: fixed clippy same_item_push, snake_case vars, added
+module-level #![allow(dead_code)] for Knuth modules (not used from
+binary until Phase 5).
+Removed stale `pub mod knuth_bendix` from mod.rs (old approach).
 Next: Phase 4 (comprehensive algebraic tests).
 ```

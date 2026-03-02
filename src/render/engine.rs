@@ -193,7 +193,7 @@ impl RenderEngine {
             self.tile_instances.push(TileInstance {
                 mobius_a: [combined.a.re as f32, combined.a.im as f32],
                 mobius_b: [combined.b.re as f32, combined.b.im as f32],
-                depth: tile.depth as f32,
+                depth: tile.id.len() as f32,
                 elevation,
             });
         }

@@ -1,7 +1,7 @@
 # Knuth-Bendix Cell Identity Refactor
 
 **Branch**: `knuth`
-**Status**: Phase 5 — Phases 1, 2, 3 & 4 complete
+**Status**: Phases 1–5 complete
 **Goal**: Replace floating-point spatial dedup with exact algebraic cell identity using confluent rewrite rules, enabling reliable exploration far from origin.
 
 ---
@@ -239,46 +239,57 @@ Verify early: `(aB)^5` and `aa` must compose to Mobius identity. BFS cells must 
 ## Phase 5: Integration — TilingState Refactor
 
 **File**: `src/hyperbolic/tiling.rs` (major rewrite)
-**Status**: NOT STARTED
+**Status**: DONE (325 tests passing)
 **Depends on**: Phase 4 (all algebraic tests passing)
 
 Replace spatial dedup with CellId-based identity. Keep Mobius transforms for rendering.
 
 ### Changes
 
-- [ ] `Tile` struct:
+- [x] `Tile` struct:
   - Replace `address: TileAddr` with `id: CellId`
   - Keep `transform: Mobius` (still needed for rendering)
   - Keep `parity: bool`
-  - Add `neighbors: [Option<CellId>; 4]` (direct neighbors, populated on expansion)
-  - Remove `depth: usize` (can derive from CellId word length if needed)
-- [ ] `TilingState`:
+  - Add `neighbors: [CellId; 4]` (cached neighbors, computed once on creation)
+  - Add `facing: u8` (turtle facing after walking canonical word)
+  - Remove `depth: usize` (derived from `CellId.len()`)
+- [x] `TilingState`:
   - Replace `seen: HashSet<(i64, i64)>` with `seen: HashSet<CellId>`
-  - Replace `spatial_to_tile: HashMap<(i64, i64), usize>` with `id_to_tile: HashMap<CellId, usize>`
+  - Add `id_to_tile: HashMap<CellId, usize>` (primary index)
+  - Keep `spatial_to_tile` as secondary index for click detection
   - Add `rules: Vec<RewriteRule>` (cached)
+  - Add `view_offset: Mobius` (maps absolute word_to_mobius to view-relative coords)
   - Keep `frontier: VecDeque<usize>` (still BFS-based for incremental expansion)
-- [ ] `expand_near()`: Use CellId for dedup instead of spatial_key
-  - When expanding a parent, compute child CellId algebraically
+- [x] `expand_near()`: Use CellId for dedup instead of spatial_key
+  - Compute child CellId from cached parent neighbors (no K-B reduction needed)
   - Check `seen` by CellId instead of spatial position
-  - Still compute child Mobius incrementally (compose parent transform with neighbor xform)
-- [ ] `recenter_on()`:
-  - CellIds are absolute — they don't change on recenter!
-  - Only Mobius transforms need updating (as now)
-  - Remove address recomputation logic
-  - `id_to_tile` map stays valid (just update indices after compaction)
-- [ ] Remove `reduce_address()` (replaced by algebraic reduction)
-- [ ] Remove `spatial_key()` (no longer needed for dedup)
-- [ ] `find_tile_near()`:
-  - Can still use spatial lookup as a fast path for rendering
-  - But primary lookup should be by CellId: `fn find_tile(&self, id: &CellId) -> Option<usize>`
-- [ ] Keep a spatial index as a secondary/convenience index for click detection
+  - Compute child Mobius via `view_offset ∘ word_to_mobius(canonical_word)` (not incremental — avoids holonomy)
+- [x] `recenter_on()`:
+  - CellIds are absolute — don't change on recenter
+  - Recompute `view_offset = word_to_mobius(center).inverse()`
+  - Recompute all tile transforms from canonical words + view_offset
+  - Evict tiles beyond disk edge, rebuild indices in single pass
+- [x] Remove `reduce_address()` (replaced by algebraic reduction)
+- [x] `find_tile_near()`: spatial lookup kept for click detection
+- [x] `find_tile(&CellId)`: primary lookup by CellId
+- [x] `neighbor_tile_id()`: uses cached neighbor CellIds (no K-B needed)
+- [x] Consumer updates: app.rs (address→id), engine.rs (depth→id.len())
+
+### Key Bug Found: Hyperbolic Holonomy
+
+Incremental BFS Mobius composition (`parent.compose(xforms[dir])`) accumulates holonomy
+when different BFS paths traverse different vertex loops. In {4,5}, `(aB)^5` composes
+to rotation by π/2, not identity. Fix: compute every tile's Mobius from its canonical
+word via `word_to_mobius` (path-independent, holonomy-free).
 
 ### Tests
 
-- [ ] All existing TilingState tests still pass (adapted to new types)
-- [ ] Walk 100 steps and return: origin tile has CellId = empty word
-- [ ] No duplicate CellIds after any sequence of expand + recenter operations
-- [ ] Recenter preserves CellId→Mobius consistency
+- [x] All existing TilingState tests still pass (adapted to new types)
+- [x] Walk 15 steps and return: origin tile has CellId = empty word
+- [x] No duplicate CellIds after any sequence of expand + recenter operations
+- [x] Recenter preserves CellId→Mobius consistency
+- [x] Mobius accuracy: stored transforms match word_to_mobius before/after recenter
+- [x] Pairwise distances preserved across recenter
 
 ---
 

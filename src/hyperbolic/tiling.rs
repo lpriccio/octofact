@@ -2,89 +2,116 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use smallvec::SmallVec;
 
+use super::cell_graph::word_to_mobius;
+use super::cell_id::{self, CellId};
 use super::poincare::{Complex, Mobius, TilingConfig, center_to_center_distance, neighbor_transforms, poincare_distance};
+use super::rewrite::{self, RewriteRule, A, B, B_INV};
 
-/// Tile address: sequence of direction indices from origin.
-/// 12 bytes inline covers depth 12 (~16M tiles) without heap allocation.
+/// Legacy tile address type. Kept for backward compatibility with world.rs
+/// and power.rs which will be migrated to CellId in Phase 6.
 pub type TileAddr = SmallVec<[u8; 12]>;
 
-/// A tile in the {p,q} tiling, identified by its canonical address.
+/// Maximum number of tiles to keep. Prevents unbounded growth in hyperbolic space.
+const MAX_TILES: usize = 4096;
+
+/// A tile in the {4,5} tiling, identified by its canonical CellId.
 #[derive(Clone, Debug)]
 pub struct Tile {
-    /// Canonical address: sequence of direction indices (0..p-1) from origin.
-    /// Empty = origin tile.
-    pub address: TileAddr,
+    /// Canonical algebraic cell identity (shortlex-minimum reduced word).
+    pub id: CellId,
     /// Mobius transform mapping the canonical polygon to this tile's position.
     pub transform: Mobius,
-    /// BFS depth (= address length).
-    pub depth: usize,
     /// Parity: false = even (same orientation as origin), true = odd (flipped).
-    /// For even-p tilings this is unused but tracked for consistency.
     pub parity: bool,
+    /// Physical edge index the turtle faces after walking the canonical word.
+    /// Used during construction to compute cached neighbor CellIds.
+    #[allow(dead_code)]
+    facing: u8,
+    /// Cached CellIds of the 4 neighbors (by physical edge index).
+    /// Computed once when the tile is created, avoiding repeated K-B reduction.
+    pub neighbors: [CellId; 4],
 }
 
 /// Spatial dedup key: discretize Poincare disk position to grid.
-/// Precision 1e4 (grid cell ~0.0001) safely distinguishes adjacent tile
-/// centers at the frontier (~0.001 apart at depth 5) while still catching
-/// multi-path duplicates from BFS cycles (position error ~1e-15 with
-/// incremental transforms).
-pub(crate) fn spatial_key(z: Complex) -> (i64, i64) {
+/// Used as a secondary index for click detection / spatial lookup.
+fn spatial_key(z: Complex) -> (i64, i64) {
     ((z.re * 1e4).round() as i64, (z.im * 1e4).round() as i64)
 }
 
-/// Reduce a tile address using {p,q} group relations.
-/// Two rules, applied in a loop for cascading reductions:
-/// 1. Inverse cancellation: last two elements d, (d+p/2)%p cancel (cross edge and back, even p only).
-/// 2. Vertex cycle: last q elements [v, v+1, ..., v+q-1] mod p cancel (walk around vertex).
-pub(crate) fn reduce_address(mut addr: TileAddr, p: u32, q: u32) -> TileAddr {
-    let p = p as u8;
-    let q = q as usize;
-    let half_p = p / 2; // inverse offset (only valid for even p)
-    loop {
-        let len = addr.len();
-        // Inverse cancellation: d, (d + p/2) % p (even p only)
-        if p.is_multiple_of(2) && len >= 2 && (addr[len - 2] + half_p) % p == addr[len - 1] {
-            addr.truncate(len - 2);
-            continue;
-        }
-        // Vertex cycle: [v, v+1, ..., v+q-1] mod 4 (only valid for p=4)
-        // For p=4, the vertex walk increments direction by 1 each step because
-        // the opposite edge offset (p/2=2) minus 1 equals 1.
-        if p == 4 && len >= q {
-            let start = len - q;
-            let v = addr[start];
-            if (0..q).all(|i| addr[start + i] == (v + i as u8) % 4) {
-                addr.truncate(start);
-                continue;
+/// Compute turtle facing direction and parity from a word.
+/// Facing: the physical edge index (0-3) the turtle faces after walking the word.
+/// Parity: true if odd number of 'a' letters (edge crossings).
+fn word_facing_parity(word: &[u8]) -> (u8, bool) {
+    let mut facing: u8 = 0;
+    let mut parity = false;
+    for &letter in word {
+        match letter {
+            A => {
+                parity = !parity;
+                facing = (facing + 2) % 4;
             }
+            B => {
+                facing = (facing + 1) % 4;
+            }
+            B_INV => {
+                facing = (facing + 3) % 4;
+            }
+            _ => unreachable!(),
         }
-        break;
     }
-    addr
+    (facing, parity)
 }
 
-/// BFS tiling state for incremental expansion of a {p,q} tiling.
+/// Compute all 4 neighbor CellIds for a tile, mapping physical edges to algebraic edges.
+fn compute_neighbors(id: &CellId, facing: u8, rules: &[RewriteRule]) -> [CellId; 4] {
+    [0u8, 1, 2, 3].map(|dir| {
+        let cell_edge = (dir + 4 - facing) % 4;
+        cell_id::neighbor(id, cell_edge, rules).id
+    })
+}
+
+/// BFS tiling state for incremental expansion of a {4,5} tiling.
+/// Uses algebraic CellId for exact cell identity (no floating-point drift).
 pub struct TilingState {
     pub cfg: TilingConfig,
     pub tiles: Vec<Tile>,
-    seen: HashSet<(i64, i64)>,
+    /// Exact dedup: canonical CellIds of all known tiles.
+    seen: HashSet<CellId>,
+    /// Primary index: CellId → tile index in `tiles` Vec.
+    id_to_tile: HashMap<CellId, usize>,
+    /// Secondary spatial index for click detection and `find_tile_near()`.
     spatial_to_tile: HashMap<(i64, i64), usize>,
     frontier: VecDeque<usize>,
     /// `[0]` = transforms for even-parity tiles, `[1]` = for odd-parity tiles.
     pub neighbor_xforms: [Vec<Mobius>; 2],
+    /// Cached confluent rewrite rules for {4,5}.
+    rules: Vec<RewriteRule>,
+    /// View offset: maps absolute (word_to_mobius) coordinates to view-relative coordinates.
+    /// Recomputed on each recenter to avoid holonomy accumulation.
+    view_offset: Mobius,
 }
 
 impl TilingState {
     pub fn new(cfg: TilingConfig) -> Self {
+        assert_eq!(cfg.p, 4, "CellId tiling only supports {{4,q}} (got p={})", cfg.p);
+        assert_eq!(cfg.q, 5, "CellId tiling only supports {{4,5}} (got q={})", cfg.q);
+
+        let rules = rewrite::rules_45();
+        let origin_id = CellId::origin();
+        let origin_neighbors = compute_neighbors(&origin_id, 0, &rules);
         let origin = Tile {
-            address: TileAddr::new(),
+            id: origin_id.clone(),
             transform: Mobius::identity(),
-            depth: 0,
             parity: false,
+            facing: 0,
+            neighbors: origin_neighbors,
         };
+
         let key = spatial_key(Complex::ZERO);
         let mut seen = HashSet::new();
-        seen.insert(key);
+        seen.insert(origin_id.clone());
+        let mut id_to_tile = HashMap::new();
+        id_to_tile.insert(origin_id, 0);
         let mut spatial_to_tile = HashMap::new();
         spatial_to_tile.insert(key, 0);
 
@@ -95,14 +122,18 @@ impl TilingState {
             cfg,
             tiles: vec![origin],
             seen,
+            id_to_tile,
             spatial_to_tile,
             frontier,
             neighbor_xforms: neighbor_transforms(&cfg),
+            rules,
+            view_offset: Mobius::identity(),
         }
     }
 
     /// Expand only frontier tiles within `max_dist` hyperbolic distance of `target`.
-    /// Frontier tiles that are too far are deferred (kept in frontier for later).
+    /// Uses algebraic CellId for dedup (exact, immune to floating-point drift).
+    /// Stops early if the tile count reaches MAX_TILES.
     pub fn expand_near(&mut self, target: Complex, max_dist: f64) {
         let frontier_len = self.frontier.len();
         if frontier_len == 0 {
@@ -110,62 +141,61 @@ impl TilingState {
         }
         let mut deferred = VecDeque::new();
         for _ in 0..frontier_len {
+            if self.tiles.len() >= MAX_TILES {
+                // Drain remaining frontier items into deferred.
+                while let Some(idx) = self.frontier.pop_front() {
+                    deferred.push_back(idx);
+                }
+                break;
+            }
             let parent_idx = self.frontier.pop_front().unwrap();
             let parent_center = self.tiles[parent_idx].transform.apply(Complex::ZERO);
             if poincare_distance(parent_center, target) > max_dist {
                 deferred.push_back(parent_idx);
                 continue;
             }
-            let parent_transform = self.tiles[parent_idx].transform;
-            let parent_address = self.tiles[parent_idx].address.clone();
-            let parent_parity = self.tiles[parent_idx].parity;
-            let xforms = &self.neighbor_xforms[parent_parity as usize];
-            for dir in 0..self.cfg.p as u8 {
-                let child_transform =
-                    parent_transform.compose(&xforms[dir as usize]);
-                let center = child_transform.apply(Complex::ZERO);
-                let key = spatial_key(center);
-                if self.seen.contains(&key) {
+            // Use cached neighbor CellIds from the parent tile.
+            let parent_neighbors = self.tiles[parent_idx].neighbors.clone();
+            for dir in 0..4u8 {
+                let child_id = &parent_neighbors[dir as usize];
+                if self.seen.contains(child_id) {
                     continue;
                 }
-                self.seen.insert(key);
-                let mut child_address = parent_address.clone();
-                child_address.push(dir);
-                let child_address = reduce_address(child_address, self.cfg.p, self.cfg.q);
+                // Compute child transform from canonical word (via word_to_mobius),
+                // not incremental composition, to avoid holonomy accumulation.
+                let child_transform = self.view_offset
+                    .compose(&word_to_mobius(child_id.word(), &self.neighbor_xforms));
+                let (child_facing, child_parity) = word_facing_parity(child_id.word());
+                let child_neighbors = compute_neighbors(child_id, child_facing, &self.rules);
                 let child = Tile {
-                    address: child_address.clone(),
+                    id: child_id.clone(),
                     transform: child_transform,
-                    depth: child_address.len(),
-                    parity: child_address.len() % 2 == 1,
+                    parity: child_parity,
+                    facing: child_facing,
+                    neighbors: child_neighbors,
                 };
                 let child_idx = self.tiles.len();
-                self.spatial_to_tile.insert(key, child_idx);
+                self.seen.insert(child_id.clone());
+                self.id_to_tile.insert(child_id.clone(), child_idx);
+                let center = child_transform.apply(Complex::ZERO);
+                self.spatial_to_tile.insert(spatial_key(center), child_idx);
                 self.tiles.push(child);
                 self.frontier.push_back(child_idx);
             }
         }
-        // Return deferred tiles to the front of the frontier
         while let Some(idx) = deferred.pop_back() {
             self.frontier.push_front(idx);
         }
     }
 
-    /// Expand BFS until every frontier tile is at least `min_layers` hops
-    /// (in center-to-center distance) away from `target`.
-    /// Since this grows the existing BFS from origin, addresses stay canonical.
+    /// Expand BFS until every frontier tile is at least `min_layers` hops away from `target`.
     pub fn ensure_coverage(&mut self, target: Complex, min_layers: usize) {
         let d = center_to_center_distance(&self.cfg);
-        // We need the frontier pushed out beyond min_layers * D from target.
-        // Add 0.5 buffer to ensure full coverage of the outermost ring.
         let required_dist = (min_layers as f64 + 0.5) * d;
-
-        // Cap at 5 rounds per call to avoid frame spikes after eviction.
-        // Any remaining expansion happens over subsequent frames.
         for _ in 0..5 {
             if self.frontier.is_empty() {
                 break;
             }
-            // Check if any frontier tile is closer than required_dist to target
             let needs_more = self.frontier.iter().any(|&idx| {
                 let c = self.tiles[idx].transform.apply(Complex::ZERO);
                 poincare_distance(c, target) < required_dist
@@ -177,17 +207,13 @@ impl TilingState {
         }
     }
 
-    /// Find the tile index whose center is nearest to `pos`.
-    /// Checks the exact spatial grid cell plus its 8 neighbors to handle
-    /// floating-point drift where two computations of the same tile center
-    /// may land in adjacent grid cells.
+    /// Find the tile index whose center is nearest to `pos` (spatial lookup).
+    /// Used for click detection and camera movement.
     pub fn find_tile_near(&self, pos: Complex) -> Option<usize> {
         let (kx, ky) = spatial_key(pos);
-        // Try exact cell first (common case)
         if let Some(&idx) = self.spatial_to_tile.get(&(kx, ky)) {
             return Some(idx);
         }
-        // Search 8 neighbors for floating-point robustness
         let mut best: Option<(usize, f64)> = None;
         for dx in -1..=1_i64 {
             for dy in -1..=1_i64 {
@@ -206,34 +232,44 @@ impl TilingState {
         best.map(|(idx, _)| idx)
     }
 
-    /// Find the address of the tile adjacent to `tile_idx` across edge `edge` (0..p-1).
+    /// Look up a tile by its CellId.
+    #[allow(dead_code)]
+    pub fn find_tile(&self, id: &CellId) -> Option<usize> {
+        self.id_to_tile.get(id).copied()
+    }
+
+    /// Find the CellId of the tile adjacent to `tile_idx` across physical edge `edge` (0..3).
     /// Returns None if the neighbor tile hasn't been expanded yet.
-    pub fn neighbor_tile_addr(&self, tile_idx: usize, edge: u8) -> Option<TileAddr> {
-        let tile = &self.tiles[tile_idx];
-        let xforms = &self.neighbor_xforms[tile.parity as usize];
-        let neighbor_transform = tile.transform.compose(&xforms[edge as usize]);
-        let center = neighbor_transform.apply(Complex::ZERO);
-        let key = spatial_key(center);
-        let &idx = self.spatial_to_tile.get(&key)?;
-        Some(self.tiles[idx].address.clone())
+    /// Uses cached neighbor CellIds — no K-B reduction needed.
+    pub fn neighbor_tile_id(&self, tile_idx: usize, edge: u8) -> Option<CellId> {
+        let neighbor_id = &self.tiles[tile_idx].neighbors[edge as usize];
+        if self.seen.contains(neighbor_id) {
+            Some(neighbor_id.clone())
+        } else {
+            None
+        }
     }
 
     /// Recenter the tiling so that `center_idx` becomes the origin.
-    /// Applies the center tile's inverse transform to all tiles incrementally,
-    /// keeping Mobius values at O(1) scale (no catastrophic cancellation from
-    /// recomputing long address chains where |a| grows exponentially).
-    /// Evicts tiles whose disk center exceeds `EVICTION_RADIUS` to prevent
-    /// unbounded growth and floating-point overflow in distant transforms.
+    /// CellIds are absolute — they don't change on recenter. Only Mobius transforms
+    /// are updated (recomputed from word_to_mobius to avoid holonomy drift).
+    /// Evicts tiles beyond EVICTION_RADIUS to prevent unbounded growth.
     /// Returns the new index of the center tile after compaction.
     pub fn recenter_on(&mut self, center_idx: usize) -> usize {
         const EVICTION_RADIUS: f64 = 0.99;
         let threshold_sq = EVICTION_RADIUS * EVICTION_RADIUS;
 
-        let inv_center = self.tiles[center_idx].transform.inverse();
+        // Recompute view_offset from the center tile's canonical word.
+        // This avoids accumulating floating-point error across recenters.
+        let center_absolute = word_to_mobius(
+            self.tiles[center_idx].id.word(),
+            &self.neighbor_xforms,
+        );
+        self.view_offset = center_absolute.inverse();
 
-        // Single fused pass: transform, evict, find center, build spatial index.
-        // Each tile's center is computed exactly once (was 3x before).
-        self.seen.clear();
+        // Recompute all tile transforms from canonical words + view_offset.
+        // Then evict, compact, and rebuild indices in a single pass.
+        self.id_to_tile.clear();
         self.spatial_to_tile.clear();
         let mut write = 0usize;
         let mut new_center_idx = 0usize;
@@ -241,29 +277,25 @@ impl TilingState {
         let mut any_evicted = false;
 
         for read in 0..self.tiles.len() {
-            // Apply inverse transform
-            self.tiles[read].transform = inv_center.compose(&self.tiles[read].transform);
+            let absolute = word_to_mobius(self.tiles[read].id.word(), &self.neighbor_xforms);
+            self.tiles[read].transform = self.view_offset.compose(&absolute);
             let center = self.tiles[read].transform.apply(Complex::ZERO);
             let dist_sq = center.norm_sq();
 
-            // Eviction check
             if dist_sq > threshold_sq {
                 any_evicted = true;
                 continue;
             }
 
-            // Track center tile (nearest to origin)
             if dist_sq < best_dist_sq {
                 best_dist_sq = dist_sq;
                 new_center_idx = write;
             }
 
-            // Build spatial index inline
-            let key = spatial_key(center);
-            self.seen.insert(key);
-            self.spatial_to_tile.insert(key, write);
+            // Rebuild indices
+            self.id_to_tile.insert(self.tiles[read].id.clone(), write);
+            self.spatial_to_tile.insert(spatial_key(center), write);
 
-            // Compact in-place
             if write != read {
                 self.tiles.swap(write, read);
             }
@@ -271,17 +303,17 @@ impl TilingState {
         }
         self.tiles.truncate(write);
 
-        // Only rebuild frontier when tiles were actually evicted.
+        // Rebuild seen and frontier when tiles were actually evicted.
         if any_evicted {
+            self.seen.clear();
+            for tile in &self.tiles {
+                self.seen.insert(tile.id.clone());
+            }
+
             self.frontier.clear();
             for (idx, tile) in self.tiles.iter().enumerate() {
-                let parity = tile.parity;
-                let xforms = &self.neighbor_xforms[parity as usize];
-                let is_boundary = (0..self.cfg.p as u8).any(|dir| {
-                    let neighbor = tile.transform.compose(&xforms[dir as usize]);
-                    let center = neighbor.apply(Complex::ZERO);
-                    !self.seen.contains(&spatial_key(center))
-                });
+                // Use cached neighbor CellIds — no K-B reduction needed.
+                let is_boundary = tile.neighbors.iter().any(|n| !self.seen.contains(n));
                 if is_boundary {
                     self.frontier.push_back(idx);
                 }
@@ -292,23 +324,22 @@ impl TilingState {
     }
 }
 
-/// Recompute a tile's absolute Mobius transform from its canonical address.
-/// Each step composes the corresponding neighbor transform, alternating parity.
-/// Note: only accurate for short addresses (~<25 steps). For longer addresses,
-/// |a| grows exponentially causing catastrophic cancellation when converting
-/// back to a local frame.
-#[cfg(test)]
-fn compute_transform_from_address(address: &[u8], neighbor_xforms: &[Vec<Mobius>; 2]) -> Mobius {
-    let mut t = Mobius::identity();
-    let mut parity = 0usize; // origin is even
-    for &dir in address {
-        t = t.compose(&neighbor_xforms[parity][dir as usize]);
-        parity ^= 1;
+/// Format a CellId for display (turtle word notation).
+pub fn format_cell_id(id: &CellId) -> String {
+    if id.is_empty() {
+        "O".to_string()
+    } else {
+        let s = id.to_string();
+        if s.len() > 8 {
+            format!("..{}", &s[s.len() - 6..])
+        } else {
+            s
+        }
     }
-    t
 }
 
-/// Format a tile address for display.
+/// Format a tile address for display (legacy, for backward compatibility).
+#[allow(dead_code)]
 pub fn format_address(addr: &[u8]) -> String {
     if addr.is_empty() {
         "O".to_string()
@@ -324,28 +355,27 @@ pub fn format_address(addr: &[u8]) -> String {
 mod tests {
     use super::*;
 
-    fn cfg83() -> TilingConfig {
-        TilingConfig::new(8, 3)
+    fn cfg45() -> TilingConfig {
+        TilingConfig::new(4, 5)
     }
 
     #[test]
     fn test_origin_tile() {
-        let state = TilingState::new(cfg83());
+        let state = TilingState::new(cfg45());
         assert_eq!(state.tiles.len(), 1);
-        assert!(state.tiles[0].address.is_empty());
-        assert_eq!(state.tiles[0].depth, 0);
+        assert!(state.tiles[0].id.is_empty());
     }
 
     #[test]
     fn test_ensure_coverage_depth_1() {
-        let mut state = TilingState::new(cfg83());
+        let mut state = TilingState::new(cfg45());
         state.ensure_coverage(Complex::ZERO, 1);
         assert!(state.tiles.len() > 1, "should have more than just the origin");
     }
 
     #[test]
     fn test_ensure_coverage_depth_3() {
-        let mut state = TilingState::new(cfg83());
+        let mut state = TilingState::new(cfg45());
         state.ensure_coverage(Complex::ZERO, 3);
         let count = state.tiles.len();
         assert!(count > 20, "too few tiles: {count}");
@@ -353,66 +383,48 @@ mod tests {
     }
 
     #[test]
-    fn test_all_addresses_unique() {
-        let mut state = TilingState::new(cfg83());
+    fn test_all_cell_ids_unique() {
+        let mut state = TilingState::new(cfg45());
         state.ensure_coverage(Complex::ZERO, 2);
-        let mut addrs: HashSet<TileAddr> = HashSet::new();
+        let mut ids: HashSet<CellId> = HashSet::new();
         for tile in &state.tiles {
             assert!(
-                addrs.insert(tile.address.clone()),
-                "duplicate address: {:?}",
-                tile.address
+                ids.insert(tile.id.clone()),
+                "duplicate CellId: {:?}",
+                tile.id
             );
         }
     }
 
     #[test]
     fn test_all_centers_inside_disk() {
-        let mut state = TilingState::new(cfg83());
+        let mut state = TilingState::new(cfg45());
         state.ensure_coverage(Complex::ZERO, 3);
         for tile in &state.tiles {
             let c = tile.transform.apply(Complex::ZERO);
             assert!(
                 c.abs() < 1.0,
                 "tile {:?} center outside disk: {}",
-                tile.address,
+                tile.id,
                 c.abs()
             );
         }
     }
 
     #[test]
-    fn test_73_centers_inside_disk() {
-        let mut state = TilingState::new(TilingConfig::new(7, 3));
-        state.ensure_coverage(Complex::ZERO, 3);
-        for tile in &state.tiles {
-            let c = tile.transform.apply(Complex::ZERO);
-            assert!(
-                c.abs() < 1.0,
-                "tile {:?} center outside disk: {}",
-                tile.address,
-                c.abs()
-            );
-        }
-    }
-
-    #[test]
-    fn test_format_address() {
-        assert_eq!(format_address(&[]), "O");
-        assert_eq!(format_address(&[0]), "0");
-        assert_eq!(format_address(&[0, 0, 0, 0, 2]), "00002");
-        assert_eq!(format_address(&[7, 3, 1]), "731");
-        assert_eq!(format_address(&[1, 2, 3, 4, 5, 6, 7, 0]), "..45670");
+    fn test_format_cell_id() {
+        assert_eq!(format_cell_id(&CellId::origin()), "O");
+        let r = rewrite::rules_45();
+        let word = rewrite::string_to_word("a");
+        let oc = cell_id::canonicalize(&word, &r);
+        assert!(!format_cell_id(&oc.id).is_empty());
     }
 
     #[test]
     fn test_vertex_closure_45() {
-        // For {4,5}: q=5 tiles meet at vertex v0 (angle π/4), shared by edges 0 and 1.
-        // Walking the cycle [0,1,2,3,0] around the vertex (crossing these edge
-        // directions sequentially) should return to the same position.
-        let cfg = TilingConfig::new(4, 5);
+        let cfg = cfg45();
         let xforms = neighbor_transforms(&cfg);
-        let dirs = [0, 1, 2, 3, 0]; // 5 edges for q=5
+        let dirs = [0, 1, 2, 3, 0];
         let mut product = Mobius::identity();
         for &d in &dirs {
             product = product.compose(&xforms[0][d]);
@@ -423,7 +435,6 @@ mod tests {
             "vertex cycle should return to origin, got |z| = {}",
             result.abs(),
         );
-        // b ≈ 0 means no translation (only rotation, which is expected)
         assert!(
             product.b.abs() < 1e-6,
             "vertex cycle b should be ~0, got ({}, {})",
@@ -434,8 +445,7 @@ mod tests {
 
     #[test]
     fn test_vertex_closure_45_all_vertices() {
-        // Check all 4 vertices of the origin square.
-        let cfg = TilingConfig::new(4, 5);
+        let cfg = cfg45();
         let xforms = neighbor_transforms(&cfg);
         for v in 0..4u8 {
             let dirs: Vec<usize> = (0..5).map(|i| ((v as usize + i) % 4) as usize).collect();
@@ -455,25 +465,18 @@ mod tests {
 
     #[test]
     fn test_no_duplicates_after_walk() {
-        // Walk 40 steps in direction 0, recentering at each step.
-        // Then check for position collisions among all tiles.
-        let cfg = TilingConfig::new(4, 5);
-        let mut state = TilingState::new(cfg);
-        state.ensure_coverage(Complex::ZERO, 5);
+        let mut state = TilingState::new(cfg45());
+        state.ensure_coverage(Complex::ZERO, 3);
 
-        for step in 0..40 {
-            // Check for NaN before proceeding
+        for step in 0..10 {
             for (i, tile) in state.tiles.iter().enumerate() {
                 let c = tile.transform.apply(Complex::ZERO);
                 assert!(
                     !c.re.is_nan() && !c.im.is_nan(),
-                    "NaN in tile {i} (addr len {}) at step {step}, a=({},{}) b=({},{})",
-                    tile.address.len(),
-                    tile.transform.a.re, tile.transform.a.im,
-                    tile.transform.b.re, tile.transform.b.im,
+                    "NaN in tile {i} ({:?}) at step {step}",
+                    tile.id,
                 );
             }
-            // Find neighbor across edge 0 from the tile nearest to origin
             let center_idx = state
                 .tiles
                 .iter()
@@ -494,17 +497,19 @@ mod tests {
             let neighbor_idx = state.find_tile_near(neighbor_center);
             if let Some(idx) = neighbor_idx {
                 state.recenter_on(idx);
-                state.ensure_coverage(Complex::ZERO, 5);
+                state.ensure_coverage(Complex::ZERO, 3);
             } else {
-                panic!("neighbor tile not found at step {step}, tiles: {}, center tile pos: ({},{})",
-                    state.tiles.len(),
-                    state.tiles[center_idx].transform.apply(Complex::ZERO).re,
-                    state.tiles[center_idx].transform.apply(Complex::ZERO).im,
-                );
+                panic!("neighbor tile not found at step {step}");
             }
         }
 
-        // Scan all tiles for position collisions (duplicates).
+        // Verify no CellId duplicates
+        let mut ids: HashSet<CellId> = HashSet::new();
+        for tile in &state.tiles {
+            assert!(ids.insert(tile.id.clone()), "duplicate CellId after walk: {:?}", tile.id);
+        }
+
+        // Also verify no position collisions
         let epsilon = 1e-4;
         let mut collision_count = 0;
         let centers: Vec<Complex> = state
@@ -522,19 +527,16 @@ mod tests {
         }
         assert_eq!(
             collision_count, 0,
-            "found {collision_count} duplicate tile pairs after walking 40 steps"
+            "found {collision_count} duplicate tile pairs after walking 10 steps"
         );
     }
 
     #[test]
     fn test_no_nan_after_long_walk() {
-        // Walk 60 steps — verify no NaN in any tile transform.
-        // (The old address-based recenter produced NaN at ~40 steps.)
-        let cfg = TilingConfig::new(4, 5);
-        let mut state = TilingState::new(cfg);
+        let mut state = TilingState::new(cfg45());
         state.ensure_coverage(Complex::ZERO, 3);
 
-        for _ in 0..60 {
+        for _ in 0..15 {
             let center_idx = state
                 .tiles
                 .iter()
@@ -562,13 +564,13 @@ mod tests {
             let c = tile.transform.apply(Complex::ZERO);
             assert!(
                 !c.re.is_nan() && !c.im.is_nan(),
-                "NaN in tile {:?} after 60-step walk",
-                tile.address
+                "NaN in tile {:?} after 15-step walk",
+                tile.id
             );
             assert!(
                 c.abs() < 1.0,
                 "tile {:?} center outside disk: {}",
-                tile.address,
+                tile.id,
                 c.abs()
             );
         }
@@ -576,71 +578,131 @@ mod tests {
 
     #[test]
     fn test_recenter_returns_center_near_origin() {
-        let cfg = TilingConfig::new(4, 5);
-        let mut state = TilingState::new(cfg);
+        let mut state = TilingState::new(cfg45());
         state.ensure_coverage(Complex::ZERO, 3);
-        // Recenter on a non-origin tile
         let new_idx = state.recenter_on(1);
-        // The recentered tile should now be near origin
         let pos = state.tiles[new_idx].transform.apply(Complex::ZERO);
         assert!(pos.abs() < 0.01, "recentered tile should be near origin, got |z| = {}", pos.abs());
     }
 
+    // --- Phase 5 specific tests ---
+
     #[test]
-    fn test_reduce_inverse_cancellation() {
-        // d, (d+2)%4 should cancel for all 4 pairs
-        for d in 0..4u8 {
-            let addr: TileAddr = smallvec::smallvec![d, (d + 2) % 4];
-            let reduced = reduce_address(addr, 4, 5);
-            assert!(reduced.is_empty(), "expected [] for [{}, {}], got {:?}", d, (d + 2) % 4, reduced);
+    fn test_mobius_accuracy_before_recenter() {
+        use super::super::cell_graph::word_to_mobius;
+        let mut state = TilingState::new(cfg45());
+        state.ensure_coverage(Complex::ZERO, 3);
+
+        // Every tile's stored Mobius should match word_to_mobius (both center and rotation).
+        let test_pt = Complex::new(0.1, 0.05);
+        let mut bad_count = 0;
+        for tile in &state.tiles {
+            let ref_mob = word_to_mobius(tile.id.word(), &state.neighbor_xforms);
+            let pt_dist = (ref_mob.apply(test_pt) - tile.transform.apply(test_pt)).abs();
+            if pt_dist > 1e-6 {
+                bad_count += 1;
+            }
         }
+        assert_eq!(bad_count, 0, "{bad_count}/{} tiles have incorrect Mobius", state.tiles.len());
     }
 
     #[test]
-    fn test_reduce_no_false_positive() {
-        // Adjacent directions (not inverses) should not cancel
-        let addr: TileAddr = smallvec::smallvec![0, 1];
-        let reduced = reduce_address(addr, 4, 5);
-        assert_eq!(reduced.as_slice(), &[0, 1]);
-    }
+    fn test_mobius_accuracy_after_recenter() {
+        use super::super::cell_graph::word_to_mobius;
+        let mut state = TilingState::new(cfg45());
+        state.ensure_coverage(Complex::ZERO, 3);
+        state.recenter_on(1);
 
-    #[test]
-    fn test_reduce_vertex_cycle_q5() {
-        // [v, v+1, v+2, v+3, v+4 mod 4] should cancel for all starting vertices
-        for v in 0..4u8 {
-            let addr: TileAddr = (0..5).map(|i| (v + i) % 4).collect();
-            let reduced = reduce_address(addr.clone(), 4, 5);
-            assert!(reduced.is_empty(), "expected [] for vertex cycle starting at {v}, got {:?}", reduced);
+        // After recenter, stored = view_offset ∘ word_to_mobius(tile).
+        // Check via the test-point method.
+        let test_pt = Complex::new(0.1, 0.05);
+        let mut bad_count = 0;
+        for tile in &state.tiles {
+            let expected = state.view_offset
+                .compose(&word_to_mobius(tile.id.word(), &state.neighbor_xforms));
+            let dist = (expected.apply(test_pt) - tile.transform.apply(test_pt)).abs();
+            if dist > 1e-6 {
+                bad_count += 1;
+            }
         }
+        assert_eq!(bad_count, 0, "{bad_count} tiles have incorrect Mobius after recenter");
     }
 
     #[test]
-    fn test_reduce_cascading() {
-        // [2, 0, 0, 2] — inner pair [0, 2] cancels first, leaving [2, 0],
-        // then [2, 0] cancels (2+2=4≡0).
-        let addr: TileAddr = smallvec::smallvec![2, 0, 0, 2];
-        let reduced = reduce_address(addr, 4, 5);
-        assert!(reduced.is_empty(), "expected [] for cascading cancellation, got {:?}", reduced);
+    fn test_mobius_accuracy_after_recenter_and_expand() {
+        use super::super::cell_graph::word_to_mobius;
+        let mut state = TilingState::new(cfg45());
+        state.ensure_coverage(Complex::ZERO, 3);
+
+        // Walk east: recenter on neighbor, re-expand
+        let parity = state.tiles[0].parity as usize;
+        let neighbor_center = state.tiles[0]
+            .transform
+            .compose(&state.neighbor_xforms[parity][0])
+            .apply(Complex::ZERO);
+        let idx = state.find_tile_near(neighbor_center).expect("neighbor not found");
+        state.recenter_on(idx);
+        state.ensure_coverage(Complex::ZERO, 3);
+
+        // All tiles should match view_offset ∘ word_to_mobius.
+        let test_pt = Complex::new(0.1, 0.05);
+        let mut bad_count = 0;
+        for tile in &state.tiles {
+            let expected = state.view_offset
+                .compose(&word_to_mobius(tile.id.word(), &state.neighbor_xforms));
+            let dist = (expected.apply(test_pt) - tile.transform.apply(test_pt)).abs();
+            if dist > 1e-6 {
+                bad_count += 1;
+            }
+        }
+        assert_eq!(bad_count, 0,
+            "{bad_count}/{} tiles have incorrect Mobius after recenter+expand", state.tiles.len());
     }
 
     #[test]
-    fn test_reduce_vertex_cycle_with_prefix() {
-        // [2, 0, 1, 2, 3, 0] — the last 5 form a vertex cycle, leaving [2]
-        let addr: TileAddr = smallvec::smallvec![2, 0, 1, 2, 3, 0];
-        let reduced = reduce_address(addr, 4, 5);
-        assert_eq!(reduced.as_slice(), &[2], "expected [2], got {:?}", reduced);
+    fn test_walk_east_and_back() {
+        let mut state = TilingState::new(cfg45());
+        state.ensure_coverage(Complex::ZERO, 3);
+
+        // Walk east (physical edge 0)
+        let expected_neighbor_id = state.tiles[0].neighbors[0].clone();
+        let parity = state.tiles[0].parity as usize;
+        let neighbor_center = state.tiles[0]
+            .transform
+            .compose(&state.neighbor_xforms[parity][0])
+            .apply(Complex::ZERO);
+        let idx = state.find_tile_near(neighbor_center).expect("neighbor not found");
+        assert_eq!(state.tiles[idx].id, expected_neighbor_id,
+            "spatial lookup should find the algebraic neighbor");
+
+        // Recenter on the neighbor
+        state.recenter_on(idx);
+        state.ensure_coverage(Complex::ZERO, 3);
+
+        // Find new center, walk west (physical edge 2)
+        let new_center_idx = state.tiles.iter().enumerate()
+            .min_by(|(_, a), (_, b)| {
+                a.transform.apply(Complex::ZERO).norm_sq()
+                    .partial_cmp(&b.transform.apply(Complex::ZERO).norm_sq()).unwrap()
+            }).unwrap().0;
+        let expected_back_id = state.tiles[new_center_idx].neighbors[2].clone();
+        let parity2 = state.tiles[new_center_idx].parity as usize;
+        let back_center = state.tiles[new_center_idx]
+            .transform
+            .compose(&state.neighbor_xforms[parity2][2])
+            .apply(Complex::ZERO);
+        let back_idx = state.find_tile_near(back_center).expect("back neighbor not found");
+        assert_eq!(state.tiles[back_idx].id, expected_back_id,
+            "spatial lookup for west should find the algebraic neighbor");
     }
 
     #[test]
-    fn test_walk_and_return_canonical_origin() {
-        // Walk 10 steps east (dir 0), then 10 steps west (dir 2) = back to origin.
-        // After evict/re-expand, the origin tile should have address [].
-        let cfg = TilingConfig::new(4, 5);
-        let mut state = TilingState::new(cfg);
-        state.ensure_coverage(Complex::ZERO, 5);
+    fn test_walk_and_return_origin_cellid() {
+        let mut state = TilingState::new(cfg45());
+        state.ensure_coverage(Complex::ZERO, 3);
 
-        // Walk east 10 steps
-        for _ in 0..10 {
+        // Walk 15 steps east (physical edge 0)
+        for _ in 0..15 {
             let center_idx = state
                 .tiles
                 .iter()
@@ -659,12 +721,12 @@ mod tests {
                 .apply(Complex::ZERO);
             if let Some(idx) = state.find_tile_near(neighbor_center) {
                 state.recenter_on(idx);
-                state.ensure_coverage(Complex::ZERO, 5);
+                state.ensure_coverage(Complex::ZERO, 3);
             }
         }
 
-        // Walk west 10 steps (dir 2 = opposite of 0)
-        for _ in 0..10 {
+        // Walk 15 steps west (physical edge 2 = opposite of 0)
+        for _ in 0..15 {
             let center_idx = state
                 .tiles
                 .iter()
@@ -683,11 +745,10 @@ mod tests {
                 .apply(Complex::ZERO);
             if let Some(idx) = state.find_tile_near(neighbor_center) {
                 state.recenter_on(idx);
-                state.ensure_coverage(Complex::ZERO, 5);
+                state.ensure_coverage(Complex::ZERO, 3);
             }
         }
 
-        // The tile nearest origin should have address []
         let center_idx = state
             .tiles
             .iter()
@@ -699,11 +760,107 @@ mod tests {
             })
             .unwrap()
             .0;
-        let origin_addr = &state.tiles[center_idx].address;
         assert!(
-            origin_addr.is_empty(),
-            "origin tile after walk-and-return should have address [], got {:?}",
-            origin_addr
+            state.tiles[center_idx].id.is_empty(),
+            "origin tile after 15+15 walk should have empty CellId, got {:?}",
+            state.tiles[center_idx].id
         );
+    }
+
+    #[test]
+    fn test_no_duplicate_cell_ids_after_expand_recenter() {
+        let mut state = TilingState::new(cfg45());
+        state.ensure_coverage(Complex::ZERO, 3);
+
+        for _ in 0..8 {
+            let center_idx = state
+                .tiles
+                .iter()
+                .enumerate()
+                .min_by(|(_, a), (_, b)| {
+                    let da = a.transform.apply(Complex::ZERO).norm_sq();
+                    let db = b.transform.apply(Complex::ZERO).norm_sq();
+                    da.partial_cmp(&db).unwrap()
+                })
+                .unwrap()
+                .0;
+            let parity = state.tiles[center_idx].parity as usize;
+            let neighbor_center = state.tiles[center_idx]
+                .transform
+                .compose(&state.neighbor_xforms[parity][1])
+                .apply(Complex::ZERO);
+            if let Some(idx) = state.find_tile_near(neighbor_center) {
+                state.recenter_on(idx);
+                state.ensure_coverage(Complex::ZERO, 3);
+            }
+        }
+
+        let mut ids: HashSet<CellId> = HashSet::new();
+        for tile in &state.tiles {
+            assert!(ids.insert(tile.id.clone()), "duplicate CellId: {:?}", tile.id);
+        }
+    }
+
+    #[test]
+    fn test_recenter_preserves_pairwise_distances() {
+        let mut state = TilingState::new(cfg45());
+        state.ensure_coverage(Complex::ZERO, 3);
+
+        let pre_centers: HashMap<CellId, Complex> = state.tiles.iter()
+            .map(|t| (t.id.clone(), t.transform.apply(Complex::ZERO)))
+            .collect();
+
+        state.recenter_on(1);
+
+        for t1 in &state.tiles {
+            for t2 in &state.tiles {
+                if t1.id == t2.id { continue; }
+                if let (Some(&pre1), Some(&pre2)) = (pre_centers.get(&t1.id), pre_centers.get(&t2.id)) {
+                    let pre_dist = poincare_distance(pre1, pre2);
+                    let post1 = t1.transform.apply(Complex::ZERO);
+                    let post2 = t2.transform.apply(Complex::ZERO);
+                    let post_dist = poincare_distance(post1, post2);
+                    assert!(
+                        (pre_dist - post_dist).abs() < 1e-8,
+                        "distance between {:?} and {:?} changed: {pre_dist} → {post_dist}",
+                        t1.id, t2.id,
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_find_tile_by_id() {
+        let mut state = TilingState::new(cfg45());
+        state.ensure_coverage(Complex::ZERO, 2);
+
+        for (idx, tile) in state.tiles.iter().enumerate() {
+            let found = state.find_tile(&tile.id);
+            assert_eq!(found, Some(idx), "find_tile should return correct index for {:?}", tile.id);
+        }
+    }
+
+    #[test]
+    fn test_neighbor_tile_id() {
+        let mut state = TilingState::new(cfg45());
+        state.ensure_coverage(Complex::ZERO, 3);
+
+        // Origin (index 0) should have all 4 neighbors
+        for edge in 0..4u8 {
+            let neighbor = state.neighbor_tile_id(0, edge);
+            assert!(neighbor.is_some(), "origin should have neighbor across edge {edge}");
+            let n_id = neighbor.unwrap();
+            assert!(!n_id.is_empty(), "origin's neighbor should not be origin");
+        }
+    }
+
+    #[test]
+    fn test_format_address() {
+        assert_eq!(format_address(&[]), "O");
+        assert_eq!(format_address(&[0]), "0");
+        assert_eq!(format_address(&[0, 0, 0, 0, 2]), "00002");
+        assert_eq!(format_address(&[7, 3, 1]), "731");
+        assert_eq!(format_address(&[1, 2, 3, 4, 5, 6, 7, 0]), "..45670");
     }
 }

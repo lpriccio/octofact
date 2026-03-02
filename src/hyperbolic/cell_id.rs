@@ -4,8 +4,6 @@
 //! chosen from the 4 orientations of that cell. An `OrientedCell` pairs a CellId
 //! with an orientation (0–3) tracking which edge the turtle faces.
 
-// Module is used only in tests until Phase 5 integration.
-#![allow(dead_code)]
 
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -27,6 +25,7 @@ impl CellId {
     }
 
     /// Create a CellId from an already-canonical word. No validation.
+    #[allow(dead_code)]
     pub fn from_canonical(word: Word) -> Self {
         Self { word }
     }
@@ -70,6 +69,7 @@ pub struct OrientedCell {
     pub id: CellId,
     /// 0–3: how many B (left turns) from the canonical orientation to reach
     /// the orientation of the word that produced this cell.
+    #[allow(dead_code)]
     pub orientation: u8,
 }
 

@@ -4,8 +4,6 @@
 //! 10 confluent rewrite rules reduce any word to a unique canonical form.
 //! (The 11th rule A→a is handled at parse time by our byte encoding.)
 
-// Module is used only in tests until Phase 5 integration.
-#![allow(dead_code)]
 
 /// Byte encoding for the turtle alphabet.
 pub const A: u8 = 0; // move forward & flip
@@ -96,6 +94,7 @@ pub fn reduce(word: &mut Word, rules: &[RewriteRule]) {
 }
 
 /// Reduce a word, returning the result (non-mutating convenience wrapper).
+#[allow(dead_code)]
 pub fn reduced(word: &[u8], rules: &[RewriteRule]) -> Word {
     let mut w = word.to_vec();
     reduce(&mut w, rules);
@@ -151,6 +150,7 @@ pub fn word_to_string(word: &[u8]) -> String {
 }
 
 /// Parse a string into a word. 'e' or empty string → empty word.
+#[allow(dead_code)]
 pub fn string_to_word(s: &str) -> Word {
     if s.is_empty() || s == "e" {
         return vec![];

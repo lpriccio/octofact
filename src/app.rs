@@ -12,7 +12,8 @@ use crate::game::inventory::Inventory;
 use crate::game::recipes::RecipeIndex;
 use crate::game::world::{Direction, EntityId, StructureKind, WorldState};
 use crate::hyperbolic::poincare::{canonical_polygon, polygon_disk_radius, Complex, TilingConfig};
-use crate::hyperbolic::tiling::{format_address, TileAddr};
+use crate::hyperbolic::cell_id::CellId;
+use crate::hyperbolic::tiling::format_cell_id;
 use crate::render::camera::Camera;
 use crate::render::engine::{project_to_screen, RenderEngine};
 use crate::render::instances::{BeltInstance, ItemInstance, MachineInstance};
@@ -32,7 +33,7 @@ struct ClickResult {
 /// State for dragging belts along a gridline.
 struct BeltDrag {
     tile_idx: usize,
-    address: TileAddr,
+    id: CellId,
     /// Fixed axis: true = horizontal (fixed gy), false = vertical (fixed gx)
     horizontal: bool,
     /// The fixed coordinate on the constrained axis
@@ -207,7 +208,7 @@ impl App {
             let tile = &self.renderer.as_ref().unwrap().tiling.tiles[result.tile_idx];
             log::info!(
                 "{};{},{}",
-                format_address(&tile.address),
+                format_cell_id(&tile.id),
                 result.grid_xy.0,
                 result.grid_xy.1,
             );
@@ -234,7 +235,7 @@ impl App {
             let tile = &running.tiling.tiles[result.tile_idx];
             self.ui.flash_label = format!(
                 "{};{},{}",
-                format_address(&tile.address),
+                format_cell_id(&tile.id),
                 result.grid_xy.0,
                 result.grid_xy.1,
             );
@@ -404,9 +405,9 @@ impl App {
             let edge = direction.tiling_edge_index();
             let mirror = cross_tile_mirror(ahead);
             let running = self.renderer.as_ref().unwrap();
-            if let Some(neighbor_addr) = running.tiling.neighbor_tile_addr(tile_idx, edge) {
+            if let Some(neighbor_id) = running.tiling.neighbor_tile_id(tile_idx, edge) {
                 if let Some(neighbor_entity) = find_same_dir_belt_at(
-                    &self.world, &neighbor_addr, mirror, direction,
+                    &self.world, neighbor_id.word(), mirror, direction,
                 ) {
                     self.belt_network.link_output_to_input(entity, neighbor_entity);
                 }
@@ -418,9 +419,9 @@ impl App {
             let edge = direction.opposite().tiling_edge_index();
             let mirror = cross_tile_mirror(behind);
             let running = self.renderer.as_ref().unwrap();
-            if let Some(neighbor_addr) = running.tiling.neighbor_tile_addr(tile_idx, edge) {
+            if let Some(neighbor_id) = running.tiling.neighbor_tile_id(tile_idx, edge) {
                 if let Some(neighbor_entity) = find_same_dir_belt_at(
-                    &self.world, &neighbor_addr, mirror, direction,
+                    &self.world, neighbor_id.word(), mirror, direction,
                 ) {
                     self.belt_network.link_output_to_input(neighbor_entity, entity);
                 }
@@ -734,9 +735,9 @@ impl App {
         };
 
         let running = self.renderer.as_ref().unwrap();
-        let address = running.tiling.tiles[result.tile_idx].address.clone();
+        let cell_id = running.tiling.tiles[result.tile_idx].id.clone();
 
-        if self.try_place_at(result.tile_idx, &address, result.grid_xy, &mode) {
+        if self.try_place_at(result.tile_idx, cell_id.word(), result.grid_xy, &mode) {
             // Lock drag axis parallel to the belt's facing direction
             let horizontal = matches!(mode.direction, Direction::East | Direction::West);
             let (fixed_coord, last_free) = if horizontal {
@@ -746,7 +747,7 @@ impl App {
             };
             self.ui.belt_drag = Some(BeltDrag {
                 tile_idx: result.tile_idx,
-                address,
+                id: cell_id,
                 horizontal,
                 fixed_coord,
                 last_free,
@@ -769,7 +770,7 @@ impl App {
         let horizontal = drag.horizontal;
         let fixed_coord = drag.fixed_coord;
         let last_free = drag.last_free;
-        let old_address = drag.address.clone();
+        let old_id = drag.id.clone();
         let old_tile_idx = drag.tile_idx;
         let khs = self.klein_half_side;
 
@@ -813,7 +814,7 @@ impl App {
             let mut current = last_free + step;
             loop {
                 let grid_xy = if horizontal { (current, fixed_coord) } else { (fixed_coord, current) };
-                self.try_place_at(old_tile_idx, &old_address, grid_xy, &mode);
+                self.try_place_at(old_tile_idx, old_id.word(), grid_xy, &mode);
                 if current == target_free { break; }
                 current += step;
             }
@@ -832,7 +833,7 @@ impl App {
                 let mut current = last_free + step;
                 loop {
                     let grid_xy = if horizontal { (current, fixed_coord) } else { (fixed_coord, current) };
-                    self.try_place_at(old_tile_idx, &old_address, grid_xy, &mode);
+                    self.try_place_at(old_tile_idx, old_id.word(), grid_xy, &mode);
                     if current == old_target { break; }
                     current += step;
                 }
@@ -855,9 +856,9 @@ impl App {
                 }
 
                 // Get new tile info (immutable borrow, then drop before mutable ops)
-                let (new_tile_idx, new_address) = {
+                let (new_tile_idx, new_cell_id) = {
                     let running = self.renderer.as_ref().unwrap();
-                    (result.tile_idx, running.tiling.tiles[result.tile_idx].address.clone())
+                    (result.tile_idx, running.tiling.tiles[result.tile_idx].id.clone())
                 };
 
                 // For {4,n} (even p), grids align straight across edges.
@@ -875,7 +876,7 @@ impl App {
                 let mut current = new_start;
                 loop {
                     let grid_xy = if horizontal { (current, fixed_coord) } else { (fixed_coord, current) };
-                    self.try_place_at(new_tile_idx, &new_address, grid_xy, &mode);
+                    self.try_place_at(new_tile_idx, new_cell_id.word(), grid_xy, &mode);
                     if current == new_target { break; }
                     current += inward;
                 }
@@ -883,7 +884,7 @@ impl App {
                 // Switch drag to the new tile
                 self.ui.belt_drag = Some(BeltDrag {
                     tile_idx: new_tile_idx,
-                    address: new_address,
+                    id: new_cell_id,
                     horizontal,
                     fixed_coord,
                     last_free: new_target,
@@ -905,9 +906,9 @@ impl App {
         };
         let address = {
             let running = self.renderer.as_ref().unwrap();
-            running.tiling.tiles[result.tile_idx].address.clone()
+            running.tiling.tiles[result.tile_idx].id.clone()
         };
-        let entities = match self.world.tile_entities(&address) {
+        let entities = match self.world.tile_entities(address.word()) {
             Some(e) => e,
             None => return,
         };
@@ -930,9 +931,9 @@ impl App {
         };
         let address = {
             let running = self.renderer.as_ref().unwrap();
-            running.tiling.tiles[result.tile_idx].address.clone()
+            running.tiling.tiles[result.tile_idx].id.clone()
         };
-        let entities = match self.world.tile_entities(&address) {
+        let entities = match self.world.tile_entities(address.word()) {
             Some(e) => e,
             None => return false,
         };
@@ -972,9 +973,9 @@ impl App {
         };
         let address = {
             let running = self.renderer.as_ref().unwrap();
-            running.tiling.tiles[result.tile_idx].address.clone()
+            running.tiling.tiles[result.tile_idx].id.clone()
         };
-        let entities = match self.world.tile_entities(&address) {
+        let entities = match self.world.tile_entities(address.word()) {
             Some(e) => e,
             None => return false,
         };
@@ -1040,7 +1041,7 @@ impl App {
         }
 
         // Remove from world (handles multi-cell footprints)
-        if let Some(item) = self.world.remove(&address, result.grid_xy) {
+        if let Some(item) = self.world.remove(address.word(), result.grid_xy) {
             self.inventory.add(item, 1);
 
             // Flash feedback
@@ -1086,9 +1087,9 @@ impl App {
         };
         let address = {
             let running = self.renderer.as_ref().unwrap();
-            running.tiling.tiles[result.tile_idx].address.clone()
+            running.tiling.tiles[result.tile_idx].id.clone()
         };
-        let entities = match self.world.tile_entities(&address) {
+        let entities = match self.world.tile_entities(address.word()) {
             Some(e) => e,
             None => return false,
         };
@@ -1129,14 +1130,14 @@ impl App {
                 Some(p) => (p.gx as i32, p.gy as i32),
                 None => return false,
             };
-            self.auto_connect_machine_ports(entity, &address, origin, new_dir, mt);
+            self.auto_connect_machine_ports(entity, address.word(), origin, new_dir, mt);
         }
         if kind == StructureKind::Storage {
             let origin = match self.world.position(entity) {
                 Some(p) => (p.gx as i32, p.gy as i32),
                 None => return false,
             };
-            self.auto_connect_storage_to_belts(entity, &address, origin, new_dir);
+            self.auto_connect_storage_to_belts(entity, address.word(), origin, new_dir);
         }
 
         // Flash feedback
@@ -1198,7 +1199,7 @@ impl App {
         re.belt_instances.clear();
         for &(tile_idx, combined) in &visible {
             let tile = &re.tiling.tiles[tile_idx];
-            let entities = match self.world.tile_entities(&tile.address) {
+            let entities = match self.world.tile_entities(tile.id.word()) {
                 Some(e) => e,
                 None => continue,
             };
@@ -1231,7 +1232,7 @@ impl App {
         re.machine_instances.clear();
         for &(tile_idx, combined) in &visible {
             let tile = &re.tiling.tiles[tile_idx];
-            let entities = match self.world.tile_entities(&tile.address) {
+            let entities = match self.world.tile_entities(tile.id.word()) {
                 Some(e) => e,
                 None => continue,
             };
@@ -1304,7 +1305,7 @@ impl App {
         let divisions = 64.0;
         for &(tile_idx, combined) in &visible {
             let tile = &re.tiling.tiles[tile_idx];
-            let entities = match self.world.tile_entities(&tile.address) {
+            let entities = match self.world.tile_entities(tile.id.word()) {
                 Some(e) => e,
                 None => continue,
             };
@@ -1369,7 +1370,7 @@ impl App {
                     if let Some((sx, sy)) = project_to_screen(world_pos, &view_proj, width, height) {
                         let lx = sx / scale;
                         let ly = sy / scale;
-                        let text = format_address(&tile.address);
+                        let text = format_cell_id(&tile.id);
                         ui.put(
                             egui::Rect::from_min_size(
                                 egui::pos2(lx - 20.0, ly - 8.0),

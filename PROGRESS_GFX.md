@@ -25,23 +25,23 @@ Keep it compact — only primitives we'll actually use across multiple machines.
 
 ### Tasks
 
-- [ ] Audit `color_cycle` usage — confirm it can serve as animation time or add a `time` field to `Globals`
-- [ ] Add SDF shape primitives to `common.wgsl`:
+- [x] Audit `color_cycle` usage — confirm it can serve as animation time or add a `time` field to `Globals`
+- [x] Add SDF shape primitives to `common.wgsl`:
   - `sdf_circle(p, r)` — distance to circle boundary
   - `sdf_box(p, half_size)` — distance to axis-aligned rectangle
   - `sdf_segment(p, a, b)` — distance to line segment
   - `sdf_arc(p, r, angle_start, angle_span)` — distance to circular arc
-- [ ] Add SDF operations to `common.wgsl`:
+- [x] Add SDF operations to `common.wgsl`:
   - `sdf_smooth_union(d1, d2, k)` — smooth minimum (soft blend)
   - `sdf_annular(d, thickness)` — turn any SDF into a ring/outline: `abs(d) - thickness`
-- [ ] Add rendering helpers to `common.wgsl`:
+- [x] Add rendering helpers to `common.wgsl`:
   - `sdf_fill(d)` — anti-aliased fill using `smoothstep` + `fwidth`
   - `sdf_stroke(d, width)` — anti-aliased stroke
   - `rot2(angle)` — 2D rotation matrix (`mat2x2<f32>`)
-- [ ] Add simple procedural noise to `common.wgsl`:
+- [x] Add simple procedural noise to `common.wgsl`:
   - `hash21(p: vec2<f32>) -> f32` — pseudo-random hash
   - `vnoise(p: vec2<f32>) -> f32` — smooth value noise (bilinear interpolation of hashed grid)
-- [ ] Verify the build compiles and existing visuals are unchanged (no regressions)
+- [x] Verify the build compiles and existing visuals are unchanged (no regressions)
 
 ### Design Notes
 

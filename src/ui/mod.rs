@@ -8,3 +8,4 @@ pub mod placement;
 pub mod machine;
 pub mod splitter;
 pub mod storage;
+pub mod blueprint;

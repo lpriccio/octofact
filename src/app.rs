@@ -6,7 +6,7 @@ use winit::{
     window::{Window, WindowId},
 };
 
-use crate::game::blueprint::{self, Clipboard};
+use crate::game::blueprint::{self, BlueprintFile, Clipboard};
 use crate::game::config::GameConfig;
 use crate::game::input::{GameAction, InputState};
 use crate::game::inventory::Inventory;
@@ -108,6 +108,10 @@ pub struct UiState {
     pub selection: Option<SelectionState>,
     /// Whether paste mode is active (Ctrl-V with clipboard).
     pub paste_mode: bool,
+    /// Whether the blueprint manager window is open (N key toggle).
+    pub blueprint_manager_open: bool,
+    /// Persistent state for the blueprint manager UI.
+    pub blueprint_manager_state: crate::ui::blueprint::BlueprintManagerState,
 }
 
 impl UiState {
@@ -130,11 +134,13 @@ impl UiState {
             blueprint_select: false,
             selection: None,
             paste_mode: false,
+            blueprint_manager_open: false,
+            blueprint_manager_state: crate::ui::blueprint::BlueprintManagerState::new(),
         }
     }
 
     fn is_panel_open(&self) -> bool {
-        self.settings_open || self.inventory_open || self.machine_panel_entity.is_some() || self.splitter_panel_entity.is_some() || self.storage_panel_entity.is_some()
+        self.settings_open || self.inventory_open || self.blueprint_manager_open || self.machine_panel_entity.is_some() || self.splitter_panel_entity.is_some() || self.storage_panel_entity.is_some()
     }
 }
 
@@ -2298,6 +2304,90 @@ impl App {
             }
         }
 
+        // Blueprint manager window
+        {
+            let egui_ctx = re.egui.ctx.clone();
+            if let Some(action) = crate::ui::blueprint::blueprint_manager(
+                &egui_ctx,
+                &mut self.ui.blueprint_manager_open,
+                &mut self.ui.blueprint_manager_state,
+                self.clipboard.as_ref(),
+                self.cfg.q,
+                &re.icon_atlas,
+            ) {
+                use crate::ui::blueprint::BlueprintAction;
+                match action {
+                    BlueprintAction::LoadToClipboard(path) => {
+                        match blueprint::load_blueprint(&path, self.cfg.q) {
+                            Ok(file) => {
+                                self.clipboard = Some(file.to_clipboard());
+                                self.ui.flash_label = format!("Loaded blueprint '{}'", file.name);
+                                self.ui.flash_timer = 2.0;
+                                self.ui.flash_screen_pos = None;
+                                self.ui.blueprint_manager_state.invalidate();
+                            }
+                            Err(e) => {
+                                self.ui.flash_label = format!("Load failed: {e}");
+                                self.ui.flash_timer = 3.0;
+                                self.ui.flash_screen_pos = None;
+                            }
+                        }
+                    }
+                    BlueprintAction::SaveClipboard(name) => {
+                        if let Some(clip) = &self.clipboard {
+                            let file = BlueprintFile::from_clipboard(clip, name.clone());
+                            match blueprint::save_blueprint(&file) {
+                                Ok(_path) => {
+                                    self.ui.flash_label = format!("Saved blueprint '{name}'");
+                                    self.ui.flash_timer = 2.0;
+                                    self.ui.flash_screen_pos = None;
+                                    self.ui.blueprint_manager_state.invalidate();
+                                }
+                                Err(e) => {
+                                    self.ui.flash_label = format!("Save failed: {e}");
+                                    self.ui.flash_timer = 3.0;
+                                    self.ui.flash_screen_pos = None;
+                                }
+                            }
+                        }
+                    }
+                    BlueprintAction::Rename(path, new_name) => {
+                        match blueprint::rename_blueprint(&path, &new_name) {
+                            Ok(_new_path) => {
+                                self.ui.flash_label = format!("Renamed to '{new_name}'");
+                                self.ui.flash_timer = 2.0;
+                                self.ui.flash_screen_pos = None;
+                                self.ui.blueprint_manager_state.invalidate();
+                            }
+                            Err(e) => {
+                                self.ui.flash_label = format!("Rename failed: {e}");
+                                self.ui.flash_timer = 3.0;
+                                self.ui.flash_screen_pos = None;
+                            }
+                        }
+                    }
+                    BlueprintAction::Delete(path) => {
+                        match blueprint::delete_blueprint(&path) {
+                            Ok(()) => {
+                                self.ui.flash_label = "Blueprint deleted".to_string();
+                                self.ui.flash_timer = 2.0;
+                                self.ui.flash_screen_pos = None;
+                                self.ui.blueprint_manager_state.invalidate();
+                            }
+                            Err(e) => {
+                                self.ui.flash_label = format!("Delete failed: {e}");
+                                self.ui.flash_timer = 3.0;
+                                self.ui.flash_screen_pos = None;
+                            }
+                        }
+                    }
+                    BlueprintAction::Close => {
+                        self.ui.blueprint_manager_open = false;
+                    }
+                }
+            }
+        }
+
         // Blueprint selection rectangle overlay
         if let Some(sel) = &self.ui.selection {
             let khs = self.klein_half_side;
@@ -2711,6 +2801,17 @@ impl ApplicationHandler for App {
                             "blueprint select: {}",
                             if self.ui.blueprint_select { "ON" } else { "OFF" }
                         );
+                    }
+
+                    // N key: toggle blueprint manager window
+                    if code == winit::keyboard::KeyCode::KeyN
+                        && !self.input_state.ctrl_held
+                        && !self.input_state.shift_held
+                    {
+                        self.ui.blueprint_manager_open = !self.ui.blueprint_manager_open;
+                        if self.ui.blueprint_manager_open {
+                            self.ui.blueprint_manager_state.invalidate();
+                        }
                     }
 
                     // Ctrl+C: copy selected structures to clipboard

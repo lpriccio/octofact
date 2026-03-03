@@ -199,21 +199,21 @@ handle.
 
 ### Tasks
 
-- [ ] Create `src/ui/blueprint.rs` following existing window patterns (inventory.rs, tech_tree.rs)
-- [ ] Define `BlueprintAction` enum: `LoadToClipboard(PathBuf)`, `SaveClipboard(String)`, `Rename(PathBuf, String)`, `Delete(PathBuf)`
-- [ ] Left panel: scrollable list of saved blueprints with metadata columns:
+- [x] Create `src/ui/blueprint.rs` following existing window patterns (inventory.rs, tech_tree.rs)
+- [x] Define `BlueprintAction` enum: `LoadToClipboard(PathBuf)`, `SaveClipboard(String)`, `Rename(PathBuf, String)`, `Delete(PathBuf)`
+- [x] Left panel: scrollable list of saved blueprints with metadata columns:
   - Name, dimensions (W×H), entity count, save date
   - Click to select, highlight selected row
-- [ ] Right panel: 2D top-down schematic preview of selected blueprint:
+- [x] Right panel: 2D top-down schematic preview of selected blueprint:
   - Render via `egui::Painter` — colored rectangles for structures, arrows for belt direction
   - Scale to fit panel, maintain aspect ratio
-- [ ] Action buttons: Load to Clipboard, Save Current Clipboard, Rename, Delete
+- [x] Action buttons: Load to Clipboard, Save Current Clipboard, Rename, Delete
   - Save prompts for a name via inline text input
   - Delete prompts for confirmation
-- [ ] Item cost summary table: list all required items and quantities for the selected blueprint
-- [ ] Keybind hints footer: display Ctrl-C / Ctrl-V / Ctrl-X (Cmd on macOS) shortcuts
-- [ ] Wire blueprint manager into app — add keybind to open/close the window
-- [ ] Register `src/ui/blueprint.rs` in `src/ui/mod.rs`
+- [x] Item cost summary table: list all required items and quantities for the selected blueprint
+- [x] Keybind hints footer: display Ctrl-C / Ctrl-V / Ctrl-X (Cmd on macOS) shortcuts
+- [x] Wire blueprint manager into app — add keybind to open/close the window
+- [x] Register `src/ui/blueprint.rs` in `src/ui/mod.rs`
 
 ### Design Notes
 

@@ -292,7 +292,9 @@ pub fn required_items(clipboard: &Clipboard) -> Vec<(ItemId, u16)> {
         let item = entry.kind.to_item();
         *counts.entry(item).or_insert(0) += 1;
     }
-    counts.into_iter().collect()
+    let mut result: Vec<_> = counts.into_iter().collect();
+    result.sort_by_key(|&(item, _)| item.display_name());
+    result
 }
 
 // --- Virtual coordinate utilities for multi-tile strips ---

@@ -2062,6 +2062,9 @@ impl App {
                             let multi_tile_clip = clip.width > 64 || clip.height > 64 || crosses_x || crosses_y;
 
                             if multi_tile_clip {
+                                // Corner crossing: entire paste is invalid
+                                let corner_blocked = crosses_x && crosses_y;
+
                                 // Multi-tile ghost: build Mobius map per tile_delta
                                 let strip_axis_x = if clip.width > 64 { true }
                                     else if clip.height > 64 { false }
@@ -2070,46 +2073,48 @@ impl App {
                                     std::collections::HashMap::new();
                                 tile_mobius.insert(0, (ma, mb));
 
-                                // Pre-walk strip to find Mobius for each needed delta
-                                for entry in &clip.entries {
-                                    let (offset_x, offset_y) = (gx + entry.offset.0, gy + entry.offset.1);
-                                    let (td, _) = if strip_axis_x {
-                                        blueprint::virtual_to_tile_local(offset_x)
-                                    } else {
-                                        blueprint::virtual_to_tile_local(offset_y)
-                                    };
-                                    if tile_mobius.contains_key(&td) {
-                                        continue;
-                                    }
-                                    // Walk from anchor tile
-                                    let edge = if strip_axis_x {
-                                        if td > 0 { 0u8 } else { 2u8 }
-                                    } else if td > 0 {
-                                        1u8
-                                    } else {
-                                        3u8
-                                    };
-                                    let mut cur = tile_vis_idx;
-                                    let mut found = true;
-                                    for _ in 0..td.unsigned_abs() {
-                                        if let Some(nid) = re.tiling.neighbor_tile_id(cur, edge) {
-                                            if let Some(nidx) = re.tiling.find_tile(&nid) {
-                                                cur = nidx;
+                                if !corner_blocked {
+                                    // Pre-walk strip to find Mobius for each needed delta
+                                    for entry in &clip.entries {
+                                        let (offset_x, offset_y) = (gx + entry.offset.0, gy + entry.offset.1);
+                                        let (td, _) = if strip_axis_x {
+                                            blueprint::virtual_to_tile_local(offset_x)
+                                        } else {
+                                            blueprint::virtual_to_tile_local(offset_y)
+                                        };
+                                        if tile_mobius.contains_key(&td) {
+                                            continue;
+                                        }
+                                        // Walk from anchor tile
+                                        let edge = if strip_axis_x {
+                                            if td > 0 { 0u8 } else { 2u8 }
+                                        } else if td > 0 {
+                                            1u8
+                                        } else {
+                                            3u8
+                                        };
+                                        let mut cur = tile_vis_idx;
+                                        let mut found = true;
+                                        for _ in 0..td.unsigned_abs() {
+                                            if let Some(nid) = re.tiling.neighbor_tile_id(cur, edge) {
+                                                if let Some(nidx) = re.tiling.find_tile(&nid) {
+                                                    cur = nidx;
+                                                } else {
+                                                    found = false;
+                                                    break;
+                                                }
                                             } else {
                                                 found = false;
                                                 break;
                                             }
-                                        } else {
-                                            found = false;
-                                            break;
                                         }
-                                    }
-                                    if found {
-                                        if let Some(&(_, m)) = visible.iter().find(|&&(idx, _)| idx == cur) {
-                                            tile_mobius.insert(td, (
-                                                [m.a.re as f32, m.a.im as f32],
-                                                [m.b.re as f32, m.b.im as f32],
-                                            ));
+                                        if found {
+                                            if let Some(&(_, m)) = visible.iter().find(|&&(idx, _)| idx == cur) {
+                                                tile_mobius.insert(td, (
+                                                    [m.a.re as f32, m.a.im as f32],
+                                                    [m.b.re as f32, m.b.im as f32],
+                                                ));
+                                            }
                                         }
                                     }
                                 }
@@ -2127,18 +2132,43 @@ impl App {
                                     } else {
                                         (offset_x, local_strip)
                                     };
-                                    if let Some(&(entry_ma, entry_mb)) = tile_mobius.get(&td) {
-                                        re.ghost_instances.push(MachineInstance {
-                                            mobius_a: entry_ma,
-                                            mobius_b: entry_mb,
-                                            grid_pos: [local_xy.0 as f32, local_xy.1 as f32],
-                                            machine_type: kind_to_machine_type_float(entry.kind),
-                                            progress: -1.0,
-                                            power_sat: -1.0,
-                                            facing: entry.direction.rotations_from_north() as f32,
+
+                                    // Determine if this entry is blocked due to cell-boundary issues
+                                    let boundary_blocked = if corner_blocked {
+                                        true
+                                    } else {
+                                        // Check if any cell in the footprint falls outside
+                                        // the tile grid on the non-strip axis (third-party cell)
+                                        let (fw, fh) = entry.kind.footprint();
+                                        let fp = entry.direction.rotate_footprint(fw, fh);
+                                        let cells = crate::game::world::occupied_cells(local_xy, fp);
+                                        let off_grid = cells.iter().any(|&(cx, cy)| {
+                                            if strip_axis_x {
+                                                cy < -32 || cy > 31
+                                            } else {
+                                                cx < -32 || cx > 31
+                                            }
                                         });
-                                    }
-                                    // Skip entries whose tile isn't visible
+                                        off_grid || !tile_mobius.contains_key(&td)
+                                    };
+
+                                    // Use anchor tile transform as fallback for entries
+                                    // whose strip tile isn't visible
+                                    let (entry_ma, entry_mb) = if let Some(&t) = tile_mobius.get(&td) {
+                                        t
+                                    } else {
+                                        (ma, mb)
+                                    };
+
+                                    re.ghost_instances.push(MachineInstance {
+                                        mobius_a: entry_ma,
+                                        mobius_b: entry_mb,
+                                        grid_pos: [local_xy.0 as f32, local_xy.1 as f32],
+                                        machine_type: kind_to_machine_type_float(entry.kind),
+                                        progress: if boundary_blocked { -3.0 } else { -1.0 },
+                                        power_sat: -1.0,
+                                        facing: entry.direction.rotations_from_north() as f32,
+                                    });
                                 }
                             } else {
                                 // Single-tile paste ghost preview

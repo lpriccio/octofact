@@ -268,6 +268,11 @@ impl InputState {
         self.just_pressed_actions.contains(&action)
     }
 
+    pub fn clear_active(&mut self) {
+        self.active_actions.clear();
+        self.just_pressed_actions.clear();
+    }
+
     pub fn end_frame(&mut self) {
         self.just_pressed_actions.clear();
     }

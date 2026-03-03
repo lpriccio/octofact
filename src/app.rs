@@ -112,6 +112,8 @@ pub struct UiState {
     pub blueprint_manager_open: bool,
     /// Persistent state for the blueprint manager UI.
     pub blueprint_manager_state: crate::ui::blueprint::BlueprintManagerState,
+    /// True when egui has keyboard focus (e.g. text field), suppresses game hotkeys.
+    pub egui_wants_keyboard: bool,
 }
 
 impl UiState {
@@ -136,6 +138,7 @@ impl UiState {
             paste_mode: false,
             blueprint_manager_open: false,
             blueprint_manager_state: crate::ui::blueprint::BlueprintManagerState::new(),
+            egui_wants_keyboard: false,
         }
     }
 
@@ -2561,6 +2564,7 @@ impl App {
         }
 
         let full_output = re.egui.end_frame(&window);
+        self.ui.egui_wants_keyboard = re.egui.ctx.wants_keyboard_input();
 
         // GPU render passes + submit
         let output = re.draw_and_submit(&full_output)?;
@@ -2725,6 +2729,22 @@ impl ApplicationHandler for App {
                     return;
                 }
 
+                // When egui has keyboard focus (text field etc.), only allow
+                // Escape to close dialogs — skip all other game hotkeys.
+                if self.ui.egui_wants_keyboard {
+                    // Clear held game actions so keys don't get "stuck"
+                    self.input_state.clear_active();
+                    if event.state.is_pressed() && code == winit::keyboard::KeyCode::Escape {
+                        self.ui.settings_open = false;
+                        self.ui.inventory_open = false;
+                        self.ui.blueprint_manager_open = false;
+                        self.ui.machine_panel_entity = None;
+                        self.ui.splitter_panel_entity = None;
+                        self.ui.storage_panel_entity = None;
+                    }
+                    // Still forward to egui below, but don't process game actions
+                    // (fall through to egui event handling at the end of this function)
+                } else {
                 self.input_state.on_key_event(code, event.state.is_pressed());
 
                 // Handle toggle actions on press (before egui eats them)
@@ -2876,6 +2896,7 @@ impl ApplicationHandler for App {
                         }
                     }
                 }
+                } // else: egui does NOT want keyboard
             }
         }
 

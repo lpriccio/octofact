@@ -31,12 +31,14 @@ and records each entity's kind, direction, and relative position.
   - `kind: StructureKind`
   - `direction: Direction`
   - `items: Vec<(ItemId, u16)>` — optional stored contents (for storage buildings)
+  - `recipe: Option<usize>` — selected recipe index for machines
 - [x] Add `Clipboard` struct holding `Vec<BlueprintEntry>`, `width`, `height`, and source `tiling_q`
-- [x] Implement `capture_region(world, tile, top_left, bottom_right) -> Clipboard`:
+- [x] Implement `capture_region(world, machine_pool, tile, top_left, bottom_right) -> Clipboard`:
   - Scan rectangle via `WorldState::tile_entities()`
   - Skip non-origin cells (`is_origin()`) to deduplicate multi-cell entities
   - Record each entity's `kind()`, `direction()`, and relative offset
   - For storage entities, snapshot stored items
+  - For machines, snapshot recipe selection
 - [x] Add selection mode toggle — `B` key enters box-select mode within current tile
 - [x] Implement click-drag box selection: track start cell on mouse-down, highlight rectangle on drag, finalize on mouse-up
 - [x] Ctrl-C handler: call `capture_region()` with selected rectangle, store result in `App.clipboard`
@@ -48,9 +50,9 @@ and records each entity's kind, direction, and relative position.
 
 ### Design Notes
 
-**Selection scope:** Selection is limited to a single tile (one hyperbolic cell).
-Cross-tile blueprints would require address-relative positioning which adds
-significant complexity — defer to a future phase.
+**Selection scope:** Selection supports 1×n tile strips along one axis.
+Cross-tile blueprints use virtual coordinates (local + delta*64) with vertex
+exclusion at tile corners. Paste detects boundary crossing automatically.
 
 **`destroy_entity_at()` refactor:** The existing `destroy_at_cursor` method
 (app.rs:972–1082) does per-`StructureKind` sim pool cleanup (belt network,
@@ -76,30 +78,43 @@ bounding box — reuse this for blueprint rotation.
 
 ### Tasks
 
-- [ ] Implement `Clipboard::rotate_cw()` — rotate all entries 90° clockwise:
+- [x] Implement `Clipboard::rotate_cw()` — rotate all entries 90° clockwise:
   - Transform each entry's offset via `Direction::rotate_cell()` with updated bounding box
   - Rotate each entry's `Direction` one step clockwise
   - Swap clipboard `width` and `height`
-- [ ] Implement `can_paste(world, tile, anchor) -> Vec<(usize, bool)>`:
+- [x] Implement `can_paste(world, tile, anchor) -> Vec<(usize, bool)>`:
   - For each `BlueprintEntry`, check whether target cells are unoccupied
   - Return per-entry pass/fail for granular feedback
-- [ ] Implement `required_items(clipboard) -> Vec<(ItemId, u16)>`:
+- [x] Implement `required_items(clipboard) -> Vec<(ItemId, u16)>`:
   - Tally item costs for all entries (each structure requires its corresponding item)
   - Compare against player inventory
-- [ ] Ctrl-V handler: enter paste mode, show multi-ghost preview anchored at cursor
+- [x] Ctrl-V handler: enter paste mode, show multi-ghost preview anchored at cursor
   - Reuse ghost instance system with `progress = -1.0` for valid placements
   - Use `progress = -3.0` sentinel for blocked ghosts (collision / missing items)
-- [ ] Add red tint for blocked ghosts in shader — branch on `progress == -3.0` in `machine.wgsl` fragment stage
-- [ ] `R` key in paste mode calls `Clipboard::rotate_cw()`, updates preview
-- [ ] Click to confirm paste — batch placement:
+- [x] Add red tint for blocked ghosts in shader — branch on `progress == -3.0` in `machine.wgsl` fragment stage
+- [x] `R` key in paste mode calls `Clipboard::rotate_cw()`, updates preview
+- [x] Click to confirm paste — batch placement:
   1. Place non-belt structures first (machines, splitters, storage)
   2. Place belts second (so they can auto-connect to newly placed structures)
   3. Run belt reconnection pass for side-inject and splitter links
-- [ ] Deduct items from inventory on successful paste
-- [ ] Unit tests: `rotate_cw()` correctness — offsets and directions after 1, 2, 3, 4 rotations
-- [ ] Unit tests: `can_paste()` detects collisions with existing structures
-- [ ] Unit tests: `required_items()` tallies costs correctly
-- [ ] Unit tests: batch placement order — non-belts before belts
+- [x] Deduct items from inventory on successful paste
+- [x] Unit tests: `rotate_cw()` correctness — offsets and directions after 1, 2, 3, 4 rotations
+- [x] Unit tests: `can_paste()` detects collisions with existing structures
+- [x] Unit tests: `required_items()` tallies costs correctly
+- [x] Unit tests: batch placement order — non-belts before belts
+
+### BP2 Follow-up: Recipe Copying & Multi-Tile Blueprints
+
+- [x] Add `recipe: Option<usize>` to `BlueprintEntry`, snapshot machine recipe on capture, restore on paste
+- [x] Virtual coordinate utilities: `virtual_to_tile_local()`, `tile_local_to_virtual()`, `is_vertex_cell()`, `footprint_touches_vertex()`
+- [x] Multi-tile selection: `StripTile` struct, `SelectionState.tiles` vec, drag across tile edges
+- [x] `capture_strip()` for multi-tile capture with vertex exclusion
+- [x] Multi-tile paste: `walk_tile_strip()` helper, tile cache, per-tile collision checks
+- [x] Multi-tile ghost preview with per-tile Mobius map
+- [x] Cross-tile paste detection: single-tile clipboards pasted near tile edge route through multi-tile path
+- [x] Fix `capture_strip` scan range bug: use `clipped_v - delta * 64` instead of `virtual_to_tile_local(clipped_v)`
+- [x] Fix selection overlay: render as hyperbolic quad polygon instead of screen-space AABB
+- [x] Unit tests: virtual coordinate roundtrip, vertex exclusion, multi-tile rotation
 
 ### Design Notes
 

@@ -1,5 +1,6 @@
 use super::items::ItemId;
 use super::world::{Direction, EntityId, StructureKind, WorldState};
+use crate::sim::machine::MachinePool;
 use crate::sim::storage::StoragePool;
 
 /// A single structure captured into a blueprint.
@@ -13,6 +14,8 @@ pub struct BlueprintEntry {
     pub direction: Direction,
     /// Stored contents (for storage buildings). Empty for non-storage.
     pub items: Vec<(ItemId, u16)>,
+    /// Selected recipe index (for machines). `None` for non-machines or no recipe set.
+    pub recipe: Option<usize>,
 }
 
 /// A clipboard buffer holding captured structures.
@@ -98,12 +101,52 @@ pub fn required_items(clipboard: &Clipboard) -> Vec<(ItemId, u16)> {
     counts.into_iter().collect()
 }
 
+// --- Virtual coordinate utilities for multi-tile strips ---
+
+/// Convert a virtual coordinate to `(tile_delta, local)` pair.
+///
+/// Virtual coordinates extend beyond the [-32, 32] local range.
+/// `tile_delta` counts how many tiles from the anchor (delta=0).
+/// `local` is within [-32, 32].
+pub fn virtual_to_tile_local(v: i32) -> (i32, i32) {
+    let tile_delta = (v + 32).div_euclid(64);
+    let local = v - tile_delta * 64;
+    (tile_delta, local)
+}
+
+/// Convert `(tile_delta, local)` back to a virtual coordinate.
+pub fn tile_local_to_virtual(tile_delta: i32, local: i32) -> i32 {
+    tile_delta * 64 + local
+}
+
+/// Check whether a grid cell is at a tiling vertex (tile corner).
+///
+/// Tiling vertices occur where `|gx| == 32 AND |gy| == 32`.
+pub fn is_vertex_cell(gx: i32, gy: i32) -> bool {
+    gx.abs() == 32 && gy.abs() == 32
+}
+
+/// Check whether any cell in a structure's footprint touches a vertex cell.
+pub fn footprint_touches_vertex(gx: i32, gy: i32, kind: StructureKind, direction: Direction) -> bool {
+    let (fw, fh) = kind.footprint();
+    let (rw, rh) = direction.rotate_footprint(fw, fh);
+    for dy in 0..rh {
+        for dx in 0..rw {
+            if is_vertex_cell(gx + dx, gy + dy) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Capture all structures within a rectangle on a single tile.
 ///
 /// `top_left` and `bottom_right` are inclusive grid coordinates.
 /// Multi-cell entities are captured once at their origin offset.
 pub fn capture_region(
     world: &WorldState,
+    machine_pool: &MachinePool,
     storage_pool: &StoragePool,
     tile_address: &[u8],
     top_left: (i32, i32),
@@ -164,11 +207,15 @@ pub fn capture_region(
                     Vec::new()
                 };
 
+                // Snapshot recipe for machine entities
+                let recipe = machine_pool.recipe(entity).flatten();
+
                 entries.push(BlueprintEntry {
                     offset: (gx - min_x, gy - min_y),
                     kind,
                     direction,
                     items,
+                    recipe,
                 });
             }
         }
@@ -182,11 +229,131 @@ pub fn capture_region(
     }
 }
 
+/// Capture structures across a multi-tile strip.
+///
+/// `tiles` is a list of `(tile_address, delta)` pairs where delta is the strip offset.
+/// `top_left` and `bottom_right` are in virtual coordinates.
+/// `strip_axis_x` indicates whether the strip extends along x (true) or y (false).
+#[allow(clippy::too_many_arguments)]
+pub fn capture_strip(
+    world: &WorldState,
+    machine_pool: &MachinePool,
+    storage_pool: &StoragePool,
+    tiles: &[(&[u8], i32)],
+    top_left: (i32, i32),
+    bottom_right: (i32, i32),
+    strip_axis_x: bool,
+    tiling_q: u32,
+) -> Clipboard {
+    let vmin_x = top_left.0.min(bottom_right.0);
+    let vmax_x = top_left.0.max(bottom_right.0);
+    let vmin_y = top_left.1.min(bottom_right.1);
+    let vmax_y = top_left.1.max(bottom_right.1);
+
+    let mut entries = Vec::new();
+    let mut seen = std::collections::HashSet::<EntityId>::new();
+
+    for &(tile_addr, delta) in tiles {
+        // Compute local coordinate range for this tile
+        let (local_min_x, local_max_x, local_min_y, local_max_y) = if strip_axis_x {
+            let tile_vmin = tile_local_to_virtual(delta, -32);
+            let tile_vmax = tile_local_to_virtual(delta, 32);
+            let clipped_vmin = vmin_x.max(tile_vmin);
+            let clipped_vmax = vmax_x.min(tile_vmax);
+            if clipped_vmin > clipped_vmax { continue; }
+            let lmin = clipped_vmin - delta * 64;
+            let lmax = clipped_vmax - delta * 64;
+            (lmin, lmax, vmin_y, vmax_y)
+        } else {
+            let tile_vmin = tile_local_to_virtual(delta, -32);
+            let tile_vmax = tile_local_to_virtual(delta, 32);
+            let clipped_vmin = vmin_y.max(tile_vmin);
+            let clipped_vmax = vmax_y.min(tile_vmax);
+            if clipped_vmin > clipped_vmax { continue; }
+            let lmin = clipped_vmin - delta * 64;
+            let lmax = clipped_vmax - delta * 64;
+            (vmin_x, vmax_x, lmin, lmax)
+        };
+
+        let entities_map = match world.tile_entities(tile_addr) {
+            Some(e) => e,
+            None => continue,
+        };
+
+        for gy in local_min_y..=local_max_y {
+            for gx in local_min_x..=local_max_x {
+                if let Some(&entity) = entities_map.get(&(gx, gy)) {
+                    if !seen.insert(entity) {
+                        continue;
+                    }
+                    if !world.is_origin(entity, gx, gy) {
+                        continue;
+                    }
+
+                    let kind = match world.kind(entity) {
+                        Some(k) => k,
+                        None => continue,
+                    };
+                    let direction = world.direction(entity).unwrap_or(Direction::North);
+
+                    // Skip structures touching vertex cells
+                    if footprint_touches_vertex(gx, gy, kind, direction) {
+                        continue;
+                    }
+
+                    let items = if kind == StructureKind::Storage {
+                        if let Some(state) = storage_pool.get(entity) {
+                            state.slots.iter()
+                                .filter(|s| s.count > 0)
+                                .map(|s| (s.item, s.count))
+                                .collect()
+                        } else {
+                            Vec::new()
+                        }
+                    } else {
+                        Vec::new()
+                    };
+
+                    let recipe = machine_pool.recipe(entity).flatten();
+
+                    // Compute virtual offset from bounding box origin
+                    let vx = if strip_axis_x {
+                        tile_local_to_virtual(delta, gx)
+                    } else {
+                        gx
+                    };
+                    let vy = if strip_axis_x {
+                        gy
+                    } else {
+                        tile_local_to_virtual(delta, gy)
+                    };
+
+                    entries.push(BlueprintEntry {
+                        offset: (vx - vmin_x, vy - vmin_y),
+                        kind,
+                        direction,
+                        items,
+                        recipe,
+                    });
+                }
+            }
+        }
+    }
+
+    Clipboard {
+        entries,
+        width: vmax_x - vmin_x + 1,
+        height: vmax_y - vmin_y + 1,
+        tiling_q,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::game::items::{ItemId, MachineType};
     use crate::game::world::WorldState;
+    use crate::sim::machine::MachinePool;
     use crate::sim::storage::StoragePool;
 
     #[test]
@@ -196,13 +363,15 @@ mod tests {
         world.place(&addr, (5, 5), ItemId::Belt, Direction::East).unwrap();
 
         let pool = StoragePool::new();
-        let clip = capture_region(&world, &pool, &addr, (5, 5), (5, 5), 5);
+        let mpool = MachinePool::new();
+        let clip = capture_region(&world, &mpool, &pool, &addr, (5, 5), (5, 5), 5);
 
         assert_eq!(clip.entries.len(), 1);
         assert_eq!(clip.entries[0].offset, (0, 0));
         assert_eq!(clip.entries[0].kind, StructureKind::Belt);
         assert_eq!(clip.entries[0].direction, Direction::East);
         assert!(clip.entries[0].items.is_empty());
+        assert_eq!(clip.entries[0].recipe, None);
         assert_eq!(clip.width, 1);
         assert_eq!(clip.height, 1);
         assert_eq!(clip.tiling_q, 5);
@@ -215,8 +384,9 @@ mod tests {
         world.place(&addr, (10, 20), ItemId::Belt, Direction::North).unwrap();
         world.place(&addr, (12, 22), ItemId::Quadrupole, Direction::South).unwrap();
 
+        let mpool = MachinePool::new();
         let pool = StoragePool::new();
-        let clip = capture_region(&world, &pool, &addr, (10, 20), (12, 22), 5);
+        let clip = capture_region(&world, &mpool, &pool, &addr, (10, 20), (12, 22), 5);
 
         assert_eq!(clip.entries.len(), 2);
         // Belt at (10,20) -> offset (0,0)
@@ -234,8 +404,9 @@ mod tests {
         // Composer is 2x2: occupies (5,5), (6,5), (5,6), (6,6)
         world.place(&addr, (5, 5), ItemId::Composer, Direction::North).unwrap();
 
+        let mpool = MachinePool::new();
         let pool = StoragePool::new();
-        let clip = capture_region(&world, &pool, &addr, (5, 5), (6, 6), 5);
+        let clip = capture_region(&world, &mpool, &pool, &addr, (5, 5), (6, 6), 5);
 
         // Should capture exactly once, at origin offset
         assert_eq!(clip.entries.len(), 1);
@@ -253,8 +424,9 @@ mod tests {
         // Inverter is 3x3: occupies 9 cells from (0,0) to (2,2)
         world.place(&addr, (0, 0), ItemId::Inverter, Direction::North).unwrap();
 
+        let mpool = MachinePool::new();
         let pool = StoragePool::new();
-        let clip = capture_region(&world, &pool, &addr, (0, 0), (2, 2), 5);
+        let clip = capture_region(&world, &mpool, &pool, &addr, (0, 0), (2, 2), 5);
 
         assert_eq!(clip.entries.len(), 1);
         assert_eq!(clip.entries[0].offset, (0, 0));
@@ -267,8 +439,9 @@ mod tests {
     #[test]
     fn capture_region_empty() {
         let world = WorldState::new();
+        let mpool = MachinePool::new();
         let pool = StoragePool::new();
-        let clip = capture_region(&world, &pool, &[0], (0, 0), (10, 10), 5);
+        let clip = capture_region(&world, &mpool, &pool, &[0], (0, 0), (10, 10), 5);
 
         assert!(clip.entries.is_empty());
         assert_eq!(clip.width, 11);
@@ -281,12 +454,13 @@ mod tests {
         let addr = vec![0u8];
         let entity = world.place(&addr, (0, 0), ItemId::Storage, Direction::North).unwrap();
 
+        let mpool = MachinePool::new();
         let mut pool = StoragePool::new();
         pool.add(entity);
         pool.accept_input(entity, ItemId::Point, 5);
         pool.accept_input(entity, ItemId::LineSegment, 3);
 
-        let clip = capture_region(&world, &pool, &addr, (0, 0), (1, 1), 5);
+        let clip = capture_region(&world, &mpool, &pool, &addr, (0, 0), (1, 1), 5);
 
         assert_eq!(clip.entries.len(), 1);
         assert_eq!(clip.entries[0].kind, StructureKind::Storage);
@@ -302,9 +476,10 @@ mod tests {
         let addr = vec![0u8];
         world.place(&addr, (5, 5), ItemId::Belt, Direction::North).unwrap();
 
+        let mpool = MachinePool::new();
         let pool = StoragePool::new();
         // Give bottom_right as "top_left" and vice versa
-        let clip = capture_region(&world, &pool, &addr, (5, 5), (5, 5), 5);
+        let clip = capture_region(&world, &mpool, &pool, &addr, (5, 5), (5, 5), 5);
         assert_eq!(clip.entries.len(), 1);
     }
 
@@ -319,6 +494,7 @@ mod tests {
                     kind: StructureKind::Belt,
                     direction: dir,
                     items: Vec::new(),
+                    recipe: None,
                 })
                 .collect(),
             width: w,
@@ -397,6 +573,7 @@ mod tests {
                 kind: StructureKind::Machine(MachineType::Composer),
                 direction: Direction::North,
                 items: Vec::new(),
+                recipe: None,
             }],
             width: 2,
             height: 2,
@@ -449,18 +626,21 @@ mod tests {
                     kind: StructureKind::Belt,
                     direction: Direction::North,
                     items: Vec::new(),
+                    recipe: None,
                 },
                 BlueprintEntry {
                     offset: (1, 0),
                     kind: StructureKind::Belt,
                     direction: Direction::North,
                     items: Vec::new(),
+                    recipe: None,
                 },
                 BlueprintEntry {
                     offset: (0, 1),
                     kind: StructureKind::Machine(MachineType::Composer),
                     direction: Direction::North,
                     items: Vec::new(),
+                    recipe: Some(0),
                 },
             ],
             width: 3,
@@ -472,5 +652,166 @@ mod tests {
         let composer_count = items.iter().find(|&&(id, _)| id == ItemId::Composer).map(|&(_, c)| c).unwrap_or(0);
         assert_eq!(belt_count, 2);
         assert_eq!(composer_count, 1);
+    }
+
+    #[test]
+    fn capture_region_copies_machine_recipe() {
+        let mut world = WorldState::new();
+        let addr = vec![0u8];
+        let entity = world.place(&addr, (0, 0), ItemId::Composer, Direction::North).unwrap();
+
+        let mut mpool = MachinePool::new();
+        mpool.add(entity, MachineType::Composer);
+        mpool.set_recipe(entity, Some(0));
+
+        let pool = StoragePool::new();
+        let clip = capture_region(&world, &mpool, &pool, &addr, (0, 0), (1, 1), 5);
+
+        assert_eq!(clip.entries.len(), 1);
+        assert_eq!(clip.entries[0].recipe, Some(0));
+    }
+
+    #[test]
+    fn capture_region_no_recipe_gives_none() {
+        let mut world = WorldState::new();
+        let addr = vec![0u8];
+        let entity = world.place(&addr, (0, 0), ItemId::Composer, Direction::North).unwrap();
+
+        let mut mpool = MachinePool::new();
+        mpool.add(entity, MachineType::Composer);
+        // No recipe set
+
+        let pool = StoragePool::new();
+        let clip = capture_region(&world, &mpool, &pool, &addr, (0, 0), (1, 1), 5);
+
+        assert_eq!(clip.entries.len(), 1);
+        assert_eq!(clip.entries[0].recipe, None);
+    }
+
+    #[test]
+    fn capture_region_belt_recipe_always_none() {
+        let mut world = WorldState::new();
+        let addr = vec![0u8];
+        world.place(&addr, (0, 0), ItemId::Belt, Direction::East).unwrap();
+
+        let mpool = MachinePool::new();
+        let pool = StoragePool::new();
+        let clip = capture_region(&world, &mpool, &pool, &addr, (0, 0), (0, 0), 5);
+
+        assert_eq!(clip.entries.len(), 1);
+        assert_eq!(clip.entries[0].recipe, None);
+    }
+
+    // --- Virtual coordinate utility tests ---
+
+    #[test]
+    fn virtual_to_tile_local_center() {
+        // Within the anchor tile
+        assert_eq!(virtual_to_tile_local(0), (0, 0));
+        assert_eq!(virtual_to_tile_local(10), (0, 10));
+        assert_eq!(virtual_to_tile_local(-10), (0, -10));
+        assert_eq!(virtual_to_tile_local(31), (0, 31));
+        assert_eq!(virtual_to_tile_local(-32), (0, -32));
+    }
+
+    #[test]
+    fn virtual_to_tile_local_next_tile() {
+        // Just past the positive edge: v=32 → tile_delta=1, local=-32
+        assert_eq!(virtual_to_tile_local(32), (1, -32));
+        assert_eq!(virtual_to_tile_local(33), (1, -31));
+        assert_eq!(virtual_to_tile_local(95), (1, 31));
+        // Two tiles away
+        assert_eq!(virtual_to_tile_local(96), (2, -32));
+    }
+
+    #[test]
+    fn virtual_to_tile_local_negative_tile() {
+        // Past the negative edge: v=-33 → tile_delta=-1, local=31
+        assert_eq!(virtual_to_tile_local(-33), (-1, 31));
+        assert_eq!(virtual_to_tile_local(-96), (-1, -32));
+        assert_eq!(virtual_to_tile_local(-97), (-2, 31));
+    }
+
+    #[test]
+    fn virtual_roundtrip() {
+        for v in -200..=200 {
+            let (td, local) = virtual_to_tile_local(v);
+            let back = tile_local_to_virtual(td, local);
+            assert_eq!(back, v, "roundtrip failed for v={v}");
+        }
+    }
+
+    #[test]
+    fn shared_edge_consistency() {
+        // Shared edge: tile k at gx=32 should equal tile k+1 at gx=-32
+        // v = tile_local_to_virtual(0, 32) = 32
+        // v = tile_local_to_virtual(1, -32) = 64 + (-32) = 32
+        let v1 = tile_local_to_virtual(0, 32);
+        let v2 = tile_local_to_virtual(1, -32);
+        assert_eq!(v1, v2);
+    }
+
+    #[test]
+    fn is_vertex_cell_corners() {
+        assert!(is_vertex_cell(32, 32));
+        assert!(is_vertex_cell(-32, 32));
+        assert!(is_vertex_cell(32, -32));
+        assert!(is_vertex_cell(-32, -32));
+    }
+
+    #[test]
+    fn is_vertex_cell_non_corners() {
+        assert!(!is_vertex_cell(0, 0));
+        assert!(!is_vertex_cell(32, 0));
+        assert!(!is_vertex_cell(0, 32));
+        assert!(!is_vertex_cell(31, 32));
+        assert!(!is_vertex_cell(32, 31));
+    }
+
+    #[test]
+    fn footprint_1x1_at_corner() {
+        assert!(footprint_touches_vertex(32, 32, StructureKind::Belt, Direction::North));
+        assert!(!footprint_touches_vertex(31, 31, StructureKind::Belt, Direction::North));
+    }
+
+    #[test]
+    fn footprint_2x2_near_corner() {
+        // Composer at (31, 31) occupies (31,31), (32,31), (31,32), (32,32) — touches vertex
+        assert!(footprint_touches_vertex(31, 31, StructureKind::Machine(MachineType::Composer), Direction::North));
+        // Composer at (30, 30) occupies (30,30)-(31,31) — no vertex
+        assert!(!footprint_touches_vertex(30, 30, StructureKind::Machine(MachineType::Composer), Direction::North));
+    }
+
+    #[test]
+    fn rotate_cw_multi_tile_swaps_axis() {
+        // A 2-tile horizontal clipboard (width=65, height=3) should become
+        // 2-tile vertical (width=3, height=65) after rotation
+        let mut clip = Clipboard {
+            entries: vec![
+                BlueprintEntry {
+                    offset: (0, 0),
+                    kind: StructureKind::Belt,
+                    direction: Direction::East,
+                    items: Vec::new(),
+                    recipe: None,
+                },
+                BlueprintEntry {
+                    offset: (64, 0),
+                    kind: StructureKind::Belt,
+                    direction: Direction::East,
+                    items: Vec::new(),
+                    recipe: None,
+                },
+            ],
+            width: 65,
+            height: 3,
+            tiling_q: 5,
+        };
+        clip.rotate_cw();
+        // Width and height swap
+        assert_eq!(clip.width, 3);
+        assert_eq!(clip.height, 65);
+        // After rotation, a multi-tile x-strip becomes a multi-tile y-strip
+        assert!(clip.height > 64); // confirms y-axis strip
     }
 }

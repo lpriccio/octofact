@@ -6,3 +6,4 @@ when flying very far away form the origin (~25 cells), game grinds to a halt, ap
 
 clicking to select a building is sensitive only in the area near the base of the building, the rendered cuboid of the entire machine should be sensitive (no need for more complicated hitboxes than that)
 
+after running far from origin and returning, machine toppers render incorrectly — they appear absent or severely cut off. Likely a precision/rebase issue affecting the ray-marched topper shapes after long-distance travel.

@@ -31,18 +31,41 @@ struct ClickResult {
 
 
 
+/// A tile in a multi-tile selection strip.
+pub(crate) struct StripTile {
+    /// Index into the tiling's tile array.
+    tile_idx: usize,
+    /// Tile address.
+    id: CellId,
+    /// Offset from the anchor tile (0 = anchor, positive = forward along strip).
+    delta: i32,
+}
+
 /// State for an active box selection (blueprint mode).
 pub(crate) struct SelectionState {
-    /// Index into the visible tile array where the selection lives.
-    tile_idx: usize,
-    /// Tile address for the selection.
-    id: CellId,
-    /// Grid coordinate where the mouse went down.
+    /// Tiles in the strip, ordered by delta. Always has at least one (the anchor at delta=0).
+    tiles: Vec<StripTile>,
+    /// True if the strip extends along the x-axis; false for y-axis.
+    /// Only meaningful when tiles.len() > 1.
+    strip_axis_x: bool,
+    /// Grid coordinate where the mouse went down (virtual coords for multi-tile).
     start: (i32, i32),
-    /// Current grid coordinate (tracks mouse during drag).
+    /// Current grid coordinate (virtual coords for multi-tile).
     current: (i32, i32),
     /// True after mouse-up finalizes the selection.
     finalized: bool,
+}
+
+impl SelectionState {
+    /// The anchor tile's index into the tiling array.
+    fn tile_idx(&self) -> usize {
+        self.tiles[0].tile_idx
+    }
+
+    /// The anchor tile's CellId.
+    fn id(&self) -> &CellId {
+        &self.tiles[0].id
+    }
 }
 
 /// State for dragging belts along a gridline.
@@ -804,6 +827,35 @@ impl App {
         }
     }
 
+    /// Walk `|delta|` steps from a tile to find the neighbor at that offset along a strip axis.
+    ///
+    /// Returns `(tile_idx, CellId)` of the target tile, or `None` if not loaded.
+    fn walk_tile_strip(&self, anchor_idx: usize, delta: i32, axis_x: bool) -> Option<(usize, CellId)> {
+        if delta == 0 {
+            let running = self.renderer.as_ref().unwrap();
+            return Some((anchor_idx, running.tiling.tiles[anchor_idx].id.clone()));
+        }
+
+        let running = self.renderer.as_ref().unwrap();
+        let edge = if axis_x {
+            if delta > 0 { 0u8 } else { 2u8 } // East / West
+        } else if delta > 0 {
+            1u8 // South
+        } else {
+            3u8 // North
+        };
+
+        let mut current_idx = anchor_idx;
+        for _ in 0..delta.unsigned_abs() {
+            let neighbor_id = running.tiling.neighbor_tile_id(current_idx, edge)?;
+            let next_idx = running.tiling.find_tile(&neighbor_id)?;
+            current_idx = next_idx;
+        }
+
+        let id = running.tiling.tiles[current_idx].id.clone();
+        Some((current_idx, id))
+    }
+
     /// Handle a click while in paste mode: batch-place clipboard entries.
     ///
     /// Placement order: non-belt structures first, then belts, so that belts
@@ -823,67 +875,222 @@ impl App {
         };
 
         let anchor = result.grid_xy;
+        let anchor_tile_idx = result.tile_idx;
         let running = self.renderer.as_ref().unwrap();
-        let cell_id = running.tiling.tiles[result.tile_idx].id.clone();
+        let cell_id = running.tiling.tiles[anchor_tile_idx].id.clone();
         let address = cell_id.word();
 
-        // Check all entries can be placed
-        let checks = blueprint::can_paste(&self.world, address, anchor, &clipboard);
-        if checks.iter().any(|(_i, ok)| !*ok) {
-            self.ui.flash_label = "Can't paste: collision".to_string();
-            self.ui.flash_timer = 1.5;
-            self.ui.flash_screen_pos = None;
-            return;
-        }
+        // Detect multi-tile clipboard or paste crossing a tile boundary
+        let max_paste_x = anchor.0 + clipboard.width - 1;
+        let max_paste_y = anchor.1 + clipboard.height - 1;
+        let crosses_x = max_paste_x > 32 || anchor.0 < -32;
+        let crosses_y = max_paste_y > 32 || anchor.1 < -32;
+        let multi_tile = clipboard.width > 64 || clipboard.height > 64 || crosses_x || crosses_y;
 
-        // Check inventory has enough items
-        if !self.config.debug.free_placement {
-            let costs = blueprint::required_items(&clipboard);
-            for &(item, count) in &costs {
-                if self.inventory.count(item) < count as u32 {
-                    self.ui.flash_label = format!(
-                        "Need {} more {}",
-                        count as u32 - self.inventory.count(item),
-                        item.display_name(),
-                    );
-                    self.ui.flash_timer = 1.5;
-                    self.ui.flash_screen_pos = None;
-                    return;
+        if multi_tile {
+            if crosses_x && crosses_y {
+                self.ui.flash_label = "Can't paste across tile corner".to_string();
+                self.ui.flash_timer = 1.5;
+                self.ui.flash_screen_pos = None;
+                return;
+            }
+            let strip_axis_x = if clipboard.width > 64 { true }
+                else if clipboard.height > 64 { false }
+                else { crosses_x };
+
+            // Check inventory
+            if !self.config.debug.free_placement {
+                let costs = blueprint::required_items(&clipboard);
+                for &(item, count) in &costs {
+                    if self.inventory.count(item) < count as u32 {
+                        self.ui.flash_label = format!(
+                            "Need {} more {}",
+                            count as u32 - self.inventory.count(item),
+                            item.display_name(),
+                        );
+                        self.ui.flash_timer = 1.5;
+                        self.ui.flash_screen_pos = None;
+                        return;
+                    }
                 }
             }
-        }
 
-        // Partition entries: non-belts first, belts second
-        let mut non_belts: Vec<&blueprint::BlueprintEntry> = Vec::new();
-        let mut belts: Vec<&blueprint::BlueprintEntry> = Vec::new();
-        for entry in &clipboard.entries {
-            if entry.kind == StructureKind::Belt {
-                belts.push(entry);
-            } else {
-                non_belts.push(entry);
+            // Build tile cache: delta → (tile_idx, CellId, tile_address)
+            let mut tile_cache: std::collections::HashMap<i32, (usize, CellId)> = std::collections::HashMap::new();
+            tile_cache.insert(0, (anchor_tile_idx, cell_id.clone()));
+
+            // Pre-resolve all needed tile deltas
+            for entry in &clipboard.entries {
+                let (offset_x, offset_y) = (anchor.0 + entry.offset.0, anchor.1 + entry.offset.1);
+                let (td, _local) = if strip_axis_x {
+                    blueprint::virtual_to_tile_local(offset_x)
+                } else {
+                    blueprint::virtual_to_tile_local(offset_y)
+                };
+                if let std::collections::hash_map::Entry::Vacant(e) = tile_cache.entry(td) {
+                    match self.walk_tile_strip(anchor_tile_idx, td, strip_axis_x) {
+                        Some(r) => { e.insert(r); }
+                        None => {
+                            self.ui.flash_label = "Move closer — target tile not loaded".to_string();
+                            self.ui.flash_timer = 1.5;
+                            self.ui.flash_screen_pos = None;
+                            return;
+                        }
+                    }
+                }
             }
-        }
 
-        let mut placed = 0u32;
+            // Check collisions on all target tiles
+            for entry in &clipboard.entries {
+                let (offset_x, offset_y) = (anchor.0 + entry.offset.0, anchor.1 + entry.offset.1);
+                let (td, local_strip) = if strip_axis_x {
+                    blueprint::virtual_to_tile_local(offset_x)
+                } else {
+                    blueprint::virtual_to_tile_local(offset_y)
+                };
+                let local_xy = if strip_axis_x { (local_strip, offset_y) } else { (offset_x, local_strip) };
+                let (_, ref target_id) = tile_cache[&td];
 
-        // Place non-belt structures first
-        for entry in non_belts.iter().chain(belts.iter()) {
-            let grid_xy = (anchor.0 + entry.offset.0, anchor.1 + entry.offset.1);
-            let mode = PlacementMode {
-                item: entry.kind.to_item(),
-                direction: entry.direction,
-            };
-            if self.try_place_at(result.tile_idx, address, grid_xy, &mode) {
-                placed += 1;
+                let (fw, fh) = entry.kind.footprint();
+                let footprint = entry.direction.rotate_footprint(fw, fh);
+                let cells = super::game::world::occupied_cells(local_xy, footprint);
+                for &cell in &cells {
+                    if self.world.tile_entities(target_id.word())
+                        .and_then(|m| m.get(&cell))
+                        .is_some()
+                    {
+                        self.ui.flash_label = "Can't paste: collision".to_string();
+                        self.ui.flash_timer = 1.5;
+                        self.ui.flash_screen_pos = None;
+                        return;
+                    }
+                }
             }
+
+            // Partition entries: non-belts first, belts second
+            let mut non_belts: Vec<&blueprint::BlueprintEntry> = Vec::new();
+            let mut belts: Vec<&blueprint::BlueprintEntry> = Vec::new();
+            for entry in &clipboard.entries {
+                if entry.kind == StructureKind::Belt {
+                    belts.push(entry);
+                } else {
+                    non_belts.push(entry);
+                }
+            }
+
+            let mut placed = 0u32;
+
+            for entry in non_belts.iter().chain(belts.iter()) {
+                let (offset_x, offset_y) = (anchor.0 + entry.offset.0, anchor.1 + entry.offset.1);
+                let (td, local_strip) = if strip_axis_x {
+                    blueprint::virtual_to_tile_local(offset_x)
+                } else {
+                    blueprint::virtual_to_tile_local(offset_y)
+                };
+                let local_xy = if strip_axis_x { (local_strip, offset_y) } else { (offset_x, local_strip) };
+                let (target_tile_idx, ref target_id) = tile_cache[&td];
+
+                let mode = PlacementMode {
+                    item: entry.kind.to_item(),
+                    direction: entry.direction,
+                };
+                if self.try_place_at(target_tile_idx, target_id.word(), local_xy, &mode) {
+                    placed += 1;
+                }
+            }
+
+            // Restore recipes
+            for entry in &clipboard.entries {
+                if let Some(recipe_idx) = entry.recipe {
+                    let (offset_x, offset_y) = (anchor.0 + entry.offset.0, anchor.1 + entry.offset.1);
+                    let (td, local_strip) = if strip_axis_x {
+                        blueprint::virtual_to_tile_local(offset_x)
+                    } else {
+                        blueprint::virtual_to_tile_local(offset_y)
+                    };
+                    let local_xy = if strip_axis_x { (local_strip, offset_y) } else { (offset_x, local_strip) };
+                    let (_, ref target_id) = tile_cache[&td];
+                    if let Some(entities) = self.world.tile_entities(target_id.word()) {
+                        if let Some(&entity) = entities.get(&local_xy) {
+                            self.machine_pool.set_recipe(entity, Some(recipe_idx));
+                        }
+                    }
+                }
+            }
+
+            self.ui.flash_label = format!("Pasted {placed} structures");
+            self.ui.flash_timer = 1.5;
+            self.ui.flash_screen_pos = None;
+        } else {
+            // Single-tile paste (original path)
+
+            // Check all entries can be placed
+            let checks = blueprint::can_paste(&self.world, address, anchor, &clipboard);
+            if checks.iter().any(|(_i, ok)| !*ok) {
+                self.ui.flash_label = "Can't paste: collision".to_string();
+                self.ui.flash_timer = 1.5;
+                self.ui.flash_screen_pos = None;
+                return;
+            }
+
+            // Check inventory has enough items
+            if !self.config.debug.free_placement {
+                let costs = blueprint::required_items(&clipboard);
+                for &(item, count) in &costs {
+                    if self.inventory.count(item) < count as u32 {
+                        self.ui.flash_label = format!(
+                            "Need {} more {}",
+                            count as u32 - self.inventory.count(item),
+                            item.display_name(),
+                        );
+                        self.ui.flash_timer = 1.5;
+                        self.ui.flash_screen_pos = None;
+                        return;
+                    }
+                }
+            }
+
+            // Partition entries: non-belts first, belts second
+            let mut non_belts: Vec<&blueprint::BlueprintEntry> = Vec::new();
+            let mut belts: Vec<&blueprint::BlueprintEntry> = Vec::new();
+            for entry in &clipboard.entries {
+                if entry.kind == StructureKind::Belt {
+                    belts.push(entry);
+                } else {
+                    non_belts.push(entry);
+                }
+            }
+
+            let mut placed = 0u32;
+
+            // Place non-belt structures first
+            for entry in non_belts.iter().chain(belts.iter()) {
+                let grid_xy = (anchor.0 + entry.offset.0, anchor.1 + entry.offset.1);
+                let mode = PlacementMode {
+                    item: entry.kind.to_item(),
+                    direction: entry.direction,
+                };
+                if self.try_place_at(anchor_tile_idx, address, grid_xy, &mode) {
+                    placed += 1;
+                }
+            }
+
+            // Restore recipes for pasted machines
+            for entry in &clipboard.entries {
+                if let Some(recipe_idx) = entry.recipe {
+                    let grid_xy = (anchor.0 + entry.offset.0, anchor.1 + entry.offset.1);
+                    if let Some(entities) = self.world.tile_entities(address) {
+                        if let Some(&entity) = entities.get(&grid_xy) {
+                            self.machine_pool.set_recipe(entity, Some(recipe_idx));
+                        }
+                    }
+                }
+            }
+
+            self.ui.flash_label = format!("Pasted {placed} structures");
+            self.ui.flash_timer = 1.5;
+            self.ui.flash_screen_pos = None;
         }
-
-        // Deduct items (try_place_at already deducts per-structure)
-        // No extra deduction needed — try_place_at handles it.
-
-        self.ui.flash_label = format!("Pasted {placed} structures");
-        self.ui.flash_timer = 1.5;
-        self.ui.flash_screen_pos = None;
 
         // Stay in paste mode for repeated pasting
     }
@@ -1217,15 +1424,33 @@ impl App {
         let max_x = sel.start.0.max(sel.current.0);
         let min_y = sel.start.1.min(sel.current.1);
         let max_y = sel.start.1.max(sel.current.1);
-        let tile_addr = sel.id.word();
-        let clip = blueprint::capture_region(
-            &self.world,
-            &self.storage_pool,
-            tile_addr,
-            (min_x, min_y),
-            (max_x, max_y),
-            self.cfg.q,
-        );
+
+        let clip = if sel.tiles.len() > 1 {
+            let tile_refs: Vec<(&[u8], i32)> = sel.tiles.iter()
+                .map(|t| (t.id.word(), t.delta))
+                .collect();
+            blueprint::capture_strip(
+                &self.world,
+                &self.machine_pool,
+                &self.storage_pool,
+                &tile_refs,
+                (min_x, min_y),
+                (max_x, max_y),
+                sel.strip_axis_x,
+                self.cfg.q,
+            )
+        } else {
+            let tile_addr = sel.id().word();
+            blueprint::capture_region(
+                &self.world,
+                &self.machine_pool,
+                &self.storage_pool,
+                tile_addr,
+                (min_x, min_y),
+                (max_x, max_y),
+                self.cfg.q,
+            )
+        };
         let count = clip.entries.len();
         self.clipboard = Some(clip);
         self.ui.flash_label = format!("Copied {count} structure{}", if count == 1 { "" } else { "s" });
@@ -1245,40 +1470,87 @@ impl App {
         let max_x = sel.start.0.max(sel.current.0);
         let min_y = sel.start.1.min(sel.current.1);
         let max_y = sel.start.1.max(sel.current.1);
-        let tile_addr_owned: Vec<u8> = sel.id.word().to_vec();
+
+        // Collect tile info before mutable borrows
+        let strip_tiles: Vec<(Vec<u8>, i32)> = sel.tiles.iter()
+            .map(|t| (t.id.word().to_vec(), t.delta))
+            .collect();
+        let strip_axis_x = sel.strip_axis_x;
+        let multi_tile = sel.tiles.len() > 1;
 
         // Capture first
-        let clip = blueprint::capture_region(
-            &self.world,
-            &self.storage_pool,
-            &tile_addr_owned,
-            (min_x, min_y),
-            (max_x, max_y),
-            self.cfg.q,
-        );
+        let clip = if multi_tile {
+            let tile_refs: Vec<(&[u8], i32)> = strip_tiles.iter()
+                .map(|(addr, delta)| (addr.as_slice(), *delta))
+                .collect();
+            blueprint::capture_strip(
+                &self.world,
+                &self.machine_pool,
+                &self.storage_pool,
+                &tile_refs,
+                (min_x, min_y),
+                (max_x, max_y),
+                strip_axis_x,
+                self.cfg.q,
+            )
+        } else {
+            blueprint::capture_region(
+                &self.world,
+                &self.machine_pool,
+                &self.storage_pool,
+                &strip_tiles[0].0,
+                (min_x, min_y),
+                (max_x, max_y),
+                self.cfg.q,
+            )
+        };
         let count = clip.entries.len();
 
-        // Destroy all entities in the selection rectangle.
-        // Collect entity grid positions first to avoid borrow issues.
-        let mut to_destroy = Vec::new();
-        if let Some(entities) = self.world.tile_entities(&tile_addr_owned) {
-            let mut seen = std::collections::HashSet::new();
-            for gy in min_y..=max_y {
-                for gx in min_x..=max_x {
-                    if let Some(&entity) = entities.get(&(gx, gy)) {
-                        if seen.insert(entity) {
-                            // Use origin position for removal
-                            if let Some(pos) = self.world.position(entity) {
-                                to_destroy.push((pos.gx as i32, pos.gy as i32));
+        // Destroy all entities in the selection rectangle across all tiles.
+        for (tile_addr, delta) in &strip_tiles {
+            let (local_min_x, local_max_x, local_min_y, local_max_y) = if multi_tile {
+                if strip_axis_x {
+                    let tile_vmin = blueprint::tile_local_to_virtual(*delta, -32);
+                    let tile_vmax = blueprint::tile_local_to_virtual(*delta, 32);
+                    let clipped_vmin = min_x.max(tile_vmin);
+                    let clipped_vmax = max_x.min(tile_vmax);
+                    if clipped_vmin > clipped_vmax { continue; }
+                    let lmin = clipped_vmin - delta * 64;
+                    let lmax = clipped_vmax - delta * 64;
+                    (lmin, lmax, min_y, max_y)
+                } else {
+                    let tile_vmin = blueprint::tile_local_to_virtual(*delta, -32);
+                    let tile_vmax = blueprint::tile_local_to_virtual(*delta, 32);
+                    let clipped_vmin = min_y.max(tile_vmin);
+                    let clipped_vmax = max_y.min(tile_vmax);
+                    if clipped_vmin > clipped_vmax { continue; }
+                    let lmin = clipped_vmin - delta * 64;
+                    let lmax = clipped_vmax - delta * 64;
+                    (min_x, max_x, lmin, lmax)
+                }
+            } else {
+                (min_x, max_x, min_y, max_y)
+            };
+
+            let mut to_destroy = Vec::new();
+            if let Some(entities) = self.world.tile_entities(tile_addr) {
+                let mut seen = std::collections::HashSet::new();
+                for gy in local_min_y..=local_max_y {
+                    for gx in local_min_x..=local_max_x {
+                        if let Some(&entity) = entities.get(&(gx, gy)) {
+                            if seen.insert(entity) {
+                                if let Some(pos) = self.world.position(entity) {
+                                    to_destroy.push((pos.gx as i32, pos.gy as i32));
+                                }
                             }
                         }
                     }
                 }
             }
-        }
-        for grid_xy in to_destroy {
-            if let Some(item) = self.destroy_entity_at(&tile_addr_owned, grid_xy) {
-                self.inventory.add(item, 1);
+            for grid_xy in to_destroy {
+                if let Some(item) = self.destroy_entity_at(tile_addr, grid_xy) {
+                    self.inventory.add(item, 1);
+                }
             }
         }
 
@@ -1301,8 +1573,12 @@ impl App {
             running.tiling.tiles[result.tile_idx].id.clone()
         };
         self.ui.selection = Some(SelectionState {
-            tile_idx: result.tile_idx,
-            id: address,
+            tiles: vec![StripTile {
+                tile_idx: result.tile_idx,
+                id: address,
+                delta: 0,
+            }],
+            strip_axis_x: true,
             start: result.grid_xy,
             current: result.grid_xy,
             finalized: false,
@@ -1319,21 +1595,141 @@ impl App {
             Some(r) => r,
             None => return,
         };
-        // Only update if we're still on the same tile
-        let sel_tile_idx = sel.tile_idx;
-        if result.tile_idx == sel_tile_idx {
+
+        // Check if cursor is on a tile already in the strip
+        let cursor_tile_idx = result.tile_idx;
+        let running = self.renderer.as_ref().unwrap();
+        let cursor_cell_id = running.tiling.tiles[cursor_tile_idx].id.clone();
+
+        if let Some(strip_pos) = sel.tiles.iter().position(|t| t.id == cursor_cell_id) {
+            // Cursor on an existing strip tile: update current in virtual coords
+            let delta = sel.tiles[strip_pos].delta;
+            let strip_axis_x = sel.strip_axis_x;
+
+            // Trim strip: remove tiles with delta further than this one
             if let Some(sel) = &mut self.ui.selection {
-                sel.current = result.grid_xy;
+                let current_delta = sel.tiles[strip_pos].delta;
+                sel.tiles.retain(|t| {
+                    if current_delta >= 0 {
+                        t.delta <= current_delta
+                    } else {
+                        t.delta >= current_delta
+                    }
+                });
             }
+
+            if let Some(sel) = &mut self.ui.selection {
+                if strip_axis_x {
+                    sel.current = (
+                        blueprint::tile_local_to_virtual(delta, result.grid_xy.0),
+                        result.grid_xy.1,
+                    );
+                } else {
+                    sel.current = (
+                        result.grid_xy.0,
+                        blueprint::tile_local_to_virtual(delta, result.grid_xy.1),
+                    );
+                }
+            }
+        } else {
+            // Cursor on a new tile — check if it's a neighbor of the last strip tile
+            let last_tile = sel.tiles.last().unwrap();
+            let last_delta = last_tile.delta;
+            let last_tile_idx = last_tile.tile_idx;
+            let num_tiles = sel.tiles.len();
+
+            // Check all 4 edges for adjacency
+            let mut edge_found = None;
+            for edge in 0..4u8 {
+                if let Some(neighbor_id) = running.tiling.neighbor_tile_id(last_tile_idx, edge) {
+                    if neighbor_id == cursor_cell_id {
+                        edge_found = Some(edge);
+                        break;
+                    }
+                }
+            }
+
+            if let Some(edge) = edge_found {
+                // Determine strip axis from the crossing direction
+                let crossing_axis_x = edge == 0 || edge == 2; // East/West = x-axis
+                let new_delta = match edge {
+                    0 | 1 => last_delta + 1, // East or South = positive direction
+                    2 | 3 => last_delta - 1, // West or North = negative direction
+                    _ => unreachable!(),
+                };
+
+                if num_tiles == 1 || crossing_axis_x == sel.strip_axis_x {
+                    if let Some(sel) = &mut self.ui.selection {
+                        if num_tiles == 1 {
+                            sel.strip_axis_x = crossing_axis_x;
+                        }
+                        sel.tiles.push(StripTile {
+                            tile_idx: cursor_tile_idx,
+                            id: cursor_cell_id,
+                            delta: new_delta,
+                        });
+                        if crossing_axis_x {
+                            sel.current = (
+                                blueprint::tile_local_to_virtual(new_delta, result.grid_xy.0),
+                                result.grid_xy.1,
+                            );
+                        } else {
+                            sel.current = (
+                                result.grid_xy.0,
+                                blueprint::tile_local_to_virtual(new_delta, result.grid_xy.1),
+                            );
+                        }
+                    }
+                }
+            }
+            // If not adjacent or wrong axis, ignore (don't update selection)
         }
     }
 
     /// Handle box selection mouse-up: finalize the selection.
     fn finalize_box_selection(&mut self) {
         if let Some(sel) = &mut self.ui.selection {
-            if !sel.finalized {
-                sel.finalized = true;
+            if sel.finalized {
+                return;
             }
+
+            // Vertex exclusion check for multi-tile selections
+            if sel.tiles.len() > 1 {
+                // Check if bounding box in any tile includes corner cells
+                for strip_tile in &sel.tiles {
+                    let (local_min_x, local_max_x, local_min_y, local_max_y) =
+                        if sel.strip_axis_x {
+                            let (_, lsx) = blueprint::virtual_to_tile_local(sel.start.0);
+                            let (_, lcx) = blueprint::virtual_to_tile_local(sel.current.0);
+                            (lsx.min(lcx), lsx.max(lcx), sel.start.1, sel.current.1)
+                        } else {
+                            let (_, lsy) = blueprint::virtual_to_tile_local(sel.start.1);
+                            let (_, lcy) = blueprint::virtual_to_tile_local(sel.current.1);
+                            (sel.start.0, sel.current.0, lsy.min(lcy), lsy.max(lcy))
+                        };
+
+                    let min_gx = local_min_x.min(local_max_x);
+                    let max_gx = local_min_x.max(local_max_x);
+                    let min_gy = local_min_y.min(local_max_y);
+                    let max_gy = local_min_y.max(local_max_y);
+
+                    // Check corners of this sub-rectangle
+                    let _ = strip_tile; // use the tile for the range check
+                    for &gx in &[min_gx, max_gx] {
+                        for &gy in &[min_gy, max_gy] {
+                            if blueprint::is_vertex_cell(gx, gy) {
+                                self.ui.flash_label = "Can't select: includes tile vertex".to_string();
+                                self.ui.flash_timer = 1.5;
+                                self.ui.flash_screen_pos = None;
+                                self.ui.selection = None;
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+
+            sel.finalized = true;
         }
     }
 
@@ -1647,25 +2043,114 @@ impl App {
                     let mb = [combined.b.re as f32, combined.b.im as f32];
 
                     if self.ui.paste_mode {
-                        // Paste mode: multi-ghost preview for all clipboard entries
+                        // Paste mode: ghost preview for all clipboard entries
                         if let Some(clip) = &self.clipboard {
-                            let tile = &re.tiling.tiles[tile_vis_idx];
-                            let checks = blueprint::can_paste(
-                                &self.world, tile.id.word(), (gx, gy), clip,
-                            );
-                            for (i, entry) in clip.entries.iter().enumerate() {
-                                let egx = gx + entry.offset.0;
-                                let egy = gy + entry.offset.1;
-                                let blocked = !checks.get(i).is_none_or(|&(_, ok)| ok);
-                                re.ghost_instances.push(MachineInstance {
-                                    mobius_a: ma,
-                                    mobius_b: mb,
-                                    grid_pos: [egx as f32, egy as f32],
-                                    machine_type: kind_to_machine_type_float(entry.kind),
-                                    progress: if blocked { -3.0 } else { -1.0 },
-                                    power_sat: -1.0,
-                                    facing: entry.direction.rotations_from_north() as f32,
-                                });
+                            // Detect cross-tile paste even for single-tile clipboards
+                            let max_px = gx + clip.width - 1;
+                            let max_py = gy + clip.height - 1;
+                            let crosses_x = max_px > 32 || gx < -32;
+                            let crosses_y = max_py > 32 || gy < -32;
+                            let multi_tile_clip = clip.width > 64 || clip.height > 64 || crosses_x || crosses_y;
+
+                            if multi_tile_clip {
+                                // Multi-tile ghost: build Mobius map per tile_delta
+                                let strip_axis_x = if clip.width > 64 { true }
+                                    else if clip.height > 64 { false }
+                                    else { crosses_x };
+                                let mut tile_mobius: std::collections::HashMap<i32, ([f32; 2], [f32; 2])> =
+                                    std::collections::HashMap::new();
+                                tile_mobius.insert(0, (ma, mb));
+
+                                // Pre-walk strip to find Mobius for each needed delta
+                                for entry in &clip.entries {
+                                    let (offset_x, offset_y) = (gx + entry.offset.0, gy + entry.offset.1);
+                                    let (td, _) = if strip_axis_x {
+                                        blueprint::virtual_to_tile_local(offset_x)
+                                    } else {
+                                        blueprint::virtual_to_tile_local(offset_y)
+                                    };
+                                    if tile_mobius.contains_key(&td) {
+                                        continue;
+                                    }
+                                    // Walk from anchor tile
+                                    let edge = if strip_axis_x {
+                                        if td > 0 { 0u8 } else { 2u8 }
+                                    } else if td > 0 {
+                                        1u8
+                                    } else {
+                                        3u8
+                                    };
+                                    let mut cur = tile_vis_idx;
+                                    let mut found = true;
+                                    for _ in 0..td.unsigned_abs() {
+                                        if let Some(nid) = re.tiling.neighbor_tile_id(cur, edge) {
+                                            if let Some(nidx) = re.tiling.find_tile(&nid) {
+                                                cur = nidx;
+                                            } else {
+                                                found = false;
+                                                break;
+                                            }
+                                        } else {
+                                            found = false;
+                                            break;
+                                        }
+                                    }
+                                    if found {
+                                        if let Some(&(_, m)) = visible.iter().find(|&&(idx, _)| idx == cur) {
+                                            tile_mobius.insert(td, (
+                                                [m.a.re as f32, m.a.im as f32],
+                                                [m.b.re as f32, m.b.im as f32],
+                                            ));
+                                        }
+                                    }
+                                }
+
+                                // Emit ghost instances per entry
+                                for entry in &clip.entries {
+                                    let (offset_x, offset_y) = (gx + entry.offset.0, gy + entry.offset.1);
+                                    let (td, local_strip) = if strip_axis_x {
+                                        blueprint::virtual_to_tile_local(offset_x)
+                                    } else {
+                                        blueprint::virtual_to_tile_local(offset_y)
+                                    };
+                                    let local_xy = if strip_axis_x {
+                                        (local_strip, offset_y)
+                                    } else {
+                                        (offset_x, local_strip)
+                                    };
+                                    if let Some(&(entry_ma, entry_mb)) = tile_mobius.get(&td) {
+                                        re.ghost_instances.push(MachineInstance {
+                                            mobius_a: entry_ma,
+                                            mobius_b: entry_mb,
+                                            grid_pos: [local_xy.0 as f32, local_xy.1 as f32],
+                                            machine_type: kind_to_machine_type_float(entry.kind),
+                                            progress: -1.0,
+                                            power_sat: -1.0,
+                                            facing: entry.direction.rotations_from_north() as f32,
+                                        });
+                                    }
+                                    // Skip entries whose tile isn't visible
+                                }
+                            } else {
+                                // Single-tile paste ghost preview
+                                let tile = &re.tiling.tiles[tile_vis_idx];
+                                let checks = blueprint::can_paste(
+                                    &self.world, tile.id.word(), (gx, gy), clip,
+                                );
+                                for (i, entry) in clip.entries.iter().enumerate() {
+                                    let egx = gx + entry.offset.0;
+                                    let egy = gy + entry.offset.1;
+                                    let blocked = !checks.get(i).is_none_or(|&(_, ok)| ok);
+                                    re.ghost_instances.push(MachineInstance {
+                                        mobius_a: ma,
+                                        mobius_b: mb,
+                                        grid_pos: [egx as f32, egy as f32],
+                                        machine_type: kind_to_machine_type_float(entry.kind),
+                                        progress: if blocked { -3.0 } else { -1.0 },
+                                        power_sat: -1.0,
+                                        facing: entry.direction.rotations_from_north() as f32,
+                                    });
+                                }
                             }
                         }
                     } else if let Some(mode) = &self.ui.placement_mode {
@@ -1817,27 +2302,66 @@ impl App {
         if let Some(sel) = &self.ui.selection {
             let khs = self.klein_half_side;
             let divisions = 64.0_f64;
-            // Find the Mobius transform for the selection tile from the visible list
-            if let Some(&(_, combined)) = visible.iter().find(|&&(idx, _)| idx == sel.tile_idx) {
-                let min_gx = sel.start.0.min(sel.current.0);
-                let max_gx = sel.start.0.max(sel.current.0);
-                let min_gy = sel.start.1.min(sel.current.1);
-                let max_gy = sel.start.1.max(sel.current.1);
+            let color = if sel.finalized {
+                egui::Color32::from_rgba_unmultiplied(60, 180, 255, 60)
+            } else {
+                egui::Color32::from_rgba_unmultiplied(60, 180, 255, 40)
+            };
+            let border_color = egui::Color32::from_rgba_unmultiplied(60, 180, 255, 140);
 
-                // Project each cell in the selection to screen space and draw a tinted rect
-                let color = if sel.finalized {
-                    egui::Color32::from_rgba_unmultiplied(60, 180, 255, 60)
-                } else {
-                    egui::Color32::from_rgba_unmultiplied(60, 180, 255, 40)
+            // For each tile in the strip, compute the local sub-rectangle and draw
+            for strip_tile in &sel.tiles {
+                let combined = match visible.iter().find(|&&(idx, _)| idx == strip_tile.tile_idx) {
+                    Some(&(_, m)) => m,
+                    None => continue,
                 };
-                let border_color = egui::Color32::from_rgba_unmultiplied(60, 180, 255, 140);
 
-                // Project the 4 corners of the bounding box to get screen-space rect
+                // Compute local grid bounds for this tile
+                let (local_min_gx, local_max_gx, local_min_gy, local_max_gy) = if sel.tiles.len() == 1 {
+                    // Single-tile: use raw coords
+                    let min_gx = sel.start.0.min(sel.current.0);
+                    let max_gx = sel.start.0.max(sel.current.0);
+                    let min_gy = sel.start.1.min(sel.current.1);
+                    let max_gy = sel.start.1.max(sel.current.1);
+                    (min_gx, max_gx, min_gy, max_gy)
+                } else {
+                    // Multi-tile: decompose virtual coords for this tile's delta
+                    let delta = strip_tile.delta;
+                    if sel.strip_axis_x {
+                        let vmin_x = sel.start.0.min(sel.current.0);
+                        let vmax_x = sel.start.0.max(sel.current.0);
+                        // Clip to this tile's virtual range
+                        let tile_vmin = blueprint::tile_local_to_virtual(delta, -32);
+                        let tile_vmax = blueprint::tile_local_to_virtual(delta, 32);
+                        let clipped_vmin = vmin_x.max(tile_vmin);
+                        let clipped_vmax = vmax_x.min(tile_vmax);
+                        if clipped_vmin > clipped_vmax { continue; }
+                        let lmin = clipped_vmin - delta * 64;
+                        let lmax = clipped_vmax - delta * 64;
+                        let min_gy = sel.start.1.min(sel.current.1);
+                        let max_gy = sel.start.1.max(sel.current.1);
+                        (lmin, lmax, min_gy, max_gy)
+                    } else {
+                        let vmin_y = sel.start.1.min(sel.current.1);
+                        let vmax_y = sel.start.1.max(sel.current.1);
+                        let tile_vmin = blueprint::tile_local_to_virtual(delta, -32);
+                        let tile_vmax = blueprint::tile_local_to_virtual(delta, 32);
+                        let clipped_vmin = vmin_y.max(tile_vmin);
+                        let clipped_vmax = vmax_y.min(tile_vmax);
+                        if clipped_vmin > clipped_vmax { continue; }
+                        let lmin = clipped_vmin - delta * 64;
+                        let lmax = clipped_vmax - delta * 64;
+                        let min_gx = sel.start.0.min(sel.current.0);
+                        let max_gx = sel.start.0.max(sel.current.0);
+                        (min_gx, max_gx, lmin, lmax)
+                    }
+                };
+
                 let corners = [
-                    (min_gx as f64 - 0.5, min_gy as f64 - 0.5), // top-left
-                    (max_gx as f64 + 0.5, min_gy as f64 - 0.5), // top-right
-                    (max_gx as f64 + 0.5, max_gy as f64 + 0.5), // bottom-right
-                    (min_gx as f64 - 0.5, max_gy as f64 + 0.5), // bottom-left
+                    (local_min_gx as f64 - 0.5, local_min_gy as f64 - 0.5),
+                    (local_max_gx as f64 + 0.5, local_min_gy as f64 - 0.5),
+                    (local_max_gx as f64 + 0.5, local_max_gy as f64 + 0.5),
+                    (local_min_gx as f64 - 0.5, local_max_gy as f64 + 0.5),
                 ];
                 let mut screen_pts = Vec::new();
                 for &(cx, cy) in &corners {
@@ -1848,27 +2372,31 @@ impl App {
                     let local_disk = Complex::new(snap_kx / denom, snap_ky / denom);
                     let world_disk = combined.apply(local_disk);
                     let bowl = crate::hyperbolic::embedding::disk_to_bowl(world_disk);
-                    let elevation = re.extra_elevation.get(&sel.tile_idx).copied().unwrap_or(0.0);
+                    let elevation = re.extra_elevation.get(&strip_tile.tile_idx).copied().unwrap_or(0.0);
                     let world_pos = glam::Vec3::new(bowl[0], bowl[1] + elevation, bowl[2]);
                     if let Some((sx, sy)) = project_to_screen(world_pos, &view_proj, width, height) {
                         screen_pts.push(egui::pos2(sx / scale, sy / scale));
                     }
                 }
-                // Draw using layer_painter (unclipped) instead of Area + ui.painter()
-                if screen_pts.len() >= 2 {
+                if screen_pts.len() == 4 {
                     let egui_ctx = re.egui.ctx.clone();
                     let layer_id = egui::LayerId::new(egui::Order::Background, egui::Id::new("blueprint_selection"));
                     let painter = egui_ctx.layer_painter(layer_id);
-                    let min_x = screen_pts.iter().map(|p| p.x).fold(f32::INFINITY, f32::min);
-                    let max_x = screen_pts.iter().map(|p| p.x).fold(f32::NEG_INFINITY, f32::max);
-                    let min_y = screen_pts.iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
-                    let max_y = screen_pts.iter().map(|p| p.y).fold(f32::NEG_INFINITY, f32::max);
-                    let rect = egui::Rect::from_min_max(
-                        egui::pos2(min_x, min_y),
-                        egui::pos2(max_x, max_y),
-                    );
-                    painter.rect_filled(rect, 2.0, color);
-                    painter.rect_stroke(rect, 2.0, egui::Stroke::new(1.5, border_color), egui::StrokeKind::Outside);
+                    // Draw filled quad using a mesh (proper hyperbolic shape)
+                    let mut mesh = egui::Mesh::default();
+                    for &pt in &screen_pts {
+                        mesh.vertices.push(egui::epaint::Vertex {
+                            pos: pt,
+                            uv: egui::epaint::WHITE_UV,
+                            color,
+                        });
+                    }
+                    mesh.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
+                    painter.add(egui::Shape::mesh(mesh));
+                    // Draw border as a closed polyline
+                    let mut border_pts = screen_pts.clone();
+                    border_pts.push(screen_pts[0]);
+                    painter.add(egui::Shape::line(border_pts, egui::Stroke::new(1.5, border_color)));
                 }
             }
         }

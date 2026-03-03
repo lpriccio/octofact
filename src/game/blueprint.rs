@@ -1,3 +1,7 @@
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use super::items::ItemId;
 use super::world::{Direction, EntityId, StructureKind, WorldState};
 use crate::sim::machine::MachinePool;
@@ -54,6 +58,196 @@ impl Clipboard {
         self.width = h;
         self.height = w;
     }
+}
+
+// ---------------------------------------------------------------------------
+// Blueprint persistence
+// ---------------------------------------------------------------------------
+
+/// Current blueprint file format version.
+const BLUEPRINT_VERSION: u32 = 1;
+
+/// A blueprint saved to disk.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct BlueprintFile {
+    /// Format version for forward compatibility.
+    pub version: u32,
+    /// User-provided blueprint name.
+    pub name: String,
+    /// Unix epoch seconds when saved.
+    pub timestamp: u64,
+    /// The `q` parameter of the {4,q} tiling this was captured in.
+    pub tiling_q: u32,
+    /// Bounding box width in grid cells.
+    pub width: u32,
+    /// Bounding box height in grid cells.
+    pub height: u32,
+    /// The structure entries.
+    pub entries: Vec<BlueprintEntry>,
+}
+
+impl BlueprintFile {
+    /// Create a `BlueprintFile` from a `Clipboard` and a user-provided name.
+    pub fn from_clipboard(clipboard: &Clipboard, name: String) -> Self {
+        Self {
+            version: BLUEPRINT_VERSION,
+            name,
+            timestamp: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+            tiling_q: clipboard.tiling_q,
+            width: clipboard.width as u32,
+            height: clipboard.height as u32,
+            entries: clipboard.entries.clone(),
+        }
+    }
+
+    /// Convert back to a `Clipboard`.
+    pub fn to_clipboard(&self) -> Clipboard {
+        Clipboard {
+            entries: self.entries.clone(),
+            width: self.width as i32,
+            height: self.height as i32,
+            tiling_q: self.tiling_q,
+        }
+    }
+}
+
+/// Returns the blueprints directory, creating it if needed.
+fn blueprints_dir() -> Option<PathBuf> {
+    let dir = directories::ProjectDirs::from("", "", "octofact")?
+        .data_dir()
+        .join("blueprints");
+    fs::create_dir_all(&dir).ok()?;
+    Some(dir)
+}
+
+/// Sanitize a user-provided name for use as a filename.
+///
+/// Strips path separators and limits length.
+fn sanitize_name(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .filter(|c| !matches!(c, '/' | '\\' | '\0'))
+        .take(100)
+        .collect();
+    let trimmed = cleaned.trim();
+    if trimmed.is_empty() {
+        "unnamed".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// Pick a unique filename in `dir` for the given base name.
+///
+/// Returns `{base}.blueprint`, or `{base}_2.blueprint` etc. on collision.
+fn unique_path(dir: &Path, base: &str) -> PathBuf {
+    let candidate = dir.join(format!("{base}.blueprint"));
+    if !candidate.exists() {
+        return candidate;
+    }
+    for i in 2.. {
+        let candidate = dir.join(format!("{base}_{i}.blueprint"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    unreachable!()
+}
+
+/// Save a blueprint to disk. Returns the path it was written to.
+pub fn save_blueprint(file: &BlueprintFile) -> Result<PathBuf, String> {
+    let dir = blueprints_dir().ok_or("Could not determine blueprints directory")?;
+    let base = sanitize_name(&file.name);
+    let path = unique_path(&dir, &base);
+    let bytes = bincode::serialize(file).map_err(|e| format!("serialize: {e}"))?;
+    let tmp = path.with_extension("blueprint.tmp");
+    fs::write(&tmp, &bytes).map_err(|e| format!("write: {e}"))?;
+    fs::rename(&tmp, &path).map_err(|e| format!("rename: {e}"))?;
+    log::info!(
+        "Saved blueprint '{}' ({} bytes) to {}",
+        file.name,
+        bytes.len(),
+        path.display()
+    );
+    Ok(path)
+}
+
+/// Load a blueprint from a file path.
+///
+/// Returns an error if the version is unsupported or the tiling `q` doesn't
+/// match `expected_q`.
+pub fn load_blueprint(path: &Path, expected_q: u32) -> Result<BlueprintFile, String> {
+    let bytes = fs::read(path).map_err(|e| format!("read: {e}"))?;
+    let file: BlueprintFile =
+        bincode::deserialize(&bytes).map_err(|e| format!("deserialize: {e}"))?;
+    if file.version > BLUEPRINT_VERSION {
+        return Err(format!(
+            "Blueprint version {} is newer than supported version {BLUEPRINT_VERSION}",
+            file.version
+        ));
+    }
+    if file.tiling_q != expected_q {
+        return Err(format!(
+            "Blueprint was saved in {{4,{}}} but current tiling is {{4,{expected_q}}}",
+            file.tiling_q
+        ));
+    }
+    Ok(file)
+}
+
+/// List all saved blueprints, returning `(path, BlueprintFile)` pairs.
+///
+/// Files that fail to deserialize are silently skipped.
+pub fn list_blueprints() -> Vec<(PathBuf, BlueprintFile)> {
+    let Some(dir) = blueprints_dir() else {
+        return vec![];
+    };
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return vec![];
+    };
+    let mut results: Vec<(PathBuf, BlueprintFile)> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.path()
+                .extension()
+                .is_some_and(|ext| ext == "blueprint")
+        })
+        .filter_map(|e| {
+            let path = e.path();
+            let bytes = fs::read(&path).ok()?;
+            let file: BlueprintFile = bincode::deserialize(&bytes).ok()?;
+            Some((path, file))
+        })
+        .collect();
+    results.sort_by(|a, b| a.1.name.cmp(&b.1.name));
+    results
+}
+
+/// Delete a blueprint file.
+pub fn delete_blueprint(path: &Path) -> Result<(), String> {
+    fs::remove_file(path).map_err(|e| format!("delete: {e}"))
+}
+
+/// Rename a blueprint: update the internal name and rename the file on disk.
+///
+/// Returns the new file path.
+pub fn rename_blueprint(path: &Path, new_name: &str) -> Result<PathBuf, String> {
+    let bytes = fs::read(path).map_err(|e| format!("read: {e}"))?;
+    let mut file: BlueprintFile =
+        bincode::deserialize(&bytes).map_err(|e| format!("deserialize: {e}"))?;
+    file.name = new_name.to_string();
+    let dir = path.parent().ok_or("invalid path")?;
+    let base = sanitize_name(new_name);
+    let new_path = unique_path(dir, &base);
+    let new_bytes = bincode::serialize(&file).map_err(|e| format!("serialize: {e}"))?;
+    let tmp = new_path.with_extension("blueprint.tmp");
+    fs::write(&tmp, &new_bytes).map_err(|e| format!("write: {e}"))?;
+    fs::rename(&tmp, &new_path).map_err(|e| format!("rename: {e}"))?;
+    fs::remove_file(path).map_err(|e| format!("delete old: {e}"))?;
+    Ok(new_path)
 }
 
 /// Check whether each clipboard entry can be pasted at `anchor` on the given tile.
@@ -813,5 +1007,162 @@ mod tests {
         assert_eq!(clip.height, 65);
         // After rotation, a multi-tile x-strip becomes a multi-tile y-strip
         assert!(clip.height > 64); // confirms y-axis strip
+    }
+
+    // --- Phase BP3 persistence tests ---
+
+    fn sample_clipboard() -> Clipboard {
+        Clipboard {
+            entries: vec![
+                BlueprintEntry {
+                    offset: (0, 0),
+                    kind: StructureKind::Belt,
+                    direction: Direction::East,
+                    items: Vec::new(),
+                    recipe: None,
+                },
+                BlueprintEntry {
+                    offset: (1, 0),
+                    kind: StructureKind::Machine(MachineType::Composer),
+                    direction: Direction::South,
+                    items: Vec::new(),
+                    recipe: Some(2),
+                },
+                BlueprintEntry {
+                    offset: (0, 1),
+                    kind: StructureKind::Storage,
+                    direction: Direction::North,
+                    items: vec![(ItemId::Point, 10), (ItemId::LineSegment, 5)],
+                    recipe: None,
+                },
+            ],
+            width: 3,
+            height: 2,
+            tiling_q: 5,
+        }
+    }
+
+    #[test]
+    fn blueprint_file_roundtrip() {
+        let clip = sample_clipboard();
+        let file = BlueprintFile::from_clipboard(&clip, "test bp".to_string());
+        assert_eq!(file.version, BLUEPRINT_VERSION);
+        assert_eq!(file.name, "test bp");
+        assert_eq!(file.tiling_q, 5);
+        assert_eq!(file.width, 3);
+        assert_eq!(file.height, 2);
+        assert_eq!(file.entries.len(), 3);
+
+        // Serialize and deserialize
+        let bytes = bincode::serialize(&file).unwrap();
+        let loaded: BlueprintFile = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(loaded.name, "test bp");
+        assert_eq!(loaded.tiling_q, 5);
+        assert_eq!(loaded.width, 3);
+        assert_eq!(loaded.height, 2);
+        assert_eq!(loaded.entries.len(), 3);
+        assert_eq!(loaded.entries[0].kind, StructureKind::Belt);
+        assert_eq!(loaded.entries[0].direction, Direction::East);
+        assert_eq!(loaded.entries[1].recipe, Some(2));
+        assert_eq!(loaded.entries[2].items.len(), 2);
+    }
+
+    #[test]
+    fn blueprint_to_clipboard_roundtrip() {
+        let clip = sample_clipboard();
+        let file = BlueprintFile::from_clipboard(&clip, "rt".to_string());
+        let restored = file.to_clipboard();
+        assert_eq!(restored.width, clip.width);
+        assert_eq!(restored.height, clip.height);
+        assert_eq!(restored.tiling_q, clip.tiling_q);
+        assert_eq!(restored.entries.len(), clip.entries.len());
+        for (a, b) in restored.entries.iter().zip(clip.entries.iter()) {
+            assert_eq!(a.offset, b.offset);
+            assert_eq!(a.kind, b.kind);
+            assert_eq!(a.direction, b.direction);
+            assert_eq!(a.items, b.items);
+            assert_eq!(a.recipe, b.recipe);
+        }
+    }
+
+    #[test]
+    fn save_load_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let clip = sample_clipboard();
+        let file = BlueprintFile::from_clipboard(&clip, "save_test".to_string());
+        let bytes = bincode::serialize(&file).unwrap();
+        let path = dir.path().join("save_test.blueprint");
+        std::fs::write(&path, &bytes).unwrap();
+
+        let loaded = load_blueprint(&path, 5).unwrap();
+        assert_eq!(loaded.name, "save_test");
+        assert_eq!(loaded.entries.len(), 3);
+        assert_eq!(loaded.tiling_q, 5);
+    }
+
+    #[test]
+    fn load_rejects_tiling_mismatch() {
+        let dir = tempfile::tempdir().unwrap();
+        let clip = sample_clipboard(); // tiling_q = 5
+        let file = BlueprintFile::from_clipboard(&clip, "mismatch".to_string());
+        let bytes = bincode::serialize(&file).unwrap();
+        let path = dir.path().join("mismatch.blueprint");
+        std::fs::write(&path, &bytes).unwrap();
+
+        let err = load_blueprint(&path, 7).unwrap_err();
+        assert!(err.contains("{4,5}"), "error should mention source tiling: {err}");
+        assert!(err.contains("{4,7}"), "error should mention target tiling: {err}");
+    }
+
+    #[test]
+    fn sanitize_name_strips_separators() {
+        assert_eq!(sanitize_name("my/blueprint"), "myblueprint");
+        assert_eq!(sanitize_name("test\\bp"), "testbp");
+        assert_eq!(sanitize_name(""), "unnamed");
+        assert_eq!(sanitize_name("   "), "unnamed");
+        assert_eq!(sanitize_name("  hello  "), "hello");
+    }
+
+    #[test]
+    fn unique_path_avoids_collision() {
+        let dir = tempfile::tempdir().unwrap();
+        // Create first file
+        std::fs::write(dir.path().join("test.blueprint"), b"x").unwrap();
+        let p = unique_path(dir.path(), "test");
+        assert_eq!(p.file_name().unwrap(), "test_2.blueprint");
+
+        // Create second collision
+        std::fs::write(&p, b"y").unwrap();
+        let p2 = unique_path(dir.path(), "test");
+        assert_eq!(p2.file_name().unwrap(), "test_3.blueprint");
+    }
+
+    #[test]
+    fn delete_blueprint_removes_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("del.blueprint");
+        std::fs::write(&path, b"data").unwrap();
+        assert!(path.exists());
+        delete_blueprint(&path).unwrap();
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn rename_blueprint_updates_name_and_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let clip = sample_clipboard();
+        let file = BlueprintFile::from_clipboard(&clip, "old_name".to_string());
+        let bytes = bincode::serialize(&file).unwrap();
+        let old_path = dir.path().join("old_name.blueprint");
+        std::fs::write(&old_path, &bytes).unwrap();
+
+        let new_path = rename_blueprint(&old_path, "new_name").unwrap();
+        assert!(!old_path.exists());
+        assert!(new_path.exists());
+        assert_eq!(new_path.file_name().unwrap(), "new_name.blueprint");
+
+        let loaded: BlueprintFile =
+            bincode::deserialize(&std::fs::read(&new_path).unwrap()).unwrap();
+        assert_eq!(loaded.name, "new_name");
     }
 }

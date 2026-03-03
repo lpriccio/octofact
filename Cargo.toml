@@ -23,3 +23,6 @@ directories = "6"
 
 [profile.release]
 opt-level = 3
+
+[dev-dependencies]
+tempfile = "3.26.0"

@@ -147,30 +147,30 @@ and file extension.
 
 ### Tasks
 
-- [ ] Define `BlueprintFile` struct in `blueprint.rs`:
+- [x] Define `BlueprintFile` struct in `blueprint.rs`:
   - `version: u32` — format version for forward compatibility
   - `name: String` — user-provided blueprint name
   - `timestamp: u64` — Unix epoch seconds at save time
   - `tiling_q: u32` — the `q` parameter of the {4,q} tiling
   - `width: u32`, `height: u32` — bounding box dimensions
   - `entries: Vec<BlueprintEntry>` — the structure data
-- [ ] Implement `blueprints_dir() -> PathBuf` — `ProjectDirs::data_dir().join("blueprints")`, create on first access
-- [ ] Implement `save_blueprint(file: &BlueprintFile) -> Result<PathBuf>`:
+- [x] Implement `blueprints_dir() -> PathBuf` — `ProjectDirs::data_dir().join("blueprints")`, create on first access
+- [x] Implement `save_blueprint(file: &BlueprintFile) -> Result<PathBuf>`:
   - Serialize with bincode, write atomically via `.tmp` rename (pattern from save.rs)
   - Filename: `{sanitized_name}.blueprint`
-- [ ] Implement `load_blueprint(path: &Path) -> Result<BlueprintFile>`:
+- [x] Implement `load_blueprint(path: &Path) -> Result<BlueprintFile>`:
   - Deserialize with bincode, validate version field
   - Return error if version is unsupported
-- [ ] Implement `list_blueprints() -> Vec<(PathBuf, BlueprintFile)>`:
+- [x] Implement `list_blueprints() -> Vec<(PathBuf, BlueprintFile)>`:
   - Scan `blueprints_dir()` for `.blueprint` files
   - Load and return metadata for each
-- [ ] Implement `delete_blueprint(path: &Path) -> Result<()>`
-- [ ] Implement `rename_blueprint(path: &Path, new_name: &str) -> Result<PathBuf>`:
+- [x] Implement `delete_blueprint(path: &Path) -> Result<()>`
+- [x] Implement `rename_blueprint(path: &Path, new_name: &str) -> Result<PathBuf>`:
   - Update internal name field and rename file on disk
-- [ ] Tiling compatibility guard: on load, compare `BlueprintFile.tiling_q` against current world `q` — reject with descriptive error if mismatched
-- [ ] Unit tests: round-trip save → load preserves all fields
-- [ ] Unit tests: list_blueprints discovers saved files
-- [ ] Unit tests: tiling_q mismatch returns error
+- [x] Tiling compatibility guard: on load, compare `BlueprintFile.tiling_q` against current world `q` — reject with descriptive error if mismatched
+- [x] Unit tests: round-trip save → load preserves all fields
+- [x] Unit tests: list_blueprints discovers saved files
+- [x] Unit tests: tiling_q mismatch returns error
 
 ### Design Notes
 

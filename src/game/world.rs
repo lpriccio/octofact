@@ -209,6 +209,22 @@ pub fn cross_tile_rotate(gx: i32, gy: i32, rot: u8) -> (i32, i32) {
     }
 }
 
+/// Transform an anchor-frame bounding box to tile-local coordinates via `cross_tile_rotate`,
+/// returning `(min_x, max_x, min_y, max_y)` in tile-local space.
+pub fn rotated_bounds(min_x: i32, max_x: i32, min_y: i32, max_y: i32, rot: u8) -> (i32, i32, i32, i32) {
+    let corners = [
+        cross_tile_rotate(min_x, min_y, rot),
+        cross_tile_rotate(min_x, max_y, rot),
+        cross_tile_rotate(max_x, min_y, rot),
+        cross_tile_rotate(max_x, max_y, rot),
+    ];
+    let lmin_x = corners.iter().map(|c| c.0).min().unwrap();
+    let lmax_x = corners.iter().map(|c| c.0).max().unwrap();
+    let lmin_y = corners.iter().map(|c| c.1).min().unwrap();
+    let lmax_y = corners.iter().map(|c| c.1).max().unwrap();
+    (lmin_x, lmax_x, lmin_y, lmax_y)
+}
+
 /// Compute all grid cells occupied by a structure with the given footprint placed at `origin`.
 /// Footprint extends from origin in +x, +y direction.
 pub fn occupied_cells(origin: (i32, i32), footprint: (i32, i32)) -> Vec<(i32, i32)> {

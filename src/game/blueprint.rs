@@ -427,20 +427,23 @@ pub fn capture_region(
 
 /// Capture structures across a multi-tile strip.
 ///
-/// `tiles` is a list of `(tile_address, delta)` pairs where delta is the strip offset.
-/// `top_left` and `bottom_right` are in virtual coordinates.
+/// `tiles` is a list of `(tile_address, delta, rot)` triples where delta is the strip offset
+/// and rot is the cumulative rotation (quarter-turns) from the anchor tile's frame.
+/// `top_left` and `bottom_right` are in virtual (anchor-frame) coordinates.
 /// `strip_axis_x` indicates whether the strip extends along x (true) or y (false).
 #[allow(clippy::too_many_arguments)]
 pub fn capture_strip(
     world: &WorldState,
     machine_pool: &MachinePool,
     storage_pool: &StoragePool,
-    tiles: &[(&[u8], i32)],
+    tiles: &[(&[u8], i32, u8)],
     top_left: (i32, i32),
     bottom_right: (i32, i32),
     strip_axis_x: bool,
     tiling_q: u32,
 ) -> Clipboard {
+    use super::world::{cross_tile_rotate, rotated_bounds};
+
     let vmin_x = top_left.0.min(bottom_right.0);
     let vmax_x = top_left.0.max(bottom_right.0);
     let vmin_y = top_left.1.min(bottom_right.1);
@@ -449,9 +452,9 @@ pub fn capture_strip(
     let mut entries = Vec::new();
     let mut seen = std::collections::HashSet::<EntityId>::new();
 
-    for &(tile_addr, delta) in tiles {
-        // Compute local coordinate range for this tile
-        let (local_min_x, local_max_x, local_min_y, local_max_y) = if strip_axis_x {
+    for &(tile_addr, delta, rot) in tiles {
+        // Compute anchor-frame local coordinate range for this tile
+        let (anchor_min_x, anchor_max_x, anchor_min_y, anchor_max_y) = if strip_axis_x {
             let tile_vmin = tile_local_to_virtual(delta, -32);
             let tile_vmax = tile_local_to_virtual(delta, 32);
             let clipped_vmin = vmin_x.max(tile_vmin);
@@ -471,10 +474,16 @@ pub fn capture_strip(
             (vmin_x, vmax_x, lmin, lmax)
         };
 
+        // Transform anchor-frame bounds to tile-local coords for iteration
+        let (local_min_x, local_max_x, local_min_y, local_max_y) =
+            rotated_bounds(anchor_min_x, anchor_max_x, anchor_min_y, anchor_max_y, rot);
+
         let entities_map = match world.tile_entities(tile_addr) {
             Some(e) => e,
             None => continue,
         };
+
+        let inv_rot = (4 - rot) % 4;
 
         for gy in local_min_y..=local_max_y {
             for gx in local_min_x..=local_max_x {
@@ -512,22 +521,28 @@ pub fn capture_strip(
 
                     let recipe = machine_pool.recipe(entity).flatten();
 
+                    // Inverse-rotate tile-local coords to anchor frame
+                    let (ax, ay) = cross_tile_rotate(gx, gy, inv_rot);
+
                     // Compute virtual offset from bounding box origin
                     let vx = if strip_axis_x {
-                        tile_local_to_virtual(delta, gx)
+                        tile_local_to_virtual(delta, ax)
                     } else {
-                        gx
+                        ax
                     };
                     let vy = if strip_axis_x {
-                        gy
+                        ay
                     } else {
-                        tile_local_to_virtual(delta, gy)
+                        tile_local_to_virtual(delta, ay)
                     };
+
+                    // Inverse-rotate direction to anchor frame
+                    let anchor_direction = direction.rotate_n_cw(inv_rot);
 
                     entries.push(BlueprintEntry {
                         offset: (vx - vmin_x, vy - vmin_y),
                         kind,
-                        direction,
+                        direction: anchor_direction,
                         items,
                         recipe,
                     });

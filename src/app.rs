@@ -39,6 +39,8 @@ pub(crate) struct StripTile {
     id: CellId,
     /// Offset from the anchor tile (0 = anchor, positive = forward along strip).
     delta: i32,
+    /// Cumulative rotation (quarter-turns) from the anchor tile's frame.
+    rot: u8,
 }
 
 /// State for an active box selection (blueprint mode).
@@ -846,31 +848,38 @@ impl App {
 
     /// Walk `|delta|` steps from a tile to find the neighbor at that offset along a strip axis.
     ///
-    /// Returns `(tile_idx, CellId)` of the target tile, or `None` if not loaded.
-    fn walk_tile_strip(&self, anchor_idx: usize, delta: i32, axis_x: bool) -> Option<(usize, CellId)> {
+    /// Returns `(tile_idx, CellId, cumulative_rot)` of the target tile, or `None` if not loaded.
+    /// `cumulative_rot` is the number of CCW quarter-turns the neighbor's frame is rotated
+    /// relative to the anchor tile's frame.
+    fn walk_tile_strip(&self, anchor_idx: usize, delta: i32, axis_x: bool) -> Option<(usize, CellId, u8)> {
         if delta == 0 {
             let running = self.renderer.as_ref().unwrap();
-            return Some((anchor_idx, running.tiling.tiles[anchor_idx].id.clone()));
+            return Some((anchor_idx, running.tiling.tiles[anchor_idx].id.clone(), 0));
         }
 
         let running = self.renderer.as_ref().unwrap();
-        let edge = if axis_x {
-            if delta > 0 { 0u8 } else { 2u8 } // East / West
+        let base_edge: u8 = if axis_x {
+            if delta > 0 { 0 } else { 2 } // East / West
         } else if delta > 0 {
-            1u8 // South
+            1 // South
         } else {
-            3u8 // North
+            3 // North
         };
 
         let mut current_idx = anchor_idx;
+        let mut cum_rot: u8 = 0;
         for _ in 0..delta.unsigned_abs() {
+            let edge = (base_edge + cum_rot) % 4;
+            let back = running.tiling.back_edge(current_idx, edge);
+            let step_rot = ((back as i32) - (edge as i32) + 2 + 4) % 4;
+            cum_rot = (cum_rot + step_rot as u8) % 4;
             let neighbor_id = running.tiling.neighbor_tile_id(current_idx, edge)?;
             let next_idx = running.tiling.find_tile(&neighbor_id)?;
             current_idx = next_idx;
         }
 
         let id = running.tiling.tiles[current_idx].id.clone();
-        Some((current_idx, id))
+        Some((current_idx, id, cum_rot))
     }
 
     /// Handle a click while in paste mode: batch-place clipboard entries.
@@ -932,9 +941,9 @@ impl App {
                 }
             }
 
-            // Build tile cache: delta → (tile_idx, CellId, tile_address)
-            let mut tile_cache: std::collections::HashMap<i32, (usize, CellId)> = std::collections::HashMap::new();
-            tile_cache.insert(0, (anchor_tile_idx, cell_id.clone()));
+            // Build tile cache: delta → (tile_idx, CellId, rot)
+            let mut tile_cache: std::collections::HashMap<i32, (usize, CellId, u8)> = std::collections::HashMap::new();
+            tile_cache.insert(0, (anchor_tile_idx, cell_id.clone(), 0));
 
             // Pre-resolve all needed tile deltas
             for entry in &clipboard.entries {
@@ -965,11 +974,13 @@ impl App {
                 } else {
                     blueprint::virtual_to_tile_local(offset_y)
                 };
-                let local_xy = if strip_axis_x { (local_strip, offset_y) } else { (offset_x, local_strip) };
-                let (_, ref target_id) = tile_cache[&td];
+                let anchor_xy = if strip_axis_x { (local_strip, offset_y) } else { (offset_x, local_strip) };
+                let (_, ref target_id, rot) = tile_cache[&td];
+                let local_xy = crate::game::world::cross_tile_rotate(anchor_xy.0, anchor_xy.1, rot);
 
                 let (fw, fh) = entry.kind.footprint();
-                let footprint = entry.direction.rotate_footprint(fw, fh);
+                let rotated_dir = entry.direction.rotate_n_cw(rot);
+                let footprint = rotated_dir.rotate_footprint(fw, fh);
                 let cells = super::game::world::occupied_cells(local_xy, footprint);
                 for &cell in &cells {
                     if self.world.tile_entities(target_id.word())
@@ -1004,12 +1015,13 @@ impl App {
                 } else {
                     blueprint::virtual_to_tile_local(offset_y)
                 };
-                let local_xy = if strip_axis_x { (local_strip, offset_y) } else { (offset_x, local_strip) };
-                let (target_tile_idx, ref target_id) = tile_cache[&td];
+                let anchor_xy = if strip_axis_x { (local_strip, offset_y) } else { (offset_x, local_strip) };
+                let (target_tile_idx, ref target_id, rot) = tile_cache[&td];
+                let local_xy = crate::game::world::cross_tile_rotate(anchor_xy.0, anchor_xy.1, rot);
 
                 let mode = PlacementMode {
                     item: entry.kind.to_item(),
-                    direction: entry.direction,
+                    direction: entry.direction.rotate_n_cw(rot),
                 };
                 if self.try_place_at(target_tile_idx, target_id.word(), local_xy, &mode) {
                     placed += 1;
@@ -1025,8 +1037,9 @@ impl App {
                     } else {
                         blueprint::virtual_to_tile_local(offset_y)
                     };
-                    let local_xy = if strip_axis_x { (local_strip, offset_y) } else { (offset_x, local_strip) };
-                    let (_, ref target_id) = tile_cache[&td];
+                    let anchor_xy = if strip_axis_x { (local_strip, offset_y) } else { (offset_x, local_strip) };
+                    let (_, ref target_id, rot) = tile_cache[&td];
+                    let local_xy = crate::game::world::cross_tile_rotate(anchor_xy.0, anchor_xy.1, rot);
                     if let Some(entities) = self.world.tile_entities(target_id.word()) {
                         if let Some(&entity) = entities.get(&local_xy) {
                             self.machine_pool.set_recipe(entity, Some(recipe_idx));
@@ -1476,8 +1489,8 @@ impl App {
         let max_y = sel.start.1.max(sel.current.1);
 
         let clip = if sel.tiles.len() > 1 {
-            let tile_refs: Vec<(&[u8], i32)> = sel.tiles.iter()
-                .map(|t| (t.id.word(), t.delta))
+            let tile_refs: Vec<(&[u8], i32, u8)> = sel.tiles.iter()
+                .map(|t| (t.id.word(), t.delta, t.rot))
                 .collect();
             blueprint::capture_strip(
                 &self.world,
@@ -1522,16 +1535,16 @@ impl App {
         let max_y = sel.start.1.max(sel.current.1);
 
         // Collect tile info before mutable borrows
-        let strip_tiles: Vec<(Vec<u8>, i32)> = sel.tiles.iter()
-            .map(|t| (t.id.word().to_vec(), t.delta))
+        let strip_tiles: Vec<(Vec<u8>, i32, u8)> = sel.tiles.iter()
+            .map(|t| (t.id.word().to_vec(), t.delta, t.rot))
             .collect();
         let strip_axis_x = sel.strip_axis_x;
         let multi_tile = sel.tiles.len() > 1;
 
         // Capture first
         let clip = if multi_tile {
-            let tile_refs: Vec<(&[u8], i32)> = strip_tiles.iter()
-                .map(|(addr, delta)| (addr.as_slice(), *delta))
+            let tile_refs: Vec<(&[u8], i32, u8)> = strip_tiles.iter()
+                .map(|(addr, delta, rot)| (addr.as_slice(), *delta, *rot))
                 .collect();
             blueprint::capture_strip(
                 &self.world,
@@ -1557,8 +1570,9 @@ impl App {
         let count = clip.entries.len();
 
         // Destroy all entities in the selection rectangle across all tiles.
-        for (tile_addr, delta) in &strip_tiles {
-            let (local_min_x, local_max_x, local_min_y, local_max_y) = if multi_tile {
+        for (tile_addr, delta, rot) in &strip_tiles {
+            // Compute anchor-frame local range, then rotate to tile-local
+            let (anchor_min_x, anchor_max_x, anchor_min_y, anchor_max_y) = if multi_tile {
                 if strip_axis_x {
                     let tile_vmin = blueprint::tile_local_to_virtual(*delta, -32);
                     let tile_vmax = blueprint::tile_local_to_virtual(*delta, 32);
@@ -1581,6 +1595,8 @@ impl App {
             } else {
                 (min_x, max_x, min_y, max_y)
             };
+            let (local_min_x, local_max_x, local_min_y, local_max_y) =
+                crate::game::world::rotated_bounds(anchor_min_x, anchor_max_x, anchor_min_y, anchor_max_y, *rot);
 
             let mut to_destroy = Vec::new();
             if let Some(entities) = self.world.tile_entities(tile_addr) {
@@ -1627,6 +1643,7 @@ impl App {
                 tile_idx: result.tile_idx,
                 id: address,
                 delta: 0,
+                rot: 0,
             }],
             strip_axis_x: true,
             start: result.grid_xy,
@@ -1654,7 +1671,14 @@ impl App {
         if let Some(strip_pos) = sel.tiles.iter().position(|t| t.id == cursor_cell_id) {
             // Cursor on an existing strip tile: update current in virtual coords
             let delta = sel.tiles[strip_pos].delta;
+            let tile_rot = sel.tiles[strip_pos].rot;
             let strip_axis_x = sel.strip_axis_x;
+
+            // Inverse-rotate tile-local grid coords to anchor frame
+            let inv_rot = (4 - tile_rot) % 4;
+            let (ax, ay) = crate::game::world::cross_tile_rotate(
+                result.grid_xy.0, result.grid_xy.1, inv_rot,
+            );
 
             // Trim strip: remove tiles with delta further than this one
             if let Some(sel) = &mut self.ui.selection {
@@ -1671,13 +1695,13 @@ impl App {
             if let Some(sel) = &mut self.ui.selection {
                 if strip_axis_x {
                     sel.current = (
-                        blueprint::tile_local_to_virtual(delta, result.grid_xy.0),
-                        result.grid_xy.1,
+                        blueprint::tile_local_to_virtual(delta, ax),
+                        ay,
                     );
                 } else {
                     sel.current = (
-                        result.grid_xy.0,
-                        blueprint::tile_local_to_virtual(delta, result.grid_xy.1),
+                        ax,
+                        blueprint::tile_local_to_virtual(delta, ay),
                     );
                 }
             }
@@ -1686,6 +1710,7 @@ impl App {
             let last_tile = sel.tiles.last().unwrap();
             let last_delta = last_tile.delta;
             let last_tile_idx = last_tile.tile_idx;
+            let last_rot = last_tile.rot;
             let num_tiles = sel.tiles.len();
 
             // Check all 4 edges for adjacency
@@ -1700,15 +1725,27 @@ impl App {
             }
 
             if let Some(edge) = edge_found {
-                // Determine strip axis from the crossing direction
-                let crossing_axis_x = edge == 0 || edge == 2; // East/West = x-axis
-                let new_delta = match edge {
+                // `edge` is in the last tile's physical frame. Map to anchor frame.
+                let anchor_edge = (edge + 4 - last_rot) % 4;
+                let crossing_axis_x = anchor_edge == 0 || anchor_edge == 2; // East/West = x-axis
+                let new_delta = match anchor_edge {
                     0 | 1 => last_delta + 1, // East or South = positive direction
                     2 | 3 => last_delta - 1, // West or North = negative direction
                     _ => unreachable!(),
                 };
 
+                // Compute rotation of the new tile relative to anchor
+                let back = running.tiling.back_edge(last_tile_idx, edge);
+                let step_rot = ((back as i32) - (edge as i32) + 2 + 4) % 4;
+                let new_rot = (last_rot + step_rot as u8) % 4;
+
                 if num_tiles == 1 || crossing_axis_x == sel.strip_axis_x {
+                    // Inverse-rotate cursor's tile-local coords to anchor frame
+                    let inv_rot = (4 - new_rot) % 4;
+                    let (ax, ay) = crate::game::world::cross_tile_rotate(
+                        result.grid_xy.0, result.grid_xy.1, inv_rot,
+                    );
+
                     if let Some(sel) = &mut self.ui.selection {
                         if num_tiles == 1 {
                             sel.strip_axis_x = crossing_axis_x;
@@ -1717,16 +1754,17 @@ impl App {
                             tile_idx: cursor_tile_idx,
                             id: cursor_cell_id,
                             delta: new_delta,
+                            rot: new_rot,
                         });
                         if crossing_axis_x {
                             sel.current = (
-                                blueprint::tile_local_to_virtual(new_delta, result.grid_xy.0),
-                                result.grid_xy.1,
+                                blueprint::tile_local_to_virtual(new_delta, ax),
+                                ay,
                             );
                         } else {
                             sel.current = (
-                                result.grid_xy.0,
-                                blueprint::tile_local_to_virtual(new_delta, result.grid_xy.1),
+                                ax,
+                                blueprint::tile_local_to_virtual(new_delta, ay),
                             );
                         }
                     }
@@ -1745,26 +1783,31 @@ impl App {
 
             // Vertex exclusion check for multi-tile selections
             if sel.tiles.len() > 1 {
+                // Compute anchor-frame bounding box
+                let anchor_min_x = sel.start.0.min(sel.current.0);
+                let anchor_max_x = sel.start.0.max(sel.current.0);
+                let anchor_min_y = sel.start.1.min(sel.current.1);
+                let anchor_max_y = sel.start.1.max(sel.current.1);
+
                 // Check if bounding box in any tile includes corner cells
                 for strip_tile in &sel.tiles {
-                    let (local_min_x, local_max_x, local_min_y, local_max_y) =
+                    // Get anchor-frame local range for this tile's strip axis
+                    let (a_min_x, a_max_x, a_min_y, a_max_y) =
                         if sel.strip_axis_x {
-                            let (_, lsx) = blueprint::virtual_to_tile_local(sel.start.0);
-                            let (_, lcx) = blueprint::virtual_to_tile_local(sel.current.0);
-                            (lsx.min(lcx), lsx.max(lcx), sel.start.1, sel.current.1)
+                            let (_, lsx) = blueprint::virtual_to_tile_local(anchor_min_x);
+                            let (_, lcx) = blueprint::virtual_to_tile_local(anchor_max_x);
+                            (lsx.min(lcx), lsx.max(lcx), anchor_min_y, anchor_max_y)
                         } else {
-                            let (_, lsy) = blueprint::virtual_to_tile_local(sel.start.1);
-                            let (_, lcy) = blueprint::virtual_to_tile_local(sel.current.1);
-                            (sel.start.0, sel.current.0, lsy.min(lcy), lsy.max(lcy))
+                            let (_, lsy) = blueprint::virtual_to_tile_local(anchor_min_y);
+                            let (_, lcy) = blueprint::virtual_to_tile_local(anchor_max_y);
+                            (anchor_min_x, anchor_max_x, lsy.min(lcy), lsy.max(lcy))
                         };
 
-                    let min_gx = local_min_x.min(local_max_x);
-                    let max_gx = local_min_x.max(local_max_x);
-                    let min_gy = local_min_y.min(local_max_y);
-                    let max_gy = local_min_y.max(local_max_y);
+                    // Transform anchor-frame bounds to tile-local via rotation
+                    let (min_gx, max_gx, min_gy, max_gy) =
+                        crate::game::world::rotated_bounds(a_min_x, a_max_x, a_min_y, a_max_y, strip_tile.rot);
 
                     // Check corners of this sub-rectangle
-                    let _ = strip_tile; // use the tile for the range check
                     for &gx in &[min_gx, max_gx] {
                         for &gy in &[min_gy, max_gy] {
                             if blueprint::is_vertex_cell(gx, gy) {
@@ -2106,16 +2149,16 @@ impl App {
                                 // Corner crossing: entire paste is invalid
                                 let corner_blocked = crosses_x && crosses_y;
 
-                                // Multi-tile ghost: build Mobius map per tile_delta
+                                // Multi-tile ghost: build Mobius + rotation map per tile_delta
                                 let strip_axis_x = if clip.width > 64 { true }
                                     else if clip.height > 64 { false }
                                     else { crosses_x };
-                                let mut tile_mobius: std::collections::HashMap<i32, ([f32; 2], [f32; 2])> =
+                                let mut tile_info: std::collections::HashMap<i32, ([f32; 2], [f32; 2], u8)> =
                                     std::collections::HashMap::new();
-                                tile_mobius.insert(0, (ma, mb));
+                                tile_info.insert(0, (ma, mb, 0));
 
                                 if !corner_blocked {
-                                    // Pre-walk strip to find Mobius for each needed delta
+                                    // Pre-walk strip to find Mobius + rotation for each needed delta
                                     for entry in &clip.entries {
                                         let (offset_x, offset_y) = (gx + entry.offset.0, gy + entry.offset.1);
                                         let (td, _) = if strip_axis_x {
@@ -2123,20 +2166,21 @@ impl App {
                                         } else {
                                             blueprint::virtual_to_tile_local(offset_y)
                                         };
-                                        if tile_mobius.contains_key(&td) {
+                                        if tile_info.contains_key(&td) {
                                             continue;
                                         }
-                                        // Walk from anchor tile
-                                        let edge = if strip_axis_x {
-                                            if td > 0 { 0u8 } else { 2u8 }
-                                        } else if td > 0 {
-                                            1u8
-                                        } else {
-                                            3u8
-                                        };
+                                        // Walk from anchor tile with rotation tracking
+                                        let walk_base_edge: u8 = if strip_axis_x {
+                                            if td > 0 { 0 } else { 2 }
+                                        } else if td > 0 { 1 } else { 3 };
                                         let mut cur = tile_vis_idx;
+                                        let mut cum_rot: u8 = 0;
                                         let mut found = true;
                                         for _ in 0..td.unsigned_abs() {
+                                            let edge = (walk_base_edge + cum_rot) % 4;
+                                            let back = re.tiling.back_edge(cur, edge);
+                                            let step_rot = ((back as i32) - (edge as i32) + 2 + 4) % 4;
+                                            cum_rot = (cum_rot + step_rot as u8) % 4;
                                             if let Some(nid) = re.tiling.neighbor_tile_id(cur, edge) {
                                                 if let Some(nidx) = re.tiling.find_tile(&nid) {
                                                     cur = nidx;
@@ -2151,9 +2195,10 @@ impl App {
                                         }
                                         if found {
                                             if let Some(&(_, m)) = visible.iter().find(|&&(idx, _)| idx == cur) {
-                                                tile_mobius.insert(td, (
+                                                tile_info.insert(td, (
                                                     [m.a.re as f32, m.a.im as f32],
                                                     [m.b.re as f32, m.b.im as f32],
+                                                    cum_rot,
                                                 ));
                                             }
                                         }
@@ -2168,11 +2213,15 @@ impl App {
                                     } else {
                                         blueprint::virtual_to_tile_local(offset_y)
                                     };
-                                    let local_xy = if strip_axis_x {
+                                    let anchor_xy = if strip_axis_x {
                                         (local_strip, offset_y)
                                     } else {
                                         (offset_x, local_strip)
                                     };
+
+                                    let rot = tile_info.get(&td).map_or(0, |t| t.2);
+                                    let local_xy = crate::game::world::cross_tile_rotate(anchor_xy.0, anchor_xy.1, rot);
+                                    let rotated_dir = entry.direction.rotate_n_cw(rot);
 
                                     // Determine if this entry is blocked due to cell-boundary issues
                                     let boundary_blocked = if corner_blocked {
@@ -2181,22 +2230,18 @@ impl App {
                                         // Check if any cell in the footprint falls outside
                                         // the tile grid on the non-strip axis (third-party cell)
                                         let (fw, fh) = entry.kind.footprint();
-                                        let fp = entry.direction.rotate_footprint(fw, fh);
+                                        let fp = rotated_dir.rotate_footprint(fw, fh);
                                         let cells = crate::game::world::occupied_cells(local_xy, fp);
                                         let off_grid = cells.iter().any(|&(cx, cy)| {
-                                            if strip_axis_x {
-                                                cy < -32 || cy > 31
-                                            } else {
-                                                cx < -32 || cx > 31
-                                            }
+                                            !(-32..=31).contains(&cx) || !(-32..=31).contains(&cy)
                                         });
-                                        off_grid || !tile_mobius.contains_key(&td)
+                                        off_grid || !tile_info.contains_key(&td)
                                     };
 
                                     // Use anchor tile transform as fallback for entries
                                     // whose strip tile isn't visible
-                                    let (entry_ma, entry_mb) = if let Some(&t) = tile_mobius.get(&td) {
-                                        t
+                                    let (entry_ma, entry_mb) = if let Some(&(tma, tmb, _)) = tile_info.get(&td) {
+                                        (tma, tmb)
                                     } else {
                                         (ma, mb)
                                     };
@@ -2208,7 +2253,7 @@ impl App {
                                         machine_type: kind_to_machine_type_float(entry.kind),
                                         progress: if boundary_blocked { -3.0 } else { -1.0 },
                                         power_sat: -1.0,
-                                        facing: entry.direction.rotations_from_north() as f32,
+                                        facing: rotated_dir.rotations_from_north() as f32,
                                     });
                                 }
                             } else {
@@ -2490,8 +2535,9 @@ impl App {
                     (min_gx, max_gx, min_gy, max_gy)
                 } else {
                     // Multi-tile: decompose virtual coords for this tile's delta
+                    // (anchor-frame), then rotate to tile-local
                     let delta = strip_tile.delta;
-                    if sel.strip_axis_x {
+                    let (a_min_x, a_max_x, a_min_y, a_max_y) = if sel.strip_axis_x {
                         let vmin_x = sel.start.0.min(sel.current.0);
                         let vmax_x = sel.start.0.max(sel.current.0);
                         // Clip to this tile's virtual range
@@ -2518,7 +2564,9 @@ impl App {
                         let min_gx = sel.start.0.min(sel.current.0);
                         let max_gx = sel.start.0.max(sel.current.0);
                         (min_gx, max_gx, lmin, lmax)
-                    }
+                    };
+                    // Rotate anchor-frame bounds to tile-local
+                    crate::game::world::rotated_bounds(a_min_x, a_max_x, a_min_y, a_max_y, strip_tile.rot)
                 };
 
                 let corners = [

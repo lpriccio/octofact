@@ -30,6 +30,9 @@ pub struct Tile {
     /// Cached CellIds of the 4 neighbors (by physical edge index).
     /// Computed once when the tile is created, avoiding repeated K-B reduction.
     pub neighbors: [CellId; 4],
+    /// For each physical edge `e`, the physical edge of `neighbors[e]` that leads
+    /// back to this tile. Used to compute the rotation when crossing tile boundaries.
+    pub back_edges: [u8; 4],
 }
 
 /// Spatial dedup key: discretize Poincare disk position to grid.
@@ -70,6 +73,23 @@ fn compute_neighbors(id: &CellId, facing: u8, rules: &[RewriteRule]) -> [CellId;
     })
 }
 
+/// Compute back-edges: for each physical edge `e`, find which physical edge `f`
+/// of `neighbors[e]` leads back to `id`.
+fn compute_back_edges(id: &CellId, neighbors: &[CellId; 4], rules: &[RewriteRule]) -> [u8; 4] {
+    [0u8, 1, 2, 3].map(|e| {
+        let neighbor = &neighbors[e as usize];
+        let (nf, _) = word_facing_parity(neighbor.word());
+        for ae in 0..4u8 {
+            if cell_id::neighbor(neighbor, ae, rules).id == *id {
+                // Convert algebraic edge `ae` to physical edge `f`
+                return (ae + nf) % 4;
+            }
+        }
+        // Fallback: opposite edge (Euclidean assumption)
+        (e + 2) % 4
+    })
+}
+
 /// BFS tiling state for incremental expansion of a {4,5} tiling.
 /// Uses algebraic CellId for exact cell identity (no floating-point drift).
 pub struct TilingState {
@@ -98,12 +118,14 @@ impl TilingState {
         let rules = rewrite::load_rules(cfg.q);
         let origin_id = CellId::origin();
         let origin_neighbors = compute_neighbors(&origin_id, 0, &rules);
+        let origin_back_edges = compute_back_edges(&origin_id, &origin_neighbors, &rules);
         let origin = Tile {
             id: origin_id.clone(),
             transform: Mobius::identity(),
             parity: false,
             facing: 0,
             neighbors: origin_neighbors,
+            back_edges: origin_back_edges,
         };
 
         let key = spatial_key(Complex::ZERO);
@@ -144,6 +166,7 @@ impl TilingState {
         // Center tile's view-space transform is view_offset * absolute ≈ identity
         let transform = view_offset.compose(&absolute);
         let neighbors = compute_neighbors(center_id, facing, &rules);
+        let back_edges = compute_back_edges(center_id, &neighbors, &rules);
 
         let tile = Tile {
             id: center_id.clone(),
@@ -151,6 +174,7 @@ impl TilingState {
             parity,
             facing,
             neighbors,
+            back_edges,
         };
 
         let key = spatial_key(transform.apply(Complex::ZERO));
@@ -213,12 +237,14 @@ impl TilingState {
                     .compose(&word_to_mobius(child_id.word(), &self.neighbor_xforms));
                 let (child_facing, child_parity) = word_facing_parity(child_id.word());
                 let child_neighbors = compute_neighbors(child_id, child_facing, &self.rules);
+                let child_back_edges = compute_back_edges(child_id, &child_neighbors, &self.rules);
                 let child = Tile {
                     id: child_id.clone(),
                     transform: child_transform,
                     parity: child_parity,
                     facing: child_facing,
                     neighbors: child_neighbors,
+                    back_edges: child_back_edges,
                 };
                 let child_idx = self.tiles.len();
                 self.seen.insert(child_id.clone());
@@ -282,6 +308,11 @@ impl TilingState {
     #[allow(dead_code)]
     pub fn find_tile(&self, id: &CellId) -> Option<usize> {
         self.id_to_tile.get(id).copied()
+    }
+
+    /// Get the physical back-edge: which edge of the neighbor across `edge` leads back to `tile_idx`.
+    pub fn back_edge(&self, tile_idx: usize, edge: u8) -> u8 {
+        self.tiles[tile_idx].back_edges[edge as usize]
     }
 
     /// Find the CellId of the tile adjacent to `tile_idx` across physical edge `edge` (0..3).

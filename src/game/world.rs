@@ -196,6 +196,19 @@ pub struct GridPos {
     pub gy: i16,
 }
 
+/// Rotate grid coordinates by `rot` counter-clockwise quarter-turns.
+/// RCCW: 0→identity, 1→(-y,x), 2→(-x,-y), 3→(y,-x).
+/// Used when crossing tile boundaries where the neighbor tile is rotated.
+pub fn cross_tile_rotate(gx: i32, gy: i32, rot: u8) -> (i32, i32) {
+    match rot % 4 {
+        0 => (gx, gy),
+        1 => (-gy, gx),
+        2 => (-gx, -gy),
+        3 => (gy, -gx),
+        _ => unreachable!(),
+    }
+}
+
 /// Compute all grid cells occupied by a structure with the given footprint placed at `origin`.
 /// Footprint extends from origin in +x, +y direction.
 pub fn occupied_cells(origin: (i32, i32), footprint: (i32, i32)) -> Vec<(i32, i32)> {

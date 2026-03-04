@@ -484,11 +484,15 @@ impl App {
         // Output connection: this belt's flow exits toward ahead
         if check_ahead {
             let edge = direction.tiling_edge_index();
-            let mirror = cross_tile_mirror(ahead);
             let running = self.renderer.as_ref().unwrap();
             if let Some(neighbor_id) = running.tiling.neighbor_tile_id(tile_idx, edge) {
+                let back_edge = running.tiling.back_edge(tile_idx, edge);
+                let rot = ((back_edge as i32) - (edge as i32) + 2 + 4) % 4;
+                let rotated = crate::game::world::cross_tile_rotate(ahead.0, ahead.1, rot as u8);
+                let mirror = cross_tile_mirror(rotated);
+                let rotated_dir = direction.rotate_n_cw(rot as u8);
                 if let Some(neighbor_entity) = find_same_dir_belt_at(
-                    &self.world, neighbor_id.word(), mirror, direction,
+                    &self.world, neighbor_id.word(), mirror, rotated_dir,
                 ) {
                     self.belt_network.link_output_to_input(entity, neighbor_entity);
                 }
@@ -498,11 +502,15 @@ impl App {
         // Input connection: items would enter this belt from behind
         if check_behind {
             let edge = direction.opposite().tiling_edge_index();
-            let mirror = cross_tile_mirror(behind);
             let running = self.renderer.as_ref().unwrap();
             if let Some(neighbor_id) = running.tiling.neighbor_tile_id(tile_idx, edge) {
+                let back_edge = running.tiling.back_edge(tile_idx, edge);
+                let rot = ((back_edge as i32) - (edge as i32) + 2 + 4) % 4;
+                let rotated = crate::game::world::cross_tile_rotate(behind.0, behind.1, rot as u8);
+                let mirror = cross_tile_mirror(rotated);
+                let rotated_dir = direction.rotate_n_cw(rot as u8);
                 if let Some(neighbor_entity) = find_same_dir_belt_at(
-                    &self.world, neighbor_id.word(), mirror, direction,
+                    &self.world, neighbor_id.word(), mirror, rotated_dir,
                 ) {
                     self.belt_network.link_output_to_input(neighbor_entity, entity);
                 }
@@ -1204,38 +1212,71 @@ impl App {
                     return;
                 }
 
-                // Get new tile info (immutable borrow, then drop before mutable ops)
-                let (new_tile_idx, new_cell_id) = {
-                    let running = self.renderer.as_ref().unwrap();
-                    (result.tile_idx, running.tiling.tiles[result.tile_idx].id.clone())
+                // Determine physical edge being crossed
+                let edge = match (horizontal, old_edge > 0) {
+                    (true, true) => 0u8,   // East
+                    (false, true) => 1,    // South
+                    (true, false) => 2,    // West
+                    (false, false) => 3,   // North
                 };
 
-                // For {4,n} (even p), grids align straight across edges.
-                // ±32 on adjacent tiles is the SAME physical edge, so skip it
-                // on the new tile to avoid overlapping belts.
-                // old gx=+32 → new tile starts at gx=-31 (not -32).
-                let inward: i32 = if old_edge > 0 { 1 } else { -1 };
-                let new_start = -old_edge + inward;
-                let new_free = if horizontal { result.grid_xy.0 } else { result.grid_xy.1 };
+                // Get new tile info and compute rotation from back-edge
+                let (new_tile_idx, new_cell_id, rot) = {
+                    let running = self.renderer.as_ref().unwrap();
+                    let back_edge = running.tiling.back_edge(old_tile_idx, edge);
+                    let rot = ((back_edge as i32) - (edge as i32) + 2 + 4) % 4;
+                    (result.tile_idx, running.tiling.tiles[result.tile_idx].id.clone(), rot as u8)
+                };
+
+                // Rotate edge position from old tile frame to new tile frame
+                let edge_pos = if horizontal {
+                    (old_edge, fixed_coord)
+                } else {
+                    (fixed_coord, old_edge)
+                };
+                let rotated_pos = crate::game::world::cross_tile_rotate(
+                    edge_pos.0, edge_pos.1, rot,
+                );
+                let mirrored = cross_tile_mirror(rotated_pos);
+
+                // Rotate belt direction and derive new drag axis
+                let new_direction = mode.direction.rotate_n_cw(rot);
+                let new_horizontal = matches!(new_direction, Direction::East | Direction::West);
+                let new_fixed_coord = if new_horizontal { mirrored.1 } else { mirrored.0 };
+                let free_at_edge = if new_horizontal { mirrored.0 } else { mirrored.1 };
+
+                // Move inward from the shared edge (skip ±32 to avoid overlap)
+                let inward: i32 = if free_at_edge > 0 { -1 } else { 1 };
+                let new_start = free_at_edge + inward;
+                let new_free = if new_horizontal { result.grid_xy.0 } else { result.grid_xy.1 };
                 let clamp_lo = new_start.min(new_start + (MAX_DRAG_STEP - 1) * inward);
                 let clamp_hi = new_start.max(new_start + (MAX_DRAG_STEP - 1) * inward);
                 let new_target = new_free.clamp(clamp_lo, clamp_hi);
 
-                // Fill from new_start toward cursor on new tile (inclusive)
+                // Place belts with rotated direction in new tile
+                let new_mode = PlacementMode {
+                    item: mode.item,
+                    direction: new_direction,
+                };
                 let mut current = new_start;
                 loop {
-                    let grid_xy = if horizontal { (current, fixed_coord) } else { (fixed_coord, current) };
-                    self.try_place_at(new_tile_idx, new_cell_id.word(), grid_xy, &mode);
+                    let grid_xy = if new_horizontal {
+                        (current, new_fixed_coord)
+                    } else {
+                        (new_fixed_coord, current)
+                    };
+                    self.try_place_at(new_tile_idx, new_cell_id.word(), grid_xy, &new_mode);
                     if current == new_target { break; }
                     current += inward;
                 }
 
-                // Switch drag to the new tile
+                // Update placement mode direction and switch drag to new tile
+                self.ui.placement_mode = Some(new_mode);
                 self.ui.belt_drag = Some(BeltDrag {
                     tile_idx: new_tile_idx,
                     id: new_cell_id,
-                    horizontal,
-                    fixed_coord,
+                    horizontal: new_horizontal,
+                    fixed_coord: new_fixed_coord,
                     last_free: new_target,
                 });
             } else {

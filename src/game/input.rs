@@ -232,15 +232,9 @@ impl InputState {
     }
 
     pub fn on_key_event(&mut self, code: KeyCode, pressed: bool) {
-        // Track modifier states
-        if code == KeyCode::ShiftLeft || code == KeyCode::ShiftRight {
-            self.shift_held = pressed;
-        }
-        if code == KeyCode::ControlLeft || code == KeyCode::ControlRight
-            || code == KeyCode::SuperLeft || code == KeyCode::SuperRight
-        {
-            self.ctrl_held = pressed;
-        }
+        // Modifier state is tracked via ModifiersChanged events in app.rs,
+        // not here, to stay in sync with the OS even when key-release events
+        // are lost (e.g. macOS screenshot tools).
 
         if let Some(actions) = self.reverse_map.get(&code) {
             for &action in actions {
@@ -342,7 +336,7 @@ mod tests {
         state.on_key_event(KeyCode::ArrowUp, false);
 
         // Shift+ArrowUp should activate RaiseTerrain
-        state.on_key_event(KeyCode::ShiftLeft, true);
+        state.shift_held = true;
         state.on_key_event(KeyCode::ArrowUp, true);
         assert!(state.is_active(GameAction::RaiseTerrain));
         assert!(state.just_pressed(GameAction::RaiseTerrain));

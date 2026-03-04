@@ -2726,18 +2726,17 @@ impl ApplicationHandler for App {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         use winit::keyboard::PhysicalKey;
 
+        // Sync modifier state from OS (handles screenshot tools, Cmd+Tab, etc.
+        // where individual key-release events are never delivered).
+        if let WindowEvent::ModifiersChanged(ref mods) = event {
+            let state = mods.state();
+            self.input_state.shift_held = state.shift_key();
+            self.input_state.ctrl_held = state.control_key() || state.super_key();
+        }
+
         // Handle game toggle keys BEFORE egui so Tab/Esc aren't consumed
         if let WindowEvent::KeyboardInput { ref event, .. } = event {
             if let PhysicalKey::Code(code) = event.physical_key {
-                // Track modifier state before rebinding check
-                if code == winit::keyboard::KeyCode::ShiftLeft || code == winit::keyboard::KeyCode::ShiftRight {
-                    self.input_state.shift_held = event.state.is_pressed();
-                }
-                if code == winit::keyboard::KeyCode::ControlLeft || code == winit::keyboard::KeyCode::ControlRight
-                    || code == winit::keyboard::KeyCode::SuperLeft || code == winit::keyboard::KeyCode::SuperRight
-                {
-                    self.input_state.ctrl_held = event.state.is_pressed();
-                }
 
                 // Handle rebinding mode
                 if let Some(action) = self.ui.rebinding {

@@ -6,8 +6,8 @@ struct Globals {
     grid_params: vec4<f32>,  // (enabled, divisions, line_width, klein_half_side)
     color_cycle: f32,
     time: f32,               // elapsed seconds since startup
-    bowl_height: f32,
-    _pad: f32,
+    embed_param: f32,
+    embed_type: f32,
     camera_world: vec4<f32>, // .xyz = camera eye position in bowl space
 };
 
@@ -48,7 +48,7 @@ fn vs_item(vert: VertexInput, inst: InstanceInput) -> VertexOutput {
     // Klein -> Poincare -> Mobius -> bowl -> clip
     let poincare = klein_to_poincare(klein);
     let disk = apply_mobius(poincare, inst.mobius_a, inst.mobius_b);
-    var world = disk_to_bowl_h(disk, globals.bowl_height);
+    var world = disk_embed(disk, globals.embed_type, globals.embed_param);
     world.y += 0.006;  // lift above belt surface (BELT_HEIGHT = 0.005)
 
     out.clip_position = globals.view_proj * vec4<f32>(world, 1.0);

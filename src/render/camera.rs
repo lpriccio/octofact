@@ -196,41 +196,10 @@ impl Camera {
         tiling.ensure_coverage(cam_pos, 3);
     }
 
-    pub fn unproject_to_disk(&self, sx: f64, sy: f64, width: f32, height: f32, bowl_height: f32) -> Option<Complex> {
+    pub fn unproject_to_disk(&self, sx: f64, sy: f64, width: f32, height: f32, embed_type: f32, embed_param: f32) -> Option<Complex> {
         let aspect = width / height;
         let view_proj = self.build_view_proj(aspect);
-        let inv_vp = view_proj.inverse();
-
-        let ndc_x = 2.0 * (sx as f32 / width) - 1.0;
-        let ndc_y = 1.0 - 2.0 * (sy as f32 / height);
-
-        let near = inv_vp * glam::Vec4::new(ndc_x, ndc_y, -1.0, 1.0);
-        let far = inv_vp * glam::Vec4::new(ndc_x, ndc_y, 1.0, 1.0);
-        let near = glam::Vec3::new(near.x / near.w, near.y / near.w, near.z / near.w);
-        let far = glam::Vec3::new(far.x / far.w, far.y / far.w, far.z / far.w);
-
-        let dir = far - near;
-        if dir.y.abs() < 1e-8 {
-            return None;
-        }
-
-        // Iteratively intersect ray with bowl surface y = h*r^2/(1+r^2)
-        let mut target_y = 0.0_f32;
-        for _ in 0..5 {
-            let t = (target_y - near.y) / dir.y;
-            if t < 0.0 {
-                return None;
-            }
-            let hit = near + dir * t;
-            let r2 = hit.x * hit.x + hit.z * hit.z;
-            target_y = bowl_height * r2 / (1.0 + r2);
-        }
-        let t = (target_y - near.y) / dir.y;
-        if t < 0.0 {
-            return None;
-        }
-        let hit = near + dir * t;
-        Some(Complex::new(hit.x as f64, hit.z as f64))
+        unproject_ray_to_disk(&view_proj, sx, sy, width, height, embed_type, embed_param)
     }
 }
 
@@ -261,40 +230,10 @@ impl CameraSnapshot {
         }
     }
 
-    pub fn unproject_to_disk(&self, sx: f64, sy: f64, width: f32, height: f32, bowl_height: f32) -> Option<Complex> {
+    pub fn unproject_to_disk(&self, sx: f64, sy: f64, width: f32, height: f32, embed_type: f32, embed_param: f32) -> Option<Complex> {
         let aspect = width / height;
         let view_proj = self.build_view_proj(aspect);
-        let inv_vp = view_proj.inverse();
-
-        let ndc_x = 2.0 * (sx as f32 / width) - 1.0;
-        let ndc_y = 1.0 - 2.0 * (sy as f32 / height);
-
-        let near = inv_vp * glam::Vec4::new(ndc_x, ndc_y, -1.0, 1.0);
-        let far = inv_vp * glam::Vec4::new(ndc_x, ndc_y, 1.0, 1.0);
-        let near = glam::Vec3::new(near.x / near.w, near.y / near.w, near.z / near.w);
-        let far = glam::Vec3::new(far.x / far.w, far.y / far.w, far.z / far.w);
-
-        let dir = far - near;
-        if dir.y.abs() < 1e-8 {
-            return None;
-        }
-
-        let mut target_y = 0.0_f32;
-        for _ in 0..5 {
-            let t = (target_y - near.y) / dir.y;
-            if t < 0.0 {
-                return None;
-            }
-            let hit = near + dir * t;
-            let r2 = hit.x * hit.x + hit.z * hit.z;
-            target_y = bowl_height * r2 / (1.0 + r2);
-        }
-        let t = (target_y - near.y) / dir.y;
-        if t < 0.0 {
-            return None;
-        }
-        let hit = near + dir * t;
-        Some(Complex::new(hit.x as f64, hit.z as f64))
+        unproject_ray_to_disk(&view_proj, sx, sy, width, height, embed_type, embed_param)
     }
 
     /// Linearly interpolate between two snapshots for smooth rendering.
@@ -340,5 +279,100 @@ impl CameraSnapshot {
             height,
             mode,
         }
+    }
+}
+
+/// Shared ray-surface intersection for unprojection.
+fn unproject_ray_to_disk(
+    view_proj: &glam::Mat4,
+    sx: f64,
+    sy: f64,
+    width: f32,
+    height: f32,
+    embed_type: f32,
+    embed_param: f32,
+) -> Option<Complex> {
+    let inv_vp = view_proj.inverse();
+
+    let ndc_x = 2.0 * (sx as f32 / width) - 1.0;
+    let ndc_y = 1.0 - 2.0 * (sy as f32 / height);
+
+    let near = inv_vp * glam::Vec4::new(ndc_x, ndc_y, -1.0, 1.0);
+    let far = inv_vp * glam::Vec4::new(ndc_x, ndc_y, 1.0, 1.0);
+    let near = glam::Vec3::new(near.x / near.w, near.y / near.w, near.z / near.w);
+    let far = glam::Vec3::new(far.x / far.w, far.y / far.w, far.z / far.w);
+
+    let dir = far - near;
+    if dir.y.abs() < 1e-8 {
+        return None;
+    }
+
+    if embed_type < 0.5 {
+        // Paraboloid: iterative intersection with y = h*r²/(1+r²)
+        let mut target_y = 0.0_f32;
+        for _ in 0..5 {
+            let t = (target_y - near.y) / dir.y;
+            if t < 0.0 {
+                return None;
+            }
+            let hit = near + dir * t;
+            let r2 = hit.x * hit.x + hit.z * hit.z;
+            target_y = embed_param * r2 / (1.0 + r2);
+        }
+        let t = (target_y - near.y) / dir.y;
+        if t < 0.0 {
+            return None;
+        }
+        let hit = near + dir * t;
+        Some(Complex::new(hit.x as f64, hit.z as f64))
+    } else {
+        // Sphere: analytic ray-sphere intersection
+        let theta_max = embed_param.abs().max(0.001);
+        let big_r = 1.0 / theta_max;
+        // Sphere center at (0, -R, 0) shifted so north pole is at origin
+        // Actually: world y = R*(1-cos(theta)), so sphere center is at (0, 0, 0)
+        // with radius R, but offset so the "north pole" y=0 maps to the top.
+        // Center of sphere: (0, -R, 0) in the formula y = R*(1-cos(theta))
+        // means the sphere center is at y = -R + R = 0... let me reconsider.
+        // y = R*(1 - cos(theta)), sphere surface: x² + (y - R)² + z² = R²
+        // => x² + y² - 2Ry + R² + z² = R² => x² + y² + z² = 2Ry
+        // So the surface is x² + y² + z² = 2Ry, i.e. y = (x²+y²+z²)/(2R)
+        // For the ray: P = near + t*dir, substitute:
+        // Let's use: sphere center = (0, R, 0), radius R
+        // (Px)² + (Py - R)² + (Pz)² = R²
+        let center = glam::Vec3::new(0.0, big_r, 0.0);
+        let oc = near - center;
+        let a = dir.dot(dir);
+        let b = 2.0 * oc.dot(dir);
+        let c = oc.dot(oc) - big_r * big_r;
+        let discriminant = b * b - 4.0 * a * c;
+        if discriminant < 0.0 {
+            return None;
+        }
+        let sqrt_disc = discriminant.sqrt();
+        // We want the intersection closest to the north pole (y≈0 side)
+        let t1 = (-b - sqrt_disc) / (2.0 * a);
+        let t2 = (-b + sqrt_disc) / (2.0 * a);
+        // Pick the t that gives smaller y (closer to north pole)
+        let t = if t1 > 0.0 {
+            let hit1 = near + dir * t1;
+            let hit2 = near + dir * t2;
+            if t2 > 0.0 && hit2.y < hit1.y { t2 } else { t1 }
+        } else if t2 > 0.0 {
+            t2
+        } else {
+            return None;
+        };
+        let hit = near + dir * t;
+        // Invert world->disk: from hit (x_w, y_w, z_w), compute rho and theta
+        let rho = (hit.x * hit.x + hit.z * hit.z).sqrt();
+        if rho < 1e-8 {
+            return Some(Complex::ZERO);
+        }
+        let theta = (rho / big_r).asin().min(theta_max);
+        let r = theta / theta_max;
+        let disk_x = r * hit.x / rho;
+        let disk_z = r * hit.z / rho;
+        Some(Complex::new(disk_x as f64, disk_z as f64))
     }
 }

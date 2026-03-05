@@ -232,8 +232,9 @@ impl App {
         let khs = self.klein_half_side;
         let width = running.gpu.config.width as f32;
         let height = running.gpu.config.height as f32;
-        let bowl_h = self.config.graphics.disk_embedding.bowl_height() as f32;
-        let click_disk = self.camera.unproject_to_disk(sx, sy, width, height, bowl_h)?;
+        let embed_t = self.config.graphics.disk_embedding.embed_type_id();
+        let embed_p = self.config.graphics.disk_embedding.embed_param() as f32;
+        let click_disk = self.camera.unproject_to_disk(sx, sy, width, height, embed_t, embed_p)?;
 
         // Find the tile whose Klein cell actually contains the click.
         // For each visible tile, compute local Klein coords and pick the
@@ -311,7 +312,7 @@ impl App {
         let combined = inv_view.compose(&tile_xform);
         // Transform snapped local Poincare coords back to view-space disk
         let world_disk = combined.apply(result.local_disk);
-        let bowl = crate::hyperbolic::embedding::disk_to_bowl(world_disk, self.config.graphics.disk_embedding.bowl_height());
+        let bowl = crate::hyperbolic::embedding::disk_embed(world_disk, self.config.graphics.disk_embedding.embed_type_id(), self.config.graphics.disk_embedding.embed_param() as f32);
         let elevation = running.extra_elevation.get(&result.tile_idx).copied().unwrap_or(0.0);
         let world_pos = glam::Vec3::new(bowl[0], bowl[1] + elevation, bowl[2]);
 
@@ -437,7 +438,7 @@ impl App {
         let local_disk = Complex::new(snap_kx / denom, snap_ky / denom);
 
         let world_disk = combined.apply(local_disk);
-        let bowl = crate::hyperbolic::embedding::disk_to_bowl(world_disk, self.config.graphics.disk_embedding.bowl_height());
+        let bowl = crate::hyperbolic::embedding::disk_embed(world_disk, self.config.graphics.disk_embedding.embed_type_id(), self.config.graphics.disk_embedding.embed_param() as f32);
         let elevation = running.extra_elevation.get(&tile_idx).copied().unwrap_or(0.0);
         let world_pos = glam::Vec3::new(bowl[0], bowl[1] + elevation, bowl[2]);
 
@@ -1152,8 +1153,9 @@ impl App {
             let width = running.gpu.config.width as f32;
             let height = running.gpu.config.height as f32;
 
-            let bowl_h = self.config.graphics.disk_embedding.bowl_height() as f32;
-            let click_disk = match self.camera.unproject_to_disk(sx, sy, width, height, bowl_h) {
+            let embed_t = self.config.graphics.disk_embedding.embed_type_id();
+            let embed_p = self.config.graphics.disk_embedding.embed_param() as f32;
+            let click_disk = match self.camera.unproject_to_disk(sx, sy, width, height, embed_t, embed_p) {
                 Some(d) => d,
                 None => return,
             };
@@ -1464,7 +1466,7 @@ impl App {
             let denom = 1.0 + (1.0 - kr2).max(0.0).sqrt();
             let local_disk = Complex::new(snap_kx / denom, snap_ky / denom);
             let world_disk = combined.apply(local_disk);
-            let bowl = crate::hyperbolic::embedding::disk_to_bowl(world_disk, self.config.graphics.disk_embedding.bowl_height());
+            let bowl = crate::hyperbolic::embedding::disk_embed(world_disk, self.config.graphics.disk_embedding.embed_type_id(), self.config.graphics.disk_embedding.embed_param() as f32);
             let elevation = running.extra_elevation.get(&result.tile_idx).copied().unwrap_or(0.0);
             let world_pos = glam::Vec3::new(bowl[0], bowl[1] + elevation, bowl[2]);
 
@@ -1910,7 +1912,7 @@ impl App {
         let denom = 1.0 + (1.0 - kr2).max(0.0).sqrt();
         let local_disk = Complex::new(snap_kx / denom, snap_ky / denom);
         let world_disk = combined.apply(local_disk);
-        let bowl = crate::hyperbolic::embedding::disk_to_bowl(world_disk, self.config.graphics.disk_embedding.bowl_height());
+        let bowl = crate::hyperbolic::embedding::disk_embed(world_disk, self.config.graphics.disk_embedding.embed_type_id(), self.config.graphics.disk_embedding.embed_param() as f32);
         let elevation = running.extra_elevation.get(&result.tile_idx).copied().unwrap_or(0.0);
         let world_pos = glam::Vec3::new(bowl[0], bowl[1] + elevation, bowl[2]);
 
@@ -1944,8 +1946,9 @@ impl App {
         // Visibility culling + instanced tile rendering setup
         let visible = re.visible_tiles(&inv_view);
         let time = self.game_loop.elapsed_secs();
-        let bowl_h = self.config.graphics.disk_embedding.bowl_height() as f32;
-        re.build_tile_instances(&visible, &view_proj, self.grid_enabled, self.klein_half_side as f32, time, render_camera.height, bowl_h);
+        let embed_t = self.config.graphics.disk_embedding.embed_type_id();
+        let embed_p = self.config.graphics.disk_embedding.embed_param() as f32;
+        re.build_tile_instances(&visible, &view_proj, self.grid_enabled, self.klein_half_side as f32, time, render_camera.height, embed_t, embed_p);
 
         // Build belt instances from visible tiles + world state
         re.belt_instances.clear();
@@ -2105,8 +2108,9 @@ impl App {
             let width = re.gpu.config.width as f32;
             let height = re.gpu.config.height as f32;
             let khs = self.klein_half_side;
-            let bowl_h = self.config.graphics.disk_embedding.bowl_height() as f32;
-            if let Some(click_disk) = render_camera.unproject_to_disk(cursor.x, cursor.y, width, height, bowl_h) {
+            let embed_t = self.config.graphics.disk_embedding.embed_type_id();
+            let embed_p = self.config.graphics.disk_embedding.embed_param() as f32;
+            if let Some(click_disk) = render_camera.unproject_to_disk(cursor.x, cursor.y, width, height, embed_t, embed_p) {
                 // Find containing tile (inline find_clicked_tile logic using render_camera)
                 let mut best_tile: Option<(usize, f64, f64)> = None;
                 let mut best_max_norm = f64::MAX;
@@ -2322,7 +2326,7 @@ impl App {
                         continue;
                     }
                     let elevation = re.extra_elevation.get(&tile_idx).copied().unwrap_or(0.0);
-                    let hyp = crate::hyperbolic::embedding::disk_to_bowl(disk_center, self.config.graphics.disk_embedding.bowl_height());
+                    let hyp = crate::hyperbolic::embedding::disk_embed(disk_center, self.config.graphics.disk_embedding.embed_type_id(), self.config.graphics.disk_embedding.embed_param() as f32);
                     let world_pos = glam::Vec3::new(hyp[0], hyp[1] + elevation, hyp[2]);
                     if let Some((sx, sy)) = project_to_screen(world_pos, &view_proj, width, height) {
                         let lx = sx / scale;
@@ -2587,7 +2591,7 @@ impl App {
                     let denom = 1.0 + (1.0 - kr2).max(0.0).sqrt();
                     let local_disk = Complex::new(snap_kx / denom, snap_ky / denom);
                     let world_disk = combined.apply(local_disk);
-                    let bowl = crate::hyperbolic::embedding::disk_to_bowl(world_disk, self.config.graphics.disk_embedding.bowl_height());
+                    let bowl = crate::hyperbolic::embedding::disk_embed(world_disk, self.config.graphics.disk_embedding.embed_type_id(), self.config.graphics.disk_embedding.embed_param() as f32);
                     let elevation = re.extra_elevation.get(&strip_tile.tile_idx).copied().unwrap_or(0.0);
                     let world_pos = glam::Vec3::new(bowl[0], bowl[1] + elevation, bowl[2]);
                     if let Some((sx, sy)) = project_to_screen(world_pos, &view_proj, width, height) {

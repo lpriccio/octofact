@@ -37,13 +37,29 @@ fn apply_inverse_mobius(w: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {
 
 // --- Coordinate conversions ---
 
-// Poincare disk -> gentle bowl embedding (Y-up).
-// X,Z from disk coords, Y rises gently with distance from center.
-// `h` is the bowl height parameter (asymptotic max Y as r -> inf).
-fn disk_to_bowl_h(z: vec2<f32>, h: f32) -> vec3<f32> {
-    let r2 = dot(z, z);
-    let y = h * r2 / (1.0 + r2);
-    return vec3<f32>(z.x, y, z.y);
+// Poincare disk -> embedded surface (Y-up).
+// etype < 0.5: paraboloid — Y = param * r² / (1 + r²)
+// etype >= 0.5: sphere — theta_max = param, R = 1/theta_max
+fn disk_embed(z: vec2<f32>, etype: f32, param: f32) -> vec3<f32> {
+    if etype < 0.5 {
+        // Paraboloid
+        let r2 = dot(z, z);
+        let y = param * r2 / (1.0 + r2);
+        return vec3<f32>(z.x, y, z.y);
+    } else {
+        // Sphere
+        let r = length(z);
+        let theta_max = max(abs(param), 0.001);
+        let big_r = 1.0 / theta_max;
+        let theta = theta_max * r;
+        if r < 0.0001 {
+            return vec3<f32>(0.0, 0.0, 0.0);
+        }
+        let st = sin(theta);
+        let ct = cos(theta);
+        let scale = big_r * st / r;
+        return vec3<f32>(z.x * scale, big_r * (1.0 - ct), z.y * scale);
+    }
 }
 
 // Poincare disk -> Klein disk: K = 2P / (1 + |P|^2)

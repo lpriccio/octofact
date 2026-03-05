@@ -85,9 +85,10 @@ pub fn settings_menu(
                     ui.separator();
                     ui.label(egui::RichText::new("Disk Embedding").strong());
 
-                    // Embedding type selector (only Paraboloid for now)
+                    // Embedding type selector
                     let embedding_label = match &config.graphics.disk_embedding {
                         DiskEmbeddingConfig::Paraboloid { .. } => "Paraboloid",
+                        DiskEmbeddingConfig::Sphere { .. } => "Sphere",
                     };
                     ui.horizontal(|ui| {
                         ui.label("Type:");
@@ -95,8 +96,12 @@ pub fn settings_menu(
                             .selected_text(embedding_label)
                             .show_ui(ui, |ui| {
                                 let is_paraboloid = matches!(config.graphics.disk_embedding, DiskEmbeddingConfig::Paraboloid { .. });
+                                let is_sphere = matches!(config.graphics.disk_embedding, DiskEmbeddingConfig::Sphere { .. });
                                 if ui.selectable_label(is_paraboloid, "Paraboloid").clicked() && !is_paraboloid {
-                                    config.graphics.disk_embedding = DiskEmbeddingConfig::default();
+                                    config.graphics.disk_embedding = DiskEmbeddingConfig::Paraboloid { height: 0.4 };
+                                }
+                                if ui.selectable_label(is_sphere, "Sphere").clicked() && !is_sphere {
+                                    config.graphics.disk_embedding = DiskEmbeddingConfig::Sphere { latitude: 0.2 };
                                 }
                             });
                     });
@@ -132,6 +137,41 @@ pub fn settings_menu(
                                 if text_resp.changed() {
                                     if let Ok(v) = text_val.parse::<f64>() {
                                         *height = v;
+                                    }
+                                }
+                            });
+
+                            ui.data_mut(|d| d.insert_temp(text_id, text_val));
+                        }
+                        DiskEmbeddingConfig::Sphere { latitude } => {
+                            let text_id = ui.id().with("sphere_latitude_text");
+                            let mut text_val: String = ui.data_mut(|d| {
+                                d.get_temp::<String>(text_id)
+                                    .unwrap_or_else(|| format!("{:.4}", latitude))
+                            });
+
+                            ui.horizontal(|ui| {
+                                ui.label("Latitude:");
+                                let slider_resp = ui.add(
+                                    egui::Slider::new(latitude, 0.01_f64..=3.0)
+                                        .step_by(0.001)
+                                        .max_decimals(4)
+                                        .clamping(egui::SliderClamping::Never),
+                                );
+                                if slider_resp.changed() {
+                                    text_val = format!("{:.4}", latitude);
+                                }
+                            });
+
+                            ui.horizontal(|ui| {
+                                ui.label("Exact:");
+                                let text_resp = ui.add(
+                                    egui::TextEdit::singleline(&mut text_val)
+                                        .desired_width(80.0),
+                                );
+                                if text_resp.changed() {
+                                    if let Ok(v) = text_val.parse::<f64>() {
+                                        *latitude = v;
                                     }
                                 }
                             });

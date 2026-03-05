@@ -24,6 +24,7 @@ pub struct GraphicsConfig {
 #[serde(tag = "type")]
 pub enum DiskEmbeddingConfig {
     Paraboloid { height: f64 },
+    Sphere { latitude: f64 },
 }
 
 impl Default for DiskEmbeddingConfig {
@@ -33,9 +34,18 @@ impl Default for DiskEmbeddingConfig {
 }
 
 impl DiskEmbeddingConfig {
-    pub fn bowl_height(&self) -> f64 {
+    /// 0.0 = paraboloid, 1.0 = sphere
+    pub fn embed_type_id(&self) -> f32 {
+        match self {
+            Self::Paraboloid { .. } => 0.0,
+            Self::Sphere { .. } => 1.0,
+        }
+    }
+
+    pub fn embed_param(&self) -> f64 {
         match self {
             Self::Paraboloid { height } => *height,
+            Self::Sphere { latitude } => *latitude,
         }
     }
 }

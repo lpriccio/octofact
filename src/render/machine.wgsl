@@ -11,8 +11,8 @@ struct Globals {
     grid_params: vec4<f32>,  // (enabled, divisions, line_width, klein_half_side)
     color_cycle: f32,
     time: f32,               // elapsed seconds since startup
-    bowl_height: f32,
-    _pad: f32,
+    embed_param: f32,
+    embed_type: f32,
     camera_world: vec4<f32>, // .xyz = camera eye position in bowl space
 };
 
@@ -266,7 +266,7 @@ fn vs_machine(vert: VertexInput, inst: InstanceInput) -> VertexOutput {
     // Klein -> Poincare -> Mobius -> bowl
     let poincare = klein_to_poincare(klein);
     let disk = apply_mobius(poincare, inst.mobius_a, inst.mobius_b);
-    var world = disk_to_bowl_h(disk, globals.bowl_height);
+    var world = disk_embed(disk, globals.embed_type, globals.embed_param);
 
     var normal: vec3<f32>;
 
@@ -289,8 +289,8 @@ fn vs_machine(vert: VertexInput, inst: InstanceInput) -> VertexOutput {
         let p_dy = klein_to_poincare(k_dy);
         let d_dx = apply_mobius(p_dx, inst.mobius_a, inst.mobius_b);
         let d_dy = apply_mobius(p_dy, inst.mobius_a, inst.mobius_b);
-        let w_dx = disk_to_bowl_h(d_dx, globals.bowl_height);
-        let w_dy = disk_to_bowl_h(d_dy, globals.bowl_height);
+        let w_dx = disk_embed(d_dx, globals.embed_type, globals.embed_param);
+        let w_dy = disk_embed(d_dy, globals.embed_type, globals.embed_param);
         normal = normalize(cross(w_dx - world, w_dy - world));
     }
 

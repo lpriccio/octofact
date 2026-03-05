@@ -195,6 +195,7 @@ impl RenderEngine {
     }
 
     /// Build tile instance buffer and upload globals for instanced rendering.
+    #[allow(clippy::too_many_arguments)]
     pub fn build_tile_instances(
         &mut self,
         visible: &[(usize, Mobius)],
@@ -203,7 +204,8 @@ impl RenderEngine {
         klein_half_side: f32,
         time: f32,
         camera_height: f32,
-        bowl_height: f32,
+        embed_type: f32,
+        embed_param: f32,
     ) {
         // Build instance data
         self.tile_instances.clear();
@@ -230,8 +232,8 @@ impl RenderEngine {
             ],
             color_cycle: 13.0,
             time,
-            bowl_height,
-            _pad: 0.0,
+            embed_param,
+            embed_type,
             camera_world: [0.0, camera_height, 0.0, 0.0],
         };
         self.tile_pipeline.upload_globals(&self.gpu.queue, &globals);

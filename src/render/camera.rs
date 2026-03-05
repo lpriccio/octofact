@@ -196,7 +196,7 @@ impl Camera {
         tiling.ensure_coverage(cam_pos, 3);
     }
 
-    pub fn unproject_to_disk(&self, sx: f64, sy: f64, width: f32, height: f32) -> Option<Complex> {
+    pub fn unproject_to_disk(&self, sx: f64, sy: f64, width: f32, height: f32, bowl_height: f32) -> Option<Complex> {
         let aspect = width / height;
         let view_proj = self.build_view_proj(aspect);
         let inv_vp = view_proj.inverse();
@@ -214,7 +214,7 @@ impl Camera {
             return None;
         }
 
-        // Iteratively intersect ray with bowl surface y = 0.4*r^2/(1+r^2)
+        // Iteratively intersect ray with bowl surface y = h*r^2/(1+r^2)
         let mut target_y = 0.0_f32;
         for _ in 0..5 {
             let t = (target_y - near.y) / dir.y;
@@ -223,7 +223,7 @@ impl Camera {
             }
             let hit = near + dir * t;
             let r2 = hit.x * hit.x + hit.z * hit.z;
-            target_y = 0.4 * r2 / (1.0 + r2);
+            target_y = bowl_height * r2 / (1.0 + r2);
         }
         let t = (target_y - near.y) / dir.y;
         if t < 0.0 {
@@ -261,7 +261,7 @@ impl CameraSnapshot {
         }
     }
 
-    pub fn unproject_to_disk(&self, sx: f64, sy: f64, width: f32, height: f32) -> Option<Complex> {
+    pub fn unproject_to_disk(&self, sx: f64, sy: f64, width: f32, height: f32, bowl_height: f32) -> Option<Complex> {
         let aspect = width / height;
         let view_proj = self.build_view_proj(aspect);
         let inv_vp = view_proj.inverse();
@@ -287,7 +287,7 @@ impl CameraSnapshot {
             }
             let hit = near + dir * t;
             let r2 = hit.x * hit.x + hit.z * hit.z;
-            target_y = 0.4 * r2 / (1.0 + r2);
+            target_y = bowl_height * r2 / (1.0 + r2);
         }
         let t = (target_y - near.y) / dir.y;
         if t < 0.0 {

@@ -16,6 +16,28 @@ pub struct GameConfig {
 pub struct GraphicsConfig {
     pub render_distance: u32,
     pub frame_rate_cap: u32,
+    #[serde(default)]
+    pub disk_embedding: DiskEmbeddingConfig,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum DiskEmbeddingConfig {
+    Paraboloid { height: f64 },
+}
+
+impl Default for DiskEmbeddingConfig {
+    fn default() -> Self {
+        Self::Paraboloid { height: 0.4 }
+    }
+}
+
+impl DiskEmbeddingConfig {
+    pub fn bowl_height(&self) -> f64 {
+        match self {
+            Self::Paraboloid { height } => *height,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -38,6 +60,7 @@ impl Default for GameConfig {
             graphics: GraphicsConfig {
                 render_distance: 3,
                 frame_rate_cap: 60,
+                disk_embedding: DiskEmbeddingConfig::default(),
             },
             gameplay: GameplayConfig {
                 tiling_n: 5,

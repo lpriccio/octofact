@@ -9,7 +9,8 @@ use super::mesh::{QuadVertex, TopperVertex, Vertex};
 ///   grid_params: vec4<f32>  (16) — enabled, divisions, line_width, klein_half_side
 ///   color_cycle: f32        (4)
 ///   time: f32               (4)  — elapsed seconds since startup (for animation)
-///   _pad: 8 bytes           (align to 16)
+///   bowl_height: f32        (4)  — paraboloid embedding height parameter
+///   _pad: 4 bytes           (align to 16)
 ///   camera_world: vec4<f32> (16) — .xyz = camera eye position in bowl space
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -18,7 +19,8 @@ pub struct Globals {
     pub grid_params: [f32; 4],
     pub color_cycle: f32,
     pub time: f32,
-    pub _pad: [f32; 2],
+    pub bowl_height: f32,
+    pub _pad: f32,
     pub camera_world: [f32; 4],
 }
 

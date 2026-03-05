@@ -10,7 +10,8 @@ struct Globals {
     grid_params: vec4<f32>,
     color_cycle: f32,
     time: f32,
-    _pad: vec2<f32>,
+    bowl_height: f32,
+    _pad: f32,
     camera_world: vec4<f32>,
 };
 
@@ -111,7 +112,7 @@ fn vs_ghost(vert: VertexInput, inst: InstanceInput) -> VertexOutput {
 
     let poincare = klein_to_poincare(klein);
     let disk = apply_mobius(poincare, inst.mobius_a, inst.mobius_b);
-    var world = disk_to_bowl(disk);
+    var world = disk_to_bowl_h(disk, globals.bowl_height);
 
     var normal: vec3<f32>;
 
@@ -131,8 +132,8 @@ fn vs_ghost(vert: VertexInput, inst: InstanceInput) -> VertexOutput {
         let p_dy = klein_to_poincare(k_dy);
         let d_dx = apply_mobius(p_dx, inst.mobius_a, inst.mobius_b);
         let d_dy = apply_mobius(p_dy, inst.mobius_a, inst.mobius_b);
-        let w_dx = disk_to_bowl(d_dx);
-        let w_dy = disk_to_bowl(d_dy);
+        let w_dx = disk_to_bowl_h(d_dx, globals.bowl_height);
+        let w_dy = disk_to_bowl_h(d_dy, globals.bowl_height);
         normal = normalize(cross(w_dx - world, w_dy - world));
     }
 

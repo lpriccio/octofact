@@ -8,7 +8,8 @@ struct Globals {
     grid_params: vec4<f32>,
     color_cycle: f32,
     time: f32,
-    _pad: vec2<f32>,
+    bowl_height: f32,
+    _pad: f32,
     camera_world: vec4<f32>,
 };
 
@@ -140,7 +141,7 @@ fn vs_ghost_topper(vert: VertexInput, inst: InstanceInput) -> VertexOutput {
 
     let poincare = klein_to_poincare(klein);
     let disk = apply_mobius(poincare, inst.mobius_a, inst.mobius_b);
-    var world = disk_to_bowl(disk);
+    var world = disk_to_bowl_h(disk, globals.bowl_height);
 
     let y_frac = vert.cube_pos.y + 0.5;
     world.y += base_h + y_frac * top_h;

@@ -6,7 +6,8 @@ struct Globals {
     grid_params: vec4<f32>,  // (enabled, divisions, line_width, klein_half_side)
     color_cycle: f32,
     time: f32,               // elapsed seconds since startup
-    _pad: vec2<f32>,
+    bowl_height: f32,        // paraboloid embedding height parameter
+    _pad: f32,
     camera_world: vec4<f32>, // .xyz = camera eye position in bowl space
 };
 
@@ -57,26 +58,26 @@ fn vs_tile(
 
     if vert_type > 0.5 {
         // Side wall top: bowl + elevation
-        world = disk_to_bowl(w);
+        world = disk_to_bowl_h(w, globals.bowl_height);
         world.y += inst.elevation;
         let outward = normalize(w);
         normal = normalize(vec3<f32>(outward.x, 0.0, outward.y));
     } else if vert_type < -0.5 {
         // Side wall bottom: bowl only (no elevation)
-        world = disk_to_bowl(w);
+        world = disk_to_bowl_h(w, globals.bowl_height);
         let outward = normalize(w);
         normal = normalize(vec3<f32>(outward.x, 0.0, outward.y));
     } else {
         // Top face: bowl + elevation, normal via finite differences
-        world = disk_to_bowl(w);
+        world = disk_to_bowl_h(w, globals.bowl_height);
         world.y += inst.elevation;
 
         let eps = 0.001;
         let w_dx = apply_mobius(z + vec2<f32>(eps, 0.0), inst.mobius_a, inst.mobius_b);
         let w_dy = apply_mobius(z + vec2<f32>(0.0, eps), inst.mobius_a, inst.mobius_b);
-        var world_dx = disk_to_bowl(w_dx);
+        var world_dx = disk_to_bowl_h(w_dx, globals.bowl_height);
         world_dx.y += inst.elevation;
-        var world_dy = disk_to_bowl(w_dy);
+        var world_dy = disk_to_bowl_h(w_dy, globals.bowl_height);
         world_dy.y += inst.elevation;
         normal = normalize(cross(world_dx - world, world_dy - world));
     }

@@ -1,4 +1,4 @@
-use crate::game::config::GameConfig;
+use crate::game::config::{DiskEmbeddingConfig, GameConfig};
 use crate::game::input::{GameAction, InputState};
 
 /// Actions that the settings menu can request from the app.
@@ -80,6 +80,65 @@ pub fn settings_menu(
                         ui.label("Frame Rate Cap:");
                         ui.add(egui::Slider::new(&mut config.graphics.frame_rate_cap, 30..=144));
                     });
+
+                    ui.add_space(8.0);
+                    ui.separator();
+                    ui.label(egui::RichText::new("Disk Embedding").strong());
+
+                    // Embedding type selector (only Paraboloid for now)
+                    let embedding_label = match &config.graphics.disk_embedding {
+                        DiskEmbeddingConfig::Paraboloid { .. } => "Paraboloid",
+                    };
+                    ui.horizontal(|ui| {
+                        ui.label("Type:");
+                        egui::ComboBox::from_id_salt("disk_embedding_type")
+                            .selected_text(embedding_label)
+                            .show_ui(ui, |ui| {
+                                let is_paraboloid = matches!(config.graphics.disk_embedding, DiskEmbeddingConfig::Paraboloid { .. });
+                                if ui.selectable_label(is_paraboloid, "Paraboloid").clicked() && !is_paraboloid {
+                                    config.graphics.disk_embedding = DiskEmbeddingConfig::default();
+                                }
+                            });
+                    });
+
+                    // Per-embedding parameters
+                    match &mut config.graphics.disk_embedding {
+                        DiskEmbeddingConfig::Paraboloid { height } => {
+                            let text_id = ui.id().with("bowl_height_text");
+                            let mut text_val: String = ui.data_mut(|d| {
+                                d.get_temp::<String>(text_id)
+                                    .unwrap_or_else(|| format!("{:.4}", height))
+                            });
+
+                            ui.horizontal(|ui| {
+                                ui.label("Height:");
+                                let slider_resp = ui.add(
+                                    egui::Slider::new(height, -1.0_f64..=1.0)
+                                        .step_by(0.001)
+                                        .max_decimals(4)
+                                        .clamping(egui::SliderClamping::Never),
+                                );
+                                if slider_resp.changed() {
+                                    text_val = format!("{:.4}", height);
+                                }
+                            });
+
+                            ui.horizontal(|ui| {
+                                ui.label("Exact:");
+                                let text_resp = ui.add(
+                                    egui::TextEdit::singleline(&mut text_val)
+                                        .desired_width(80.0),
+                                );
+                                if text_resp.changed() {
+                                    if let Ok(v) = text_val.parse::<f64>() {
+                                        *height = v;
+                                    }
+                                }
+                            });
+
+                            ui.data_mut(|d| d.insert_temp(text_id, text_val));
+                        }
+                    }
                 }
                 SettingsTab::Gameplay => {
                     ui.horizontal(|ui| {

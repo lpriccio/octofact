@@ -39,9 +39,10 @@ fn apply_inverse_mobius(w: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {
 
 // Poincare disk -> gentle bowl embedding (Y-up).
 // X,Z from disk coords, Y rises gently with distance from center.
-fn disk_to_bowl(z: vec2<f32>) -> vec3<f32> {
+// `h` is the bowl height parameter (asymptotic max Y as r -> inf).
+fn disk_to_bowl_h(z: vec2<f32>, h: f32) -> vec3<f32> {
     let r2 = dot(z, z);
-    let y = 0.4 * r2 / (1.0 + r2);
+    let y = h * r2 / (1.0 + r2);
     return vec3<f32>(z.x, y, z.y);
 }
 

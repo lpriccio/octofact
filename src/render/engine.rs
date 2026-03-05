@@ -203,6 +203,7 @@ impl RenderEngine {
         klein_half_side: f32,
         time: f32,
         camera_height: f32,
+        bowl_height: f32,
     ) {
         // Build instance data
         self.tile_instances.clear();
@@ -229,7 +230,8 @@ impl RenderEngine {
             ],
             color_cycle: 13.0,
             time,
-            _pad: [0.0; 2],
+            bowl_height,
+            _pad: 0.0,
             camera_world: [0.0, camera_height, 0.0, 0.0],
         };
         self.tile_pipeline.upload_globals(&self.gpu.queue, &globals);
